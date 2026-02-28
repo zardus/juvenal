@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import shutil
+import tempfile
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
@@ -233,33 +235,55 @@ class Engine:
 
 
 def plan_workflow(goal: str, output_path: str, backend_name: str = "claude") -> None:
-    """Generate a workflow YAML from a goal description."""
-    # Load the planning prompt template
-    plan_prompt_path = Path(__file__).parent / "prompts" / "plan.md"
-    plan_prompt = plan_prompt_path.read_text().replace("{goal}", goal)
+    """Generate a workflow YAML from a goal description using a multi-phase pipeline."""
+    import yaml as _yaml
 
-    backend = create_backend(backend_name)
-    display = Display()
+    from juvenal.workflow import load_workflow
 
-    display.step_start("planning")
-    result = backend.run_agent(plan_prompt, working_dir=".", display_callback=display.live_update)
-    display.step_pass("planning")
+    # Create temp working dir with .plan/ structure
+    tmp_dir = tempfile.mkdtemp(prefix="juvenal-plan-")
+    tmp_path = Path(tmp_dir)
+    plan_dir = tmp_path / ".plan"
+    plan_dir.mkdir()
+    (plan_dir / "goal.md").write_text(goal)
 
-    # Extract YAML from output (strip markdown code fences if present)
-    yaml_content = _extract_yaml(result.output)
+    try:
+        # Load the canned planning workflow
+        plan_yaml = Path(__file__).parent / "workflows" / "plan.yaml"
+        workflow = load_workflow(plan_yaml)
+        workflow.backend = backend_name
+        workflow.working_dir = tmp_dir
 
-    # Validate it's actually a YAML mapping with phases
-    import yaml
+        # Run through the engine
+        engine = Engine(workflow, state_file=str(tmp_path / ".juvenal-state.json"))
+        exit_code = engine.run()
 
-    parsed = yaml.safe_load(yaml_content)
-    if not isinstance(parsed, dict) or "phases" not in parsed:
-        raise ValueError(
-            f"Planning agent did not produce valid workflow YAML.\n"
-            f"Output (first 500 chars): {result.output[:500]}"
-        )
+        if exit_code != 0:
+            print(f"Planning failed. Working directory preserved at: {tmp_dir}")
+            raise SystemExit(1)
 
-    Path(output_path).write_text(yaml_content.strip() + "\n")
-    print(f"Workflow written to {output_path}")
+        # Validate and copy the produced workflow.yaml
+        produced = tmp_path / "workflow.yaml"
+        if not produced.exists():
+            print(f"Planning failed: no workflow.yaml produced. Working directory: {tmp_dir}")
+            raise SystemExit(1)
+
+        yaml_content = produced.read_text()
+        parsed = _yaml.safe_load(yaml_content)
+        if not isinstance(parsed, dict) or "phases" not in parsed:
+            print(f"Planning produced invalid YAML. Working directory: {tmp_dir}")
+            raise SystemExit(1)
+
+        Path(output_path).write_text(yaml_content)
+        print(f"Workflow written to {output_path}")
+
+        # Clean up on success
+        shutil.rmtree(tmp_dir)
+    except SystemExit:
+        raise
+    except Exception:
+        print(f"Planning failed. Working directory preserved at: {tmp_dir}")
+        raise
 
 
 def _extract_yaml(text: str) -> str:

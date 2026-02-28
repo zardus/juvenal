@@ -79,6 +79,54 @@ class TestPhaseRendering:
         assert "Tests failed" in rendered
 
 
+class TestPromptFile:
+    def test_checker_prompt_file(self, tmp_path):
+        """Checker with prompt_file loads prompt from the referenced file."""
+        prompt_dir = tmp_path / "prompts"
+        prompt_dir.mkdir()
+        (prompt_dir / "my-checker.md").write_text("Check everything.\nVERDICT: PASS")
+
+        yaml_content = """\
+name: test-prompt-file
+phases:
+  - id: build
+    prompt: "Build the thing."
+    checkers:
+      - name: my-checker
+        type: agent
+        prompt_file: prompts/my-checker.md
+"""
+        yaml_path = tmp_path / "workflow.yaml"
+        yaml_path.write_text(yaml_content)
+
+        wf = load_workflow(yaml_path)
+        assert len(wf.phases) == 1
+        checker = wf.phases[0].checkers[0]
+        assert checker.name == "my-checker"
+        assert checker.prompt == "Check everything.\nVERDICT: PASS"
+
+    def test_phase_prompt_file(self, tmp_path):
+        """Phase with prompt_file loads prompt from the referenced file."""
+        prompt_dir = tmp_path / "prompts"
+        prompt_dir.mkdir()
+        (prompt_dir / "build.md").write_text("Build the project.")
+
+        yaml_content = """\
+name: test-prompt-file
+phases:
+  - id: build
+    prompt_file: prompts/build.md
+    checkers:
+      - type: script
+        run: "true"
+"""
+        yaml_path = tmp_path / "workflow.yaml"
+        yaml_path.write_text(yaml_content)
+
+        wf = load_workflow(yaml_path)
+        assert wf.phases[0].prompt == "Build the project."
+
+
 class TestErrors:
     def test_nonexistent_path(self):
         with pytest.raises(FileNotFoundError):

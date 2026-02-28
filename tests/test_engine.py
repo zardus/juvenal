@@ -1,5 +1,7 @@
 """Unit tests for the execution engine with mocked backend."""
 
+from pathlib import Path
+
 import pytest
 
 from juvenal.checkers import parse_verdict
@@ -144,37 +146,88 @@ class TestExtractYaml:
 
 
 class TestPlanWorkflow:
-    def test_plan_produces_valid_yaml(self, tmp_path):
-        """plan_workflow with a mock backend that returns valid YAML."""
-        from unittest.mock import patch
+    def test_plan_creates_temp_structure(self, tmp_path):
+        """plan_workflow creates temp dir with .plan/goal.md and runs Engine."""
+        from unittest.mock import MagicMock, patch
 
-        from juvenal.backends import AgentResult
         from juvenal.engine import plan_workflow
 
-        yaml_output = "name: test\nphases:\n  - id: setup\n    prompt: do it\n    checkers:\n      - type: script\n        run: 'true'\n"
-        mock_result = AgentResult(exit_code=0, output=f"```yaml\n{yaml_output}```", transcript="", duration=1.0)
+        mock_engine_instance = MagicMock()
+        mock_engine_instance.run.return_value = 0
 
-        with patch("juvenal.engine.create_backend") as mock_cb:
-            mock_cb.return_value.run_agent.return_value = mock_result
+        def fake_engine_init(self_engine, workflow, **kwargs):
+            # Write a valid workflow.yaml in the working dir to simulate engine output
+            wd = Path(workflow.working_dir)
+            (wd / "workflow.yaml").write_text("name: test\nphases:\n  - id: a\n    prompt: do it\n")
+            self_engine.workflow = workflow
+            self_engine.backend = MagicMock()
+            self_engine.display = MagicMock()
+            self_engine.dry_run = False
+            self_engine.state = MagicMock()
+            self_engine._start_idx = 0
+            # Verify .plan/goal.md was created
+            assert (wd / ".plan" / "goal.md").exists()
+            assert (wd / ".plan" / "goal.md").read_text() == "build something"
+
+        with (
+            patch.object(Engine, "__init__", fake_engine_init),
+            patch.object(Engine, "run", return_value=0),
+        ):
             out_path = str(tmp_path / "workflow.yaml")
             plan_workflow("build something", out_path)
 
-        from juvenal.workflow import load_workflow
+        assert Path(out_path).exists()
+        content = Path(out_path).read_text()
+        assert "phases" in content
 
-        wf = load_workflow(out_path)
-        assert wf.name == "test"
-        assert len(wf.phases) == 1
+    def test_plan_copies_output_on_success(self, tmp_path):
+        """plan_workflow copies workflow.yaml to output path and cleans up."""
+        from unittest.mock import MagicMock, patch
 
-    def test_plan_rejects_non_yaml(self, tmp_path):
-        """plan_workflow should raise if LLM output isn't valid workflow YAML."""
-        from unittest.mock import patch
-
-        from juvenal.backends import AgentResult
         from juvenal.engine import plan_workflow
 
-        mock_result = AgentResult(exit_code=0, output="Sorry, I can't do that.", transcript="", duration=1.0)
+        yaml_content = "name: result\nphases:\n  - id: x\n    prompt: hi\n"
 
-        with patch("juvenal.engine.create_backend") as mock_cb:
-            mock_cb.return_value.run_agent.return_value = mock_result
-            with pytest.raises(ValueError, match="did not produce valid workflow YAML"):
-                plan_workflow("build something", str(tmp_path / "workflow.yaml"))
+        def fake_engine_init(self_engine, workflow, **kwargs):
+            wd = Path(workflow.working_dir)
+            (wd / "workflow.yaml").write_text(yaml_content)
+            self_engine.workflow = workflow
+            self_engine.backend = MagicMock()
+            self_engine.display = MagicMock()
+            self_engine.dry_run = False
+            self_engine.state = MagicMock()
+            self_engine._start_idx = 0
+
+        with (
+            patch.object(Engine, "__init__", fake_engine_init),
+            patch.object(Engine, "run", return_value=0),
+        ):
+            out_path = str(tmp_path / "out.yaml")
+            plan_workflow("goal", out_path)
+
+        import yaml
+
+        parsed = yaml.safe_load(Path(out_path).read_text())
+        assert parsed["name"] == "result"
+        assert "phases" in parsed
+
+    def test_plan_fails_on_engine_failure(self, tmp_path):
+        """plan_workflow raises SystemExit if engine returns non-zero."""
+        from unittest.mock import MagicMock, patch
+
+        from juvenal.engine import plan_workflow
+
+        def fake_engine_init(self_engine, workflow, **kwargs):
+            self_engine.workflow = workflow
+            self_engine.backend = MagicMock()
+            self_engine.display = MagicMock()
+            self_engine.dry_run = False
+            self_engine.state = MagicMock()
+            self_engine._start_idx = 0
+
+        with (
+            patch.object(Engine, "__init__", fake_engine_init),
+            patch.object(Engine, "run", return_value=1),
+        ):
+            with pytest.raises(SystemExit):
+                plan_workflow("goal", str(tmp_path / "out.yaml"))

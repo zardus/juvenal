@@ -111,13 +111,17 @@ def _load_yaml(path: Path) -> Workflow:
     for phase_data in data.get("phases", []):
         checkers = []
         for checker_data in phase_data.get("checkers", []):
+            checker_prompt = checker_data.get("prompt")
+            if not checker_prompt and checker_data.get("prompt_file"):
+                prompt_path = path.parent / checker_data["prompt_file"]
+                checker_prompt = prompt_path.read_text()
             checkers.append(
                 Checker(
                     name=checker_data.get("name", _checker_name(checker_data)),
                     type=checker_data["type"],
                     run=checker_data.get("run"),
                     role=checker_data.get("role"),
-                    prompt=checker_data.get("prompt"),
+                    prompt=checker_prompt,
                 )
             )
         prompt = phase_data.get("prompt", "")

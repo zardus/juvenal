@@ -1,0 +1,35 @@
+name: plan
+backend: claude
+max_retries: 999
+
+phases:
+  - id: plan-draft
+    prompt_file: plan-phases/01-plan-draft.md
+    checkers:
+      - name: requirements-review
+        type: agent
+        prompt_file: plan-phases/02-plan-review.md
+
+  - id: technical-detail
+    prompt_file: plan-phases/03-technical-detail.md
+    checkers:
+      - name: technical-review
+        type: agent
+        prompt_file: plan-phases/04-technical-review.md
+
+  - id: phase-split
+    prompt_file: plan-phases/05-phase-split.md
+    checkers:
+      - name: design-review
+        type: agent
+        prompt_file: plan-phases/06-design-review.md
+      - name: feasibility-review
+        type: agent
+        prompt_file: plan-phases/07-feasibility-review.md
+
+  - id: write-workflow
+    prompt_file: plan-phases/08-write-workflow.md
+    checkers:
+      - name: yaml-validate
+        type: script
+        run: "python -c \"import yaml, sys; d=yaml.safe_load(open('workflow.yaml')); assert isinstance(d,dict) and 'phases' in d, 'missing phases key'\""
