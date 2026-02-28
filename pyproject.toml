@@ -6,7 +6,8 @@ build-backend = "setuptools.build_meta"
 name = "juvenal"
 version = "0.1.0"
 description = "Who guards the agents? A framework for orchestrating AI coding agents through verified implementation phases."
-license = "MIT"
+license = {text = "MIT"}
+readme = "README.md"
 requires-python = ">=3.10"
 authors = [{ name = "Yan Shoshitaishvili" }]
 dependencies = [
@@ -25,6 +26,9 @@ juvenal = "juvenal.cli:main"
 
 [tool.setuptools.packages.find]
 include = ["juvenal*"]
+
+[tool.setuptools.package-data]
+juvenal = ["prompts/*.md", "templates/**/*"]
 
 [tool.ruff]
 line-length = 120
