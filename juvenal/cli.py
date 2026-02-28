@@ -9,7 +9,7 @@ from juvenal import __version__
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="juvenal",
-        description="Who prompts the prompters? Orchestrate AI coding agents through verified implementation phases.",
+        description="Who guards the agents? Orchestrate AI coding agents through verified implementation phases.",
     )
     parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     sub = parser.add_subparsers(dest="command")
