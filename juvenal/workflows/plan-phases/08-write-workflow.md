@@ -34,7 +34,19 @@ Guidelines:
 - Use `type: check` phases for semantic verification that needs judgment
 - Keep phase IDs short and descriptive (e.g., `setup`, `implement-auth`, `test-auth`)
 - On script/check failure, the engine automatically jumps back to the most recent implement phase
-- Add `bounce_targets` if a later phase failure should trigger re-execution of an earlier phase
+- Use `bounce_target: <phase-id>` for a fixed bounce target on failure
+- Use `bounce_targets` (a list) when a check phase should let the checker agent decide where to bounce. The checker emits `VERDICT: FAIL(target-id): reason` to pick from the allowed list. If the agent picks an invalid target or omits one, the first target in the list is used. Example:
+  ```yaml
+  - id: final-review
+    type: check
+    bounce_targets:
+      - design        # checker can bounce here if design is flawed
+      - implement     # or here if implementation needs fixing
+    prompt: |
+      Review the work. If failing, emit VERDICT: FAIL(design): reason
+      or VERDICT: FAIL(implement): reason depending on the issue.
+  ```
+- `bounce_target` and `bounce_targets` are mutually exclusive on the same phase
 - Set appropriate `max_retries` (default 999 means effectively unlimited)
 
 Write ONLY the workflow.yaml file. Do not write any other files or output.
