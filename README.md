@@ -2,7 +2,7 @@
 
 > *Quis custodiet ipsos custodes?* — Who guards the agents?
 
-Juvenal is a framework for orchestrating AI coding agents through verified implementation phases. It prevents agents from cheating on success criteria by separating implementation from verification.
+Juvenal is a framework for orchestrating AI coding agents through verified implementation phases. It prevents agents from cheating on success criteria by separating implementation from verification, helps agents implement complex projects in phases, etc.
 
 ## How It Works
 
@@ -13,6 +13,10 @@ A non-agentic Python script orchestrates AI coding agents (Claude or Codex) thro
 3. **Bounce** — if verification fails, the pipeline bounces back (to a configurable target phase or the most recent implement phase) with failure context injected. A global bounce limit (`max_retries`) prevents infinite loops.
 
 The implementing agent and the checking agent are separate processes, so the implementer can't cheat by weakening tests.
+
+## Other Such Frameworks
+
+Juvenal is conceptually similar to [ralph](https://github.com/snarktank/ralph), but it works slightly better for my exact purposes and reinventing the wheel is cheap now!
 
 ## Install
 
