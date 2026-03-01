@@ -19,6 +19,8 @@ class AgentResult:
     output: str  # final assistant messages
     transcript: str  # full transcript including tool calls
     duration: float  # seconds
+    input_tokens: int = 0
+    output_tokens: int = 0
 
 
 class Backend(ABC):
@@ -82,6 +84,8 @@ class ClaudeBackend(Backend):
 
         transcript_lines: list[str] = []
         assistant_messages: list[str] = []
+        total_input_tokens = 0
+        total_output_tokens = 0
 
         try:
             for raw_line in proc.stdout:
@@ -93,6 +97,8 @@ class ClaudeBackend(Backend):
                         output=f"Agent timed out after {timeout}s",
                         transcript="\n".join(transcript_lines),
                         duration=time.time() - start,
+                        input_tokens=total_input_tokens,
+                        output_tokens=total_output_tokens,
                     )
                 line = raw_line.rstrip("\n")
                 if not line:
@@ -100,6 +106,9 @@ class ClaudeBackend(Backend):
                 event = _parse_json_event(line)
                 if event:
                     display_text, assistant_text = _process_claude_event(event)
+                    inp, out = _extract_claude_tokens(event)
+                    total_input_tokens += inp
+                    total_output_tokens += out
                     if display_text:
                         transcript_lines.append(display_text)
                         if display_callback:
@@ -131,6 +140,8 @@ class ClaudeBackend(Backend):
             output=output,
             transcript="\n".join(transcript_lines),
             duration=duration,
+            input_tokens=total_input_tokens,
+            output_tokens=total_output_tokens,
         )
 
 
@@ -177,6 +188,8 @@ class CodexBackend(Backend):
 
         transcript_lines: list[str] = []
         assistant_messages: list[str] = []
+        total_input_tokens = 0
+        total_output_tokens = 0
 
         try:
             for raw_line in proc.stdout:
@@ -188,6 +201,8 @@ class CodexBackend(Backend):
                         output=f"Agent timed out after {timeout}s",
                         transcript="\n".join(transcript_lines),
                         duration=time.time() - start,
+                        input_tokens=total_input_tokens,
+                        output_tokens=total_output_tokens,
                     )
                 line = raw_line.rstrip("\n")
                 if not line:
@@ -195,6 +210,9 @@ class CodexBackend(Backend):
                 event = _parse_json_event(line)
                 if event:
                     display_text, assistant_text = _process_codex_event(event)
+                    inp, out = _extract_codex_tokens(event)
+                    total_input_tokens += inp
+                    total_output_tokens += out
                     if display_text:
                         transcript_lines.append(display_text)
                         if display_callback:
@@ -222,6 +240,8 @@ class CodexBackend(Backend):
             output=output,
             transcript="\n".join(transcript_lines),
             duration=duration,
+            input_tokens=total_input_tokens,
+            output_tokens=total_output_tokens,
         )
 
 
@@ -328,3 +348,21 @@ def _process_codex_event(event: dict) -> tuple[str, str]:
         return "", ""
 
     return "", ""
+
+
+def _extract_claude_tokens(event: dict) -> tuple[int, int]:
+    """Extract token usage from a Claude event. Returns (input_tokens, output_tokens)."""
+    if event.get("type") == "result":
+        usage = event.get("usage", {})
+        if usage:
+            return usage.get("input_tokens", 0), usage.get("output_tokens", 0)
+    return 0, 0
+
+
+def _extract_codex_tokens(event: dict) -> tuple[int, int]:
+    """Extract token usage from a Codex event. Returns (input_tokens, output_tokens)."""
+    if event.get("type") == "turn.completed":
+        usage = event.get("usage", {})
+        if usage:
+            return usage.get("input_tokens", 0), usage.get("output_tokens", 0)
+    return 0, 0

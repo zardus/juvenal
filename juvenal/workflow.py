@@ -59,6 +59,9 @@ class Workflow:
     working_dir: str = "."
     max_bounces: int = 999
     parallel_groups: list[list[str]] = field(default_factory=list)
+    backoff: float = 0.0  # base backoff delay in seconds between bounces (0 = no backoff)
+    max_backoff: float = 60.0  # maximum backoff delay cap in seconds
+    notify: list[str] = field(default_factory=list)  # webhook URLs for completion/failure notifications
 
 
 def load_workflow(path: str | Path) -> Workflow:
@@ -101,13 +104,34 @@ def load_workflow(path: str | Path) -> Workflow:
 
 def _load_yaml(path: Path) -> Workflow:
     """Load workflow from a YAML file."""
+    return _load_yaml_with_includes(path, set())
+
+
+def _load_yaml_with_includes(path: Path, seen: set[str]) -> Workflow:
+    """Load workflow from a YAML file, resolving includes to prevent cycles."""
+    resolved = str(path.resolve())
+    if resolved in seen:
+        raise ValueError(f"Circular include detected: {path}")
+    seen.add(resolved)
+
     with open(path) as f:
         data = yaml.safe_load(f)
 
     if not isinstance(data, dict):
         raise ValueError(f"Invalid workflow YAML in {path}: expected a mapping, got {type(data).__name__}")
 
-    phases = []
+    # Resolve includes first — insert included phases before this workflow's phases
+    included_phases: list[Phase] = []
+    included_parallel_groups: list[list[str]] = []
+    for include_path_str in data.get("include", []):
+        include_path = path.parent / include_path_str
+        if not include_path.exists():
+            raise FileNotFoundError(f"Included workflow not found: {include_path} (referenced from {path})")
+        included_wf = _load_yaml_with_includes(include_path, seen)
+        included_phases.extend(included_wf.phases)
+        included_parallel_groups.extend(included_wf.parallel_groups)
+
+    phases = list(included_phases)
     for phase_data in data.get("phases", []):
         prompt = phase_data.get("prompt", "")
         if not prompt and phase_data.get("prompt_file"):
@@ -131,7 +155,7 @@ def _load_yaml(path: Path) -> Workflow:
             )
         )
 
-    parallel_groups = []
+    parallel_groups = list(included_parallel_groups)
     for pg in data.get("parallel_groups", []):
         parallel_groups.append(pg.get("phases", []))
 
@@ -142,6 +166,9 @@ def _load_yaml(path: Path) -> Workflow:
         working_dir=data.get("working_dir", "."),
         max_bounces=data.get("max_bounces", data.get("max_retries", 999)),
         parallel_groups=parallel_groups,
+        backoff=float(data.get("backoff", 0)),
+        max_backoff=float(data.get("max_backoff", 60)),
+        notify=data.get("notify", []),
     )
 
 
@@ -289,6 +316,17 @@ def validate_workflow(workflow: Workflow) -> list[str]:
         for pid in group:
             if pid not in all_ids:
                 errors.append(f"Parallel group {i}: phase ID {pid!r} does not match any phase")
+
+    # Backoff validation
+    if workflow.backoff < 0:
+        errors.append(f"backoff must be non-negative, got {workflow.backoff}")
+    if workflow.max_backoff < 0:
+        errors.append(f"max_backoff must be non-negative, got {workflow.max_backoff}")
+
+    # Notify URL validation
+    for url in workflow.notify:
+        if not url.startswith(("http://", "https://")):
+            errors.append(f"notify URL must start with http:// or https://, got {url!r}")
 
     return errors
 

@@ -94,8 +94,24 @@ class MockBackend(Backend):
     def name(self) -> str:
         return "mock"
 
-    def add_response(self, exit_code: int = 0, output: str = "", transcript: str = ""):
-        self._responses.append(AgentResult(exit_code=exit_code, output=output, transcript=transcript, duration=0.1))
+    def add_response(
+        self,
+        exit_code: int = 0,
+        output: str = "",
+        transcript: str = "",
+        input_tokens: int = 0,
+        output_tokens: int = 0,
+    ):
+        self._responses.append(
+            AgentResult(
+                exit_code=exit_code,
+                output=output,
+                transcript=transcript,
+                duration=0.1,
+                input_tokens=input_tokens,
+                output_tokens=output_tokens,
+            )
+        )
 
     def run_agent(self, prompt, working_dir, display_callback=None, timeout=None, env=None):
         self.calls.append(prompt)

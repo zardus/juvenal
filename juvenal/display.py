@@ -102,6 +102,20 @@ class Display:
         else:
             self._run_summary_plain(state, total_bounces)
 
+    def backoff_wait(self, delay: float) -> None:
+        """Announce backoff wait."""
+        if self._console:
+            self._console.print(f"  [yellow]Backoff: waiting {delay:.1f}s before retry...[/yellow]")
+        else:
+            print(f"  Backoff: waiting {delay:.1f}s before retry...", flush=True)
+
+    def notify_failed(self, url: str) -> None:
+        """Announce a failed notification."""
+        if self._console:
+            self._console.print(f"  [red]Notification failed:[/red] {url}")
+        else:
+            print(f"  Notification failed: {url}", flush=True)
+
     def _run_summary_rich(self, state, total_bounces: int) -> None:
         from rich.table import Table
 
@@ -110,6 +124,7 @@ class Display:
         table.add_column("Status", style="bold")
         table.add_column("Attempts", justify="right")
         table.add_column("Duration", justify="right")
+        table.add_column("Tokens (in/out)", justify="right")
 
         for pid, ps in state.phases.items():
             status_style = {"completed": "green", "running": "yellow", "failed": "red", "pending": "dim"}.get(
@@ -119,18 +134,23 @@ class Display:
             if ps.started_at and ps.completed_at:
                 dur = ps.completed_at - ps.started_at
                 duration = f"{dur:.1f}s"
-            table.add_row(pid, f"[{status_style}]{ps.status}[/]", str(ps.attempt), duration)
+            tokens = ""
+            if ps.input_tokens or ps.output_tokens:
+                tokens = f"{ps.input_tokens}/{ps.output_tokens}"
+            table.add_row(pid, f"[{status_style}]{ps.status}[/]", str(ps.attempt), duration, tokens)
 
         self._console.print(table)
 
         # Overall stats
         total_duration = ""
         if state.started_at and state.completed_at:
-            total_duration = _elapsed(state.started_at + (time.time() - state.completed_at))
             dur = state.completed_at - state.started_at
             total_duration = f"{dur:.1f}s"
+        total_inp, total_out = state.total_tokens()
         self._console.print(f"  Total time: {total_duration}")
         self._console.print(f"  Total bounces: {total_bounces}")
+        if total_inp or total_out:
+            self._console.print(f"  Total tokens: {total_inp} in, {total_out} out")
 
     def _run_summary_plain(self, state, total_bounces: int) -> None:
         print("\n--- Run Summary ---", flush=True)
@@ -139,11 +159,17 @@ class Display:
             if ps.started_at and ps.completed_at:
                 dur = ps.completed_at - ps.started_at
                 duration = f" ({dur:.1f}s)"
-            print(f"  {pid}: {ps.status} (attempts: {ps.attempt}){duration}", flush=True)
+            tokens = ""
+            if ps.input_tokens or ps.output_tokens:
+                tokens = f" [tokens: {ps.input_tokens} in, {ps.output_tokens} out]"
+            print(f"  {pid}: {ps.status} (attempts: {ps.attempt}){duration}{tokens}", flush=True)
         if state.started_at and state.completed_at:
             total = state.completed_at - state.started_at
             print(f"  Total time: {total:.1f}s", flush=True)
         print(f"  Total bounces: {total_bounces}", flush=True)
+        total_inp, total_out = state.total_tokens()
+        if total_inp or total_out:
+            print(f"  Total tokens: {total_inp} in, {total_out} out", flush=True)
 
     def live_update(self, line: str) -> None:
         """Feed a line of output to the live display."""

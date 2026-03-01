@@ -25,6 +25,10 @@ def build_parser() -> argparse.ArgumentParser:
     run_p.add_argument("--dry-run", action="store_true", help="Show what would be done without executing")
     run_p.add_argument("--working-dir", help="Working directory for the agent")
     run_p.add_argument("--state-file", help="Path to state file (default: .juvenal-state.json)")
+    run_p.add_argument(
+        "--backoff", type=float, default=None, help="Base backoff delay in seconds between bounces (exponential)"
+    )
+    run_p.add_argument("--notify", action="append", default=[], help="Webhook URL for completion/failure notifications")
 
     # plan
     plan_p = sub.add_parser("plan", help="Generate a workflow from a goal description")
@@ -71,6 +75,10 @@ def cmd_run(args: argparse.Namespace) -> int:
         workflow.max_bounces = args.max_bounces
     if args.working_dir:
         workflow.working_dir = args.working_dir
+    if args.backoff is not None:
+        workflow.backoff = args.backoff
+    if args.notify:
+        workflow.notify.extend(args.notify)
 
     state_file = getattr(args, "state_file", None)
     engine = Engine(

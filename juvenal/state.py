@@ -23,6 +23,8 @@ class PhaseState:
     logs: list[dict] = field(default_factory=list)
     started_at: float | None = None
     completed_at: float | None = None
+    input_tokens: int = 0
+    output_tokens: int = 0
 
 
 @dataclass
@@ -74,6 +76,19 @@ class PipelineState:
             }
         )
         self.save()
+
+    def add_tokens(self, phase_id: str, input_tokens: int, output_tokens: int) -> None:
+        """Accumulate token usage for a phase."""
+        ps = self._ensure_phase(phase_id)
+        ps.input_tokens += input_tokens
+        ps.output_tokens += output_tokens
+        self.save()
+
+    def total_tokens(self) -> tuple[int, int]:
+        """Return (total_input_tokens, total_output_tokens) across all phases."""
+        inp = sum(ps.input_tokens for ps in self.phases.values())
+        out = sum(ps.output_tokens for ps in self.phases.values())
+        return inp, out
 
     def invalidate_from(self, phase_id: str) -> None:
         """Invalidate this phase and all subsequent phases (for bounce targets)."""
@@ -129,6 +144,8 @@ class PipelineState:
                     logs=pdata.get("logs", []),
                     started_at=pdata.get("started_at"),
                     completed_at=pdata.get("completed_at"),
+                    input_tokens=pdata.get("input_tokens", 0),
+                    output_tokens=pdata.get("output_tokens", 0),
                 )
         return state
 
@@ -173,6 +190,8 @@ class PipelineState:
                     "logs": ps.logs,
                     "started_at": ps.started_at,
                     "completed_at": ps.completed_at,
+                    "input_tokens": ps.input_tokens,
+                    "output_tokens": ps.output_tokens,
                 }
                 for pid, ps in self.phases.items()
             },

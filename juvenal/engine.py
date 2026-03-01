@@ -12,6 +12,7 @@ from pathlib import Path
 from juvenal.backends import create_backend
 from juvenal.checkers import parse_verdict, run_script
 from juvenal.display import Display
+from juvenal.notifications import build_notification_payload, send_webhook
 from juvenal.state import PipelineState
 from juvenal.workflow import Phase, Workflow
 
@@ -86,6 +87,7 @@ class Engine:
                         bounces += 1
                         if bounces >= self.workflow.max_bounces:
                             raise PipelineExhausted(phase.id)
+                        self._apply_backoff(bounces)
                         self.state.invalidate_from(result.bounce_target)
                         phase_idx = self._find_phase_index(result.bounce_target)
                         continue
@@ -112,6 +114,7 @@ class Engine:
                     bounces += 1
                     if bounces >= self.workflow.max_bounces:
                         raise PipelineExhausted(phase.id)
+                    self._apply_backoff(bounces)
                     self.state.invalidate_from(result.bounce_target)
                     phase_idx = self._find_phase_index(result.bounce_target)
                 else:
@@ -121,6 +124,7 @@ class Engine:
             self.state.save()
             self.display.pipeline_done(True)
             self.display.run_summary(self.state, bounces)
+            self._send_notifications(True, bounces)
             return 0
 
         except PipelineExhausted as e:
@@ -129,6 +133,7 @@ class Engine:
             self.state.save()
             self.display.pipeline_done(False)
             self.display.run_summary(self.state, bounces)
+            self._send_notifications(False, bounces)
             return 1
 
     def _run_implement(self, phase: Phase) -> PhaseResult:
@@ -150,6 +155,7 @@ class Engine:
             env=phase.env or None,
         )
         self.state.log_step(phase.id, attempt, "implement", result.output)
+        self.state.add_tokens(phase.id, result.input_tokens, result.output_tokens)
 
         if result.exit_code != 0:
             failure_context = f"Implementation agent crashed (exit {result.exit_code}).\n{result.output[-3000:]}"
@@ -199,6 +205,7 @@ class Engine:
             env=phase.env or None,
         )
         self.state.log_step(phase.id, 1, "check", result.output)
+        self.state.add_tokens(phase.id, result.input_tokens, result.output_tokens)
 
         if result.exit_code != 0:
             failure_context = f"Checker agent crashed (exit {result.exit_code}).\n{result.output[-3000:]}"
@@ -285,27 +292,106 @@ class Engine:
                 return i
         raise ValueError(f"Phase not found: {phase_id!r}")
 
+    def _apply_backoff(self, bounces: int) -> None:
+        """Apply exponential backoff delay between bounces."""
+        base = self.workflow.backoff
+        if base <= 0:
+            return
+        delay = min(base * (2 ** (bounces - 1)), self.workflow.max_backoff)
+        self.display.backoff_wait(delay)
+        time.sleep(delay)
+
+    def _send_notifications(self, success: bool, bounces: int) -> None:
+        """Send webhook notifications if configured."""
+        if not self.workflow.notify:
+            return
+        duration = None
+        if self.state.started_at and self.state.completed_at:
+            duration = self.state.completed_at - self.state.started_at
+        total_inp, total_out = self.state.total_tokens()
+        phase_summaries = []
+        for pid, ps in self.state.phases.items():
+            phase_summaries.append(
+                {
+                    "id": pid,
+                    "status": ps.status,
+                    "attempts": ps.attempt,
+                    "input_tokens": ps.input_tokens,
+                    "output_tokens": ps.output_tokens,
+                }
+            )
+        payload = build_notification_payload(
+            workflow_name=self.workflow.name,
+            success=success,
+            total_bounces=bounces,
+            duration=duration,
+            total_input_tokens=total_inp,
+            total_output_tokens=total_out,
+            phase_summaries=phase_summaries,
+        )
+        for url in self.workflow.notify:
+            ok = send_webhook(url, payload)
+            if not ok:
+                self.display.notify_failed(url)
+
     def _dry_run(self) -> int:
         """Print what would be done without executing."""
+        from juvenal.workflow import validate_workflow
+
         print(f"Workflow: {self.workflow.name}")
         print(f"Backend: {self.workflow.backend}")
         print(f"Working dir: {self.workflow.working_dir}")
         print(f"Max bounces: {self.workflow.max_bounces}")
+        if self.workflow.backoff > 0:
+            print(f"Backoff: {self.workflow.backoff}s base, {self.workflow.max_backoff}s max")
+        if self.workflow.notify:
+            print(f"Notifications: {len(self.workflow.notify)} webhook(s)")
         print()
+
+        # Validation
+        errors = validate_workflow(self.workflow)
+        if errors:
+            print(f"Validation: {len(errors)} error(s)")
+            for err in errors:
+                print(f"  - {err}")
+        else:
+            print(f"Validation: OK ({len(self.workflow.phases)} phases)")
+        print()
+
+        # Phase type summary
+        type_counts: dict[str, int] = {}
+        for phase in self.workflow.phases:
+            type_counts[phase.type] = type_counts.get(phase.type, 0) + 1
+        print("Phase summary:")
+        for ptype, count in sorted(type_counts.items()):
+            print(f"  {ptype}: {count}")
+        print()
+
+        # Execution plan
+        print("Execution plan:")
         for i, phase in enumerate(self.workflow.phases):
-            print(f"Phase {i + 1}: {phase.id} ({phase.type})")
-            if phase.type == "implement":
-                print(f"  Prompt: {phase.prompt[:100]}...")
-            elif phase.type == "script":
-                print(f"  Run: {phase.run}")
-            elif phase.type == "check":
-                prompt_preview = phase.prompt[:100] if phase.prompt else f"role={phase.role}"
-                print(f"  Prompt: {prompt_preview}")
+            prefix = f"  {i + 1}."
+            extras = []
+            if phase.timeout:
+                extras.append(f"timeout={phase.timeout}s")
+            if phase.env:
+                extras.append(f"env={list(phase.env.keys())}")
             if phase.bounce_target:
-                print(f"  Bounce target: {phase.bounce_target}")
+                extras.append(f"bounce->{phase.bounce_target}")
             if phase.bounce_targets:
-                print(f"  Bounce targets (agent-guided): {phase.bounce_targets}")
+                extras.append(f"bounce->{phase.bounce_targets}")
+            extra_str = f" [{', '.join(extras)}]" if extras else ""
+            if phase.type == "implement":
+                prompt_preview = phase.prompt[:80].replace("\n", " ")
+                print(f"{prefix} [{phase.type}] {phase.id}{extra_str}")
+                print(f"     prompt: {prompt_preview}...")
+            elif phase.type == "script":
+                print(f"{prefix} [{phase.type}] {phase.id}: {phase.run}{extra_str}")
+            elif phase.type == "check":
+                target = phase.role or phase.prompt[:60].replace("\n", " ")
+                print(f"{prefix} [{phase.type}] {phase.id}: {target}{extra_str}")
             print()
+
         if self.workflow.parallel_groups:
             print("Parallel groups:")
             for group in self.workflow.parallel_groups:
