@@ -128,12 +128,31 @@ Agent checkers can use built-in verification personas:
 ## CLI
 
 ```
-juvenal run <workflow> [--resume] [--phase X] [--max-retries N] [--backend claude|codex] [--dry-run]
+juvenal run <workflow> [--resume] [--rewind N] [--rewind-to PHASE_ID] [--phase X]
+                       [--max-bounces N] [--backend claude|codex] [--dry-run]
+                       [--backoff SECONDS] [--notify WEBHOOK_URL]
+                       [--working-dir DIR] [--state-file PATH]
 juvenal plan "goal" [-o output.yaml] [--backend claude|codex]
-juvenal do "goal" [--backend claude|codex] [--max-retries N]
+juvenal do "goal" [--backend claude|codex] [--max-bounces N]
 juvenal status [--state-file path]
 juvenal init [directory] [--template name]
+juvenal validate <workflow>
 ```
+
+### Resume & Rewind
+
+```bash
+# Resume from last saved state
+juvenal run workflow.yaml --resume
+
+# Rewind 2 phases back from the resume point
+juvenal run workflow.yaml --rewind 2
+
+# Rewind to a specific phase by ID
+juvenal run workflow.yaml --rewind-to setup
+```
+
+`--rewind` and `--rewind-to` implicitly load existing state (no need for `--resume`) and invalidate from the target phase onward so everything from that point gets re-executed.
 
 ## License
 
