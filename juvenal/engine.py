@@ -46,10 +46,11 @@ class Engine:
         start_phase: str | None = None,
         dry_run: bool = False,
         state_file: str | None = None,
+        plain: bool = False,
     ):
         self.workflow = workflow
         self.backend = create_backend(workflow.backend)
-        self.display = Display()
+        self.display = Display(plain=plain)
         self.dry_run = dry_run
 
         sf = state_file or ".juvenal-state.json"
@@ -291,7 +292,7 @@ class Engine:
         return 0
 
 
-def plan_workflow(goal: str, output_path: str, backend_name: str = "claude") -> None:
+def plan_workflow(goal: str, output_path: str, backend_name: str = "claude", plain: bool = False) -> None:
     """Generate a workflow YAML from a goal description using a multi-phase pipeline."""
     import yaml as _yaml
 
@@ -312,7 +313,7 @@ def plan_workflow(goal: str, output_path: str, backend_name: str = "claude") -> 
         workflow.working_dir = tmp_dir
 
         # Run through the engine
-        engine = Engine(workflow, state_file=str(tmp_path / ".juvenal-state.json"))
+        engine = Engine(workflow, state_file=str(tmp_path / ".juvenal-state.json"), plain=plain)
         exit_code = engine.run()
 
         if exit_code != 0:

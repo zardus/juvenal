@@ -29,15 +29,16 @@ def _elapsed(start: float) -> str:
 class Display:
     """Terminal display for pipeline progress."""
 
-    def __init__(self, buffer_size: int = 15):
+    def __init__(self, buffer_size: int = 15, plain: bool = False):
         self._buffer_size = buffer_size
         self._live_lines: deque[str] = deque(maxlen=buffer_size)
         self._live_ctx = None
         self._live_obj = None
         self._worker_name = ""
         self._worker_start = 0.0
-        self._console = Console() if RICH_AVAILABLE else None
-        self._use_live = RICH_AVAILABLE and sys.stdout.isatty()
+        self._plain = plain
+        self._console = Console() if (RICH_AVAILABLE and not plain) else None
+        self._use_live = RICH_AVAILABLE and not plain and sys.stdout.isatty()
 
     def phase_start(self, phase_id: str, attempt: int) -> None:
         """Announce phase start."""

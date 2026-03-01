@@ -12,6 +12,7 @@ def build_parser() -> argparse.ArgumentParser:
         description="Who guards the agents? Orchestrate AI coding agents through verified implementation phases.",
     )
     parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
+    parser.add_argument("--plain", action="store_true", help="Plain text output (no Rich TUI)")
     sub = parser.add_subparsers(dest="command")
 
     # run
@@ -60,14 +61,14 @@ def cmd_run(args: argparse.Namespace) -> int:
     if args.working_dir:
         workflow.working_dir = args.working_dir
 
-    engine = Engine(workflow, resume=args.resume, start_phase=args.phase, dry_run=args.dry_run)
+    engine = Engine(workflow, resume=args.resume, start_phase=args.phase, dry_run=args.dry_run, plain=args.plain)
     return engine.run()
 
 
 def cmd_plan(args: argparse.Namespace) -> int:
     from juvenal.engine import plan_workflow
 
-    plan_workflow(args.goal, args.output, args.backend)
+    plan_workflow(args.goal, args.output, args.backend, plain=args.plain)
     return 0
 
 
@@ -78,7 +79,7 @@ def cmd_do(args: argparse.Namespace) -> int:
     from juvenal.workflow import load_workflow
 
     with tempfile.NamedTemporaryFile(suffix=".yaml", delete=False, mode="w") as f:
-        plan_workflow(args.goal, f.name, args.backend)
+        plan_workflow(args.goal, f.name, args.backend, plain=args.plain)
         workflow = load_workflow(f.name)
 
     if args.backend:
@@ -86,7 +87,7 @@ def cmd_do(args: argparse.Namespace) -> int:
     if args.max_retries:
         workflow.max_retries = args.max_retries
 
-    engine = Engine(workflow)
+    engine = Engine(workflow, plain=args.plain)
     return engine.run()
 
 
