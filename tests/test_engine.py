@@ -359,6 +359,26 @@ class TestEngineWithMockedBackend:
         assert "Run Summary" in captured.out
         assert "Total bounces: 1" in captured.out
 
+    def test_plain_mode_shows_live_output(self, tmp_path, capsys):
+        """Plain mode prints agent output lines inline."""
+        backend = MockBackend()
+        backend.add_response(exit_code=0, output="done")
+        workflow = Workflow(
+            name="test",
+            phases=[
+                Phase(id="setup", type="implement", prompt="Do it."),
+                Phase(id="setup-check", type="script", run="true"),
+            ],
+            max_bounces=3,
+        )
+        engine = self._make_engine(workflow, backend, tmp_path, plain=True)
+        # Simulate live output
+        engine.display.live_update("building module X")
+        engine.display.live_update("running tests")
+        captured = capsys.readouterr()
+        assert "building module X" in captured.out
+        assert "running tests" in captured.out
+
     def test_rewind_n_phases(self, tmp_path):
         """--rewind N goes back N phases from the resume point and invalidates."""
         backend = MockBackend()

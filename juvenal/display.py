@@ -176,6 +176,8 @@ class Display:
         self._live_lines.append(line)
         if self._live_obj:
             self._live_obj.update(self._build_renderable())
+        elif self._plain:
+            print(f"    {line}", flush=True)
 
     def _build_renderable(self):
         """Build Rich renderable for the live display."""
