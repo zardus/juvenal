@@ -1,0 +1,10 @@
+{
+  "name": "juvenal",
+  "description": "Create and run verified AI agent workflows — the implementing agent and the checking agent are separate, so the implementer can't cheat.",
+  "version": "0.4.0",
+  "author": {
+    "name": "Yan Shoshitaishvili"
+  },
+  "repository": "https://github.com/zardus/juvenal",
+  "license": "MIT"
+}
