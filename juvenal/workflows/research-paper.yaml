@@ -1,0 +1,76 @@
+name: research-paper
+backend: claude
+max_retries: 10
+
+phases:
+  # Phase 1: Professor expands initial idea into research plan
+  - id: research-plan
+    prompt_file: research-paper-phases/01-research-plan.md
+
+  # Phase 2: Graduate researcher designs experiments
+  - id: design-experiments
+    prompt_file: research-paper-phases/02-design-experiments.md
+
+  # Phase 3: Research engineer designs the implementation
+  - id: design-implementation
+    prompt_file: research-paper-phases/03-design-implementation.md
+
+  # Phase 4: Research engineer implements the project
+  - id: implement-project
+    prompt_file: research-paper-phases/04-implement-project.md
+
+  # Phase 5: Research engineer ensures test coverage
+  - id: ensure-tests
+    prompt_file: research-paper-phases/05-ensure-tests.md
+
+  # Phase 5b: Run tests
+  - id: run-tests
+    type: script
+    run: "bash run-tests.sh"
+    bounce_target: ensure-tests
+
+  # Phase 6: Graduate researcher implements experiments
+  - id: implement-experiments
+    prompt_file: research-paper-phases/06-implement-experiments.md
+
+  # Phase 7: Graduate researcher runs experiments
+  - id: run-experiments
+    prompt_file: research-paper-phases/07-run-experiments.md
+
+  # Phase 8: Postdoc reviews results (can bounce back to experiment design)
+  - id: results-review
+    type: check
+    prompt_file: research-paper-phases/08-results-review.md
+    bounce_target: design-experiments
+
+  # Phase 9: Professor designs the paper
+  - id: design-paper
+    prompt_file: research-paper-phases/09-design-paper.md
+
+  # Phase 10: Graduate researcher writes the paper
+  - id: write-paper
+    prompt_file: research-paper-phases/10-write-paper.md
+
+  # Phase 11: Professor reviews the paper (agent-guided bounce)
+  - id: professor-review
+    type: check
+    prompt_file: research-paper-phases/11-professor-review.md
+    bounce_targets:
+      - design-experiments
+      - write-paper
+
+  # Phase 12: Academic reviewer A (positive) reviews the paper
+  - id: reviewer-a-review
+    type: check
+    prompt_file: research-paper-phases/12-reviewer-a-review.md
+    bounce_targets:
+      - design-experiments
+      - write-paper
+
+  # Phase 13: Academic reviewer B (skeptical) reviews the paper
+  - id: reviewer-b-review
+    type: check
+    prompt_file: research-paper-phases/13-reviewer-b-review.md
+    bounce_targets:
+      - design-experiments
+      - write-paper

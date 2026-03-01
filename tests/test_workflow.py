@@ -141,6 +141,62 @@ phases:
         assert wf.phases[0].prompt == "Build the project."
 
 
+class TestBounceTargets:
+    def test_bounce_targets_loaded(self, tmp_path):
+        """bounce_targets list is loaded from YAML."""
+        yaml_content = """\
+name: test
+phases:
+  - id: phase-a
+    prompt: "Do A."
+  - id: phase-b
+    prompt: "Do B."
+  - id: review
+    type: check
+    role: tester
+    bounce_targets:
+      - phase-a
+      - phase-b
+"""
+        yaml_path = tmp_path / "workflow.yaml"
+        yaml_path.write_text(yaml_content)
+        wf = load_workflow(yaml_path)
+        assert wf.phases[2].bounce_targets == ["phase-a", "phase-b"]
+        assert wf.phases[2].bounce_target is None
+
+    def test_bounce_target_and_bounce_targets_mutually_exclusive(self, tmp_path):
+        """Setting both bounce_target and bounce_targets raises ValueError."""
+        yaml_content = """\
+name: test
+phases:
+  - id: build
+    prompt: "Build."
+  - id: review
+    type: check
+    role: tester
+    bounce_target: build
+    bounce_targets:
+      - build
+"""
+        yaml_path = tmp_path / "workflow.yaml"
+        yaml_path.write_text(yaml_content)
+        with pytest.raises(ValueError, match="mutually exclusive"):
+            load_workflow(yaml_path)
+
+    def test_empty_bounce_targets_defaults(self, tmp_path):
+        """Phase without bounce_targets gets empty list."""
+        yaml_content = """\
+name: test
+phases:
+  - id: build
+    prompt: "Build."
+"""
+        yaml_path = tmp_path / "workflow.yaml"
+        yaml_path.write_text(yaml_content)
+        wf = load_workflow(yaml_path)
+        assert wf.phases[0].bounce_targets == []
+
+
 class TestErrors:
     def test_nonexistent_path(self):
         with pytest.raises(FileNotFoundError):

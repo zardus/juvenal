@@ -170,11 +170,11 @@ class Engine:
             self.display.step_pass(phase.id)
             return PhaseResult(success=True)
 
-        # Failure — use explicit bounce_target or find most recent implement phase
+        # Failure — resolve bounce target
         failure_context = f"Script '{phase.run}' failed (exit {result.exit_code}).\nOutput:\n{result.output[-3000:]}"
         self.display.step_fail(phase.id, failure_context[:500])
 
-        target_id = phase.bounce_target or self._find_last_implement(phases, phase_idx)
+        target_id = self._resolve_bounce_target(phase, phases, phase_idx)
         if target_id:
             self.state.set_failure_context(target_id, failure_context)
             return PhaseResult(success=False, bounce_target=target_id)
@@ -196,26 +196,45 @@ class Engine:
         if result.exit_code != 0:
             failure_context = f"Checker agent crashed (exit {result.exit_code}).\n{result.output[-3000:]}"
             self.display.step_fail(phase.id, failure_context[:500])
-            target_id = phase.bounce_target or self._find_last_implement(phases, phase_idx)
+            target_id = self._resolve_bounce_target(phase, phases, phase_idx)
             if target_id:
                 self.state.set_failure_context(target_id, failure_context)
                 return PhaseResult(success=False, bounce_target=target_id)
             return PhaseResult(success=False)
 
-        passed, reason = parse_verdict(result.output)
+        passed, reason, agent_target = parse_verdict(result.output)
         if passed:
             self.display.step_pass(phase.id)
             return PhaseResult(success=True)
 
-        # FAIL — use explicit bounce_target or find most recent implement
+        # FAIL — resolve bounce target
         failure_context = f"{phase.id}: {reason}\nFull output (last 3000 chars):\n{result.output[-3000:]}"
         self.display.step_fail(phase.id, reason)
 
-        target_id = phase.bounce_target or self._find_last_implement(phases, phase_idx)
+        target_id = self._resolve_bounce_target(phase, phases, phase_idx, agent_target)
         if target_id:
             self.state.set_failure_context(target_id, failure_context)
             return PhaseResult(success=False, bounce_target=target_id)
         return PhaseResult(success=False)
+
+    def _resolve_bounce_target(
+        self, phase: Phase, phases: list[Phase], phase_idx: int, agent_target: str | None = None
+    ) -> str | None:
+        """Resolve which phase to bounce to on failure.
+
+        Priority:
+        1. If phase has bounce_targets (agent-guided), use the agent's choice if valid,
+           otherwise fall back to first in the list.
+        2. If phase has bounce_target (fixed), use that.
+        3. Otherwise, find the most recent implement phase.
+        """
+        if phase.bounce_targets:
+            if agent_target and agent_target in phase.bounce_targets:
+                return agent_target
+            return phase.bounce_targets[0]
+        if phase.bounce_target:
+            return phase.bounce_target
+        return self._find_last_implement(phases, phase_idx)
 
     def _find_last_implement(self, phases: list[Phase], before_idx: int) -> str | None:
         """Find the most recent implement phase before the given index."""
@@ -277,6 +296,8 @@ class Engine:
                 print(f"  Prompt: {prompt_preview}")
             if phase.bounce_target:
                 print(f"  Bounce target: {phase.bounce_target}")
+            if phase.bounce_targets:
+                print(f"  Bounce targets (agent-guided): {phase.bounce_targets}")
             print()
         if self.workflow.parallel_groups:
             print("Parallel groups:")

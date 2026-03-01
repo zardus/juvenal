@@ -24,7 +24,8 @@ class Phase:
     prompt: str = ""  # for implement and check
     run: str | None = None  # shell command for script
     role: str | None = None  # built-in role name for check
-    bounce_target: str | None = None  # phase to bounce back to on failure
+    bounce_target: str | None = None  # fixed phase to bounce back to on failure
+    bounce_targets: list[str] = field(default_factory=list)  # agent-guided: checker picks from this list
 
     def render_prompt(self, failure_context: str = "") -> str:
         """Render the implementation prompt, injecting failure context on retry."""
@@ -110,6 +111,12 @@ def _load_yaml(path: Path) -> Workflow:
         if not prompt and phase_data.get("prompt_file"):
             prompt_path = path.parent / phase_data["prompt_file"]
             prompt = prompt_path.read_text()
+        bounce_target = phase_data.get("bounce_target")
+        bounce_targets = phase_data.get("bounce_targets", [])
+        if bounce_target and bounce_targets:
+            raise ValueError(
+                f"Phase '{phase_data['id']}': bounce_target and bounce_targets are mutually exclusive"
+            )
         phases.append(
             Phase(
                 id=phase_data["id"],
@@ -117,7 +124,8 @@ def _load_yaml(path: Path) -> Workflow:
                 prompt=prompt,
                 run=phase_data.get("run"),
                 role=phase_data.get("role"),
-                bounce_target=phase_data.get("bounce_target"),
+                bounce_target=bounce_target,
+                bounce_targets=bounce_targets,
             )
         )
 
