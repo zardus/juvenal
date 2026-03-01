@@ -6,7 +6,7 @@ import subprocess
 import pytest
 
 from juvenal.engine import Engine
-from juvenal.workflow import Checker, Phase, Workflow
+from juvenal.workflow import Phase, Workflow
 from tests.conftest import codex_available
 
 
@@ -27,15 +27,14 @@ def test_trivial_workflow_codex(tmp_path):
         phases=[
             Phase(
                 id="create-hello",
+                type="implement",
                 prompt="Create a file called hello.txt containing exactly 'hello world' (no quotes). Do nothing else.",
-                checkers=[
-                    Checker(
-                        name="check-hello",
-                        type="script",
-                        run="test -f hello.txt && grep -q 'hello world' hello.txt",
-                    )
-                ],
-            )
+            ),
+            Phase(
+                id="check-hello",
+                type="script",
+                run="test -f hello.txt && grep -q 'hello world' hello.txt",
+            ),
         ],
         backend="codex",
         working_dir=str(work_dir),

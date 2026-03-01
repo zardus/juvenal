@@ -1,105 +1,36 @@
-"""Checker execution — agent, script, and composite."""
+"""Checker utilities — verdict parsing and script execution."""
 
 from __future__ import annotations
 
 import subprocess
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
-
-if TYPE_CHECKING:
-    from juvenal.backends import Backend
-    from juvenal.workflow import Checker
 
 
 @dataclass
-class CheckResult:
-    """Result from running a checker."""
+class ScriptResult:
+    """Result from running a shell command."""
 
-    passed: bool
-    reason: str
+    exit_code: int
     output: str
 
 
-def run_checker(checker: Checker, backend: Backend, working_dir: str, display_callback=None) -> CheckResult:
-    """Run a single checker and return the result."""
-    if checker.type == "script":
-        return _run_script_checker(checker, working_dir)
-    elif checker.type == "agent":
-        return _run_agent_checker(checker, backend, working_dir, display_callback)
-    elif checker.type == "composite":
-        return _run_composite_checker(checker, backend, working_dir, display_callback)
-    else:
-        raise ValueError(f"Unknown checker type: {checker.type!r}")
-
-
-def _run_script_checker(checker: Checker, working_dir: str) -> CheckResult:
-    """Run a script checker. Exit 0 = PASS, nonzero = FAIL."""
+def run_script(command: str, working_dir: str, timeout: int = 600) -> ScriptResult:
+    """Run a shell command. Returns exit code and combined stdout+stderr."""
     try:
         result = subprocess.run(
-            checker.run,
+            command,
             shell=True,
             cwd=working_dir,
             capture_output=True,
             text=True,
-            timeout=600,
+            timeout=timeout,
         )
-        output = result.stdout + result.stderr
-        if result.returncode == 0:
-            return CheckResult(passed=True, reason="", output=output)
-        return CheckResult(
-            passed=False,
-            reason=f"Script exited with code {result.returncode}",
-            output=output,
+        return ScriptResult(
+            exit_code=result.returncode,
+            output=result.stdout + result.stderr,
         )
     except subprocess.TimeoutExpired:
-        return CheckResult(passed=False, reason="Script timed out after 600s", output="")
-
-
-def _run_agent_checker(checker: Checker, backend: Backend, working_dir: str, display_callback=None) -> CheckResult:
-    """Run an agent checker. Parses VERDICT from output."""
-    prompt = checker.render_prompt()
-    result = backend.run_agent(prompt, working_dir, display_callback)
-
-    if result.exit_code != 0:
-        return CheckResult(
-            passed=False,
-            reason=f"Checker agent crashed (exit {result.exit_code})",
-            output=result.output,
-        )
-
-    passed, reason = parse_verdict(result.output)
-    return CheckResult(passed=passed, reason=reason, output=result.output)
-
-
-def _run_composite_checker(checker: Checker, backend: Backend, working_dir: str, display_callback=None) -> CheckResult:
-    """Run composite checker: script first, then agent with script output."""
-    # Run script
-    try:
-        script_result = subprocess.run(
-            checker.run,
-            shell=True,
-            cwd=working_dir,
-            capture_output=True,
-            text=True,
-            timeout=600,
-        )
-        script_output = script_result.stdout + script_result.stderr
-    except subprocess.TimeoutExpired:
-        return CheckResult(passed=False, reason="Composite script timed out after 600s", output="")
-
-    # Run agent with script output injected
-    prompt = checker.render_prompt(script_output=script_output)
-    result = backend.run_agent(prompt, working_dir, display_callback)
-
-    if result.exit_code != 0:
-        return CheckResult(
-            passed=False,
-            reason=f"Composite checker agent crashed (exit {result.exit_code})",
-            output=result.output,
-        )
-
-    passed, reason = parse_verdict(result.output)
-    return CheckResult(passed=passed, reason=reason, output=result.output)
+        return ScriptResult(exit_code=1, output=f"Script timed out after {timeout}s")
 
 
 def parse_verdict(output: str) -> tuple[bool, str]:

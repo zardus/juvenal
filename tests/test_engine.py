@@ -6,7 +6,7 @@ import pytest
 
 from juvenal.checkers import parse_verdict
 from juvenal.engine import Engine, _extract_yaml
-from juvenal.workflow import Checker, Phase, Workflow
+from juvenal.workflow import Phase, Workflow
 from tests.conftest import MockBackend
 
 
@@ -43,11 +43,15 @@ class TestEngineWithMockedBackend:
         return engine
 
     def test_single_phase_pass(self, tmp_path):
+        """Implement phase followed by a script phase, both pass."""
         backend = MockBackend()
         backend.add_response(exit_code=0, output="done")  # implement
         workflow = Workflow(
             name="test",
-            phases=[Phase(id="setup", prompt="Do it.", checkers=[Checker(name="check", type="script", run="true")])],
+            phases=[
+                Phase(id="setup", type="implement", prompt="Do it."),
+                Phase(id="setup-check", type="script", run="true"),
+            ],
             max_retries=3,
         )
         engine = self._make_engine(workflow, backend, tmp_path)
@@ -59,24 +63,27 @@ class TestEngineWithMockedBackend:
         backend.add_response(exit_code=0, output="done")  # attempt 2 succeeds
         workflow = Workflow(
             name="test",
-            phases=[Phase(id="setup", prompt="Do it.", checkers=[Checker(name="check", type="script", run="true")])],
+            phases=[
+                Phase(id="setup", type="implement", prompt="Do it."),
+                Phase(id="setup-check", type="script", run="true"),
+            ],
             max_retries=3,
         )
         engine = self._make_engine(workflow, backend, tmp_path)
         assert engine.run() == 0
 
     def test_script_checker_failure_retries(self, tmp_path):
+        """Script failure jumps back to most recent implement phase."""
         backend = MockBackend()
-        backend.add_response(exit_code=0, output="done")  # attempt 1 implement
-        backend.add_response(exit_code=0, output="done")  # attempt 2 implement
+        backend.add_response(exit_code=0, output="done")  # implement attempt 1
+        # Script fails -> jumps back to implement
+        backend.add_response(exit_code=0, output="done")  # implement attempt 2
+        # Script fails again -> exhausted
         workflow = Workflow(
             name="test",
             phases=[
-                Phase(
-                    id="setup",
-                    prompt="Do it.",
-                    checkers=[Checker(name="check", type="script", run="false")],  # always fails
-                )
+                Phase(id="setup", type="implement", prompt="Do it."),
+                Phase(id="setup-check", type="script", run="false"),  # always fails
             ],
             max_retries=2,
         )
@@ -84,12 +91,34 @@ class TestEngineWithMockedBackend:
         assert engine.run() == 1  # exhausted
 
     def test_agent_checker_pass(self, tmp_path):
+        """Implement + check phase, check passes."""
         backend = MockBackend()
         backend.add_response(exit_code=0, output="implemented")  # implement
-        backend.add_response(exit_code=0, output="looks good\nVERDICT: PASS")  # checker
+        backend.add_response(exit_code=0, output="looks good\nVERDICT: PASS")  # check
         workflow = Workflow(
             name="test",
-            phases=[Phase(id="setup", prompt="Do it.", checkers=[Checker(name="tester", type="agent", role="tester")])],
+            phases=[
+                Phase(id="setup", type="implement", prompt="Do it."),
+                Phase(id="setup-review", type="check", role="tester"),
+            ],
+            max_retries=3,
+        )
+        engine = self._make_engine(workflow, backend, tmp_path)
+        assert engine.run() == 0
+
+    def test_agent_checker_fail_retries(self, tmp_path):
+        """Check failure jumps back to most recent implement phase."""
+        backend = MockBackend()
+        backend.add_response(exit_code=0, output="implemented")  # implement attempt 1
+        backend.add_response(exit_code=0, output="VERDICT: FAIL: bad code")  # check fails
+        backend.add_response(exit_code=0, output="fixed")  # implement attempt 2
+        backend.add_response(exit_code=0, output="VERDICT: PASS")  # check passes
+        workflow = Workflow(
+            name="test",
+            phases=[
+                Phase(id="setup", type="implement", prompt="Do it."),
+                Phase(id="setup-review", type="check", role="tester"),
+            ],
             max_retries=3,
         )
         engine = self._make_engine(workflow, backend, tmp_path)
@@ -97,15 +126,17 @@ class TestEngineWithMockedBackend:
 
     def test_multi_phase(self, tmp_path):
         backend = MockBackend()
-        # Phase 1: implement + check pass
+        # Phase 1: implement passes
         backend.add_response(exit_code=0, output="phase1 done")
-        # Phase 2: implement + check pass
+        # Phase 2: implement passes
         backend.add_response(exit_code=0, output="phase2 done")
         workflow = Workflow(
             name="test",
             phases=[
-                Phase(id="phase1", prompt="Do phase 1.", checkers=[Checker(name="c1", type="script", run="true")]),
-                Phase(id="phase2", prompt="Do phase 2.", checkers=[Checker(name="c2", type="script", run="true")]),
+                Phase(id="phase1", type="implement", prompt="Do phase 1."),
+                Phase(id="phase1-check", type="script", run="true"),
+                Phase(id="phase2", type="implement", prompt="Do phase 2."),
+                Phase(id="phase2-check", type="script", run="true"),
             ],
             max_retries=3,
         )
@@ -115,13 +146,18 @@ class TestEngineWithMockedBackend:
     def test_dry_run(self, tmp_path, capsys):
         workflow = Workflow(
             name="test",
-            phases=[Phase(id="setup", prompt="Do the thing.", checkers=[Checker(name="c", type="script", run="true")])],
+            phases=[
+                Phase(id="setup", type="implement", prompt="Do the thing."),
+                Phase(id="setup-check", type="script", run="true"),
+            ],
         )
         engine = self._make_engine(workflow, MockBackend(), tmp_path, dry_run=True)
         assert engine.run() == 0
         captured = capsys.readouterr()
         assert "test" in captured.out
         assert "setup" in captured.out
+        assert "implement" in captured.out
+        assert "script" in captured.out
 
 
 class TestExtractYaml:

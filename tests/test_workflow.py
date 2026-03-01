@@ -11,59 +11,74 @@ class TestYAMLLoading:
         assert wf.name == "test-workflow"
         assert wf.backend == "claude"
         assert wf.max_retries == 3
-        assert len(wf.phases) == 2
+        assert len(wf.phases) == 5
 
     def test_yaml_phases(self, sample_yaml):
         wf = load_workflow(sample_yaml)
         assert wf.phases[0].id == "setup"
+        assert wf.phases[0].type == "implement"
         assert wf.phases[0].prompt == "Set up the project scaffolding."
-        assert len(wf.phases[0].checkers) == 1
-        assert wf.phases[0].checkers[0].type == "script"
+
+    def test_yaml_phase_types(self, sample_yaml):
+        wf = load_workflow(sample_yaml)
+        assert wf.phases[0].type == "implement"
+        assert wf.phases[1].type == "script"
+        assert wf.phases[1].run == "echo ok"
+        assert wf.phases[2].type == "implement"
+        assert wf.phases[3].type == "script"
+        assert wf.phases[4].type == "check"
+        assert wf.phases[4].role == "tester"
 
     def test_yaml_bounce_targets(self, sample_yaml):
         wf = load_workflow(sample_yaml)
         assert wf.bounce_targets == {"implement": "setup"}
 
-    def test_yaml_checker_types(self, sample_yaml):
-        wf = load_workflow(sample_yaml)
-        impl = wf.phases[1]
-        assert len(impl.checkers) == 2
-        assert impl.checkers[0].type == "script"
-        assert impl.checkers[1].type == "agent"
-        assert impl.checkers[1].role == "tester"
+    def test_yaml_type_defaults_to_implement(self, tmp_path):
+        yaml_content = """\
+name: test
+phases:
+  - id: build
+    prompt: "Build it."
+"""
+        yaml_path = tmp_path / "workflow.yaml"
+        yaml_path.write_text(yaml_content)
+        wf = load_workflow(yaml_path)
+        assert wf.phases[0].type == "implement"
 
 
 class TestDirectoryLoading:
     def test_load_directory(self, tmp_workflow):
         wf = load_workflow(tmp_workflow)
-        assert len(wf.phases) == 2
+        assert len(wf.phases) == 4
         assert wf.phases[0].id == "01-setup"
-        assert wf.phases[1].id == "02-implement"
+        assert wf.phases[1].id == "02-check-build"
+        assert wf.phases[2].id == "03-implement"
+        assert wf.phases[3].id == "04-check-review"
 
-    def test_directory_checkers(self, tmp_workflow):
+    def test_directory_phase_types(self, tmp_workflow):
         wf = load_workflow(tmp_workflow)
-        # Phase 1: only a .sh checker
-        assert len(wf.phases[0].checkers) == 1
-        assert wf.phases[0].checkers[0].type == "script"
-
-        # Phase 2: paired .sh + .md = composite
-        assert len(wf.phases[1].checkers) == 1
-        assert wf.phases[1].checkers[0].type == "composite"
+        assert wf.phases[0].type == "implement"
+        assert wf.phases[1].type == "script"
+        assert wf.phases[2].type == "implement"
+        assert wf.phases[3].type == "check"
 
     def test_directory_prompts(self, tmp_workflow):
         wf = load_workflow(tmp_workflow)
         assert wf.phases[0].prompt == "Set up the project."
+        assert wf.phases[2].prompt == "Implement the feature."
+        assert wf.phases[3].prompt == "Review the implementation.\nVERDICT: PASS or FAIL"
 
 
 class TestBareFileLoading:
     def test_load_bare_md(self, bare_md):
         wf = load_workflow(bare_md)
-        assert len(wf.phases) == 1
+        assert len(wf.phases) == 2
         assert wf.phases[0].id == "task"
+        assert wf.phases[0].type == "implement"
         assert wf.phases[0].prompt == "Implement a hello world program."
-        assert len(wf.phases[0].checkers) == 1
-        assert wf.phases[0].checkers[0].type == "agent"
-        assert wf.phases[0].checkers[0].role == "tester"
+        assert wf.phases[1].id == "task-check"
+        assert wf.phases[1].type == "check"
+        assert wf.phases[1].role == "tester"
 
 
 class TestPhaseRendering:
@@ -80,8 +95,8 @@ class TestPhaseRendering:
 
 
 class TestPromptFile:
-    def test_checker_prompt_file(self, tmp_path):
-        """Checker with prompt_file loads prompt from the referenced file."""
+    def test_check_phase_prompt_file(self, tmp_path):
+        """Check phase with prompt_file loads prompt from the referenced file."""
         prompt_dir = tmp_path / "prompts"
         prompt_dir.mkdir()
         (prompt_dir / "my-checker.md").write_text("Check everything.\nVERDICT: PASS")
@@ -91,19 +106,18 @@ name: test-prompt-file
 phases:
   - id: build
     prompt: "Build the thing."
-    checkers:
-      - name: my-checker
-        type: agent
-        prompt_file: prompts/my-checker.md
+  - id: review
+    type: check
+    prompt_file: prompts/my-checker.md
 """
         yaml_path = tmp_path / "workflow.yaml"
         yaml_path.write_text(yaml_content)
 
         wf = load_workflow(yaml_path)
-        assert len(wf.phases) == 1
-        checker = wf.phases[0].checkers[0]
-        assert checker.name == "my-checker"
-        assert checker.prompt == "Check everything.\nVERDICT: PASS"
+        assert len(wf.phases) == 2
+        check_phase = wf.phases[1]
+        assert check_phase.type == "check"
+        assert check_phase.prompt == "Check everything.\nVERDICT: PASS"
 
     def test_phase_prompt_file(self, tmp_path):
         """Phase with prompt_file loads prompt from the referenced file."""
@@ -116,9 +130,6 @@ name: test-prompt-file
 phases:
   - id: build
     prompt_file: prompts/build.md
-    checkers:
-      - type: script
-        run: "true"
 """
         yaml_path = tmp_path / "workflow.yaml"
         yaml_path.write_text(yaml_content)

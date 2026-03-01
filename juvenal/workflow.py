@@ -10,31 +10,20 @@ import yaml
 
 
 @dataclass
-class Checker:
-    """A single verification step within a phase."""
-
-    name: str
-    type: str  # "script", "agent", "composite"
-    run: str | None = None  # shell command for script/composite
-    role: str | None = None  # built-in role name for agent
-    prompt: str | None = None  # inline prompt for agent/composite
-
-    def render_prompt(self, script_output: str = "") -> str:
-        """Render the checker prompt, injecting script_output for composite."""
-        if self.prompt:
-            return self.prompt.replace("{script_output}", script_output)
-        if self.role:
-            return _load_role_prompt(self.role)
-        return ""
-
-
-@dataclass
 class Phase:
-    """A single phase in the workflow pipeline."""
+    """A single phase in the workflow pipeline.
+
+    Every phase is exactly one thing:
+    - "implement": agentic implementation (default)
+    - "check": agentic checker (parses VERDICT)
+    - "script": non-agentic shell command
+    """
 
     id: str
-    prompt: str
-    checkers: list[Checker] = field(default_factory=list)
+    type: str = "implement"  # "implement", "check", "script"
+    prompt: str = ""  # for implement and check
+    run: str | None = None  # shell command for script
+    role: str | None = None  # built-in role name for check
 
     def render_prompt(self, failure_context: str = "") -> str:
         """Render the implementation prompt, injecting failure context on retry."""
@@ -46,6 +35,14 @@ class Phase:
                 "Fix these issues in your implementation.\n"
             )
         return text
+
+    def render_check_prompt(self) -> str:
+        """Render the checker prompt for check phases."""
+        if self.prompt:
+            return self.prompt
+        if self.role:
+            return _load_role_prompt(self.role)
+        return ""
 
 
 @dataclass
@@ -109,26 +106,19 @@ def _load_yaml(path: Path) -> Workflow:
 
     phases = []
     for phase_data in data.get("phases", []):
-        checkers = []
-        for checker_data in phase_data.get("checkers", []):
-            checker_prompt = checker_data.get("prompt")
-            if not checker_prompt and checker_data.get("prompt_file"):
-                prompt_path = path.parent / checker_data["prompt_file"]
-                checker_prompt = prompt_path.read_text()
-            checkers.append(
-                Checker(
-                    name=checker_data.get("name", _checker_name(checker_data)),
-                    type=checker_data["type"],
-                    run=checker_data.get("run"),
-                    role=checker_data.get("role"),
-                    prompt=checker_prompt,
-                )
-            )
         prompt = phase_data.get("prompt", "")
         if not prompt and phase_data.get("prompt_file"):
             prompt_path = path.parent / phase_data["prompt_file"]
             prompt = prompt_path.read_text()
-        phases.append(Phase(id=phase_data["id"], prompt=prompt, checkers=checkers))
+        phases.append(
+            Phase(
+                id=phase_data["id"],
+                type=phase_data.get("type", "implement"),
+                prompt=prompt,
+                run=phase_data.get("run"),
+                role=phase_data.get("role"),
+            )
+        )
 
     parallel_groups = []
     for pg in data.get("parallel_groups", []):
@@ -146,25 +136,34 @@ def _load_yaml(path: Path) -> Workflow:
 
 
 def _load_directory(root: Path, phases_dir: Path) -> Workflow:
-    """Load workflow from directory convention."""
+    """Load workflow from directory convention.
+
+    Detection:
+    - Subdirectory with prompt.md and NO check- prefix -> implement
+    - Subdirectory with prompt.md and check- prefix -> check
+    - .sh file at top level -> script
+    - Bare .md file at top level -> implement + auto check phase
+    """
     phases = []
     entries = sorted(phases_dir.iterdir())
 
     for entry in entries:
         if entry.name.startswith(".") or entry.name.startswith("_"):
             continue
-        if entry.is_file() and entry.suffix == ".md":
-            # Bare .md file = single phase with default tester checker
+        if entry.is_file() and entry.suffix == ".sh":
+            # Script phase
+            phase_id = entry.stem
+            phases.append(Phase(id=phase_id, type="script", run=str(entry)))
+        elif entry.is_file() and entry.suffix == ".md":
+            # Bare .md file = implement phase + auto check phase
             phase_id = entry.stem
             prompt = entry.read_text()
-            checkers = [
-                Checker(name="tester", type="agent", role="tester"),
-            ]
-            phases.append(Phase(id=phase_id, prompt=prompt, checkers=checkers))
+            phases.append(Phase(id=phase_id, type="implement", prompt=prompt))
+            phases.append(Phase(id=f"{phase_id}-check", type="check", role="tester"))
         elif entry.is_dir():
-            phase = _load_phase_dir(entry)
-            if phase:
-                phases.append(phase)
+            loaded = _load_phase_dir(entry)
+            if loaded:
+                phases.extend(loaded)
 
     # Merge overrides from workflow.yaml if present
     overrides = {}
@@ -186,79 +185,33 @@ def _load_directory(root: Path, phases_dir: Path) -> Workflow:
     )
 
 
-def _load_phase_dir(phase_dir: Path) -> Phase | None:
-    """Load a single phase from a directory."""
+def _load_phase_dir(phase_dir: Path) -> list[Phase] | None:
+    """Load phase(s) from a directory.
+
+    - check- prefix -> check phase
+    - no prefix -> implement phase
+    """
     prompt_path = phase_dir / "prompt.md"
     if not prompt_path.exists():
         return None
     prompt = prompt_path.read_text()
 
-    # Discover checkers
-    checkers = []
-    check_files = sorted(phase_dir.glob("check-*"))
-
-    # Group by base name for composite detection
-    sh_files: dict[str, Path] = {}
-    md_files: dict[str, Path] = {}
-    for f in check_files:
-        base = f.stem  # e.g., "check-tests"
-        if f.suffix == ".sh":
-            sh_files[base] = f
-        elif f.suffix == ".md":
-            md_files[base] = f
-
-    # Create checkers
-    seen = set()
-    for base in sorted(set(list(sh_files.keys()) + list(md_files.keys()))):
-        if base in seen:
-            continue
-        seen.add(base)
-        has_sh = base in sh_files
-        has_md = base in md_files
-
-        if has_sh and has_md:
-            # Composite checker
-            checkers.append(
-                Checker(
-                    name=base,
-                    type="composite",
-                    run=str(sh_files[base]),
-                    prompt=md_files[base].read_text(),
-                )
-            )
-        elif has_sh:
-            # Script checker
-            checkers.append(Checker(name=base, type="script", run=str(sh_files[base])))
-        elif has_md:
-            # Agent checker
-            checkers.append(Checker(name=base, type="agent", prompt=md_files[base].read_text()))
-
-    # If no checkers found, add a default tester
-    if not checkers:
-        checkers.append(Checker(name="tester", type="agent", role="tester"))
-
-    return Phase(id=phase_dir.name, prompt=prompt, checkers=checkers)
+    if phase_dir.name.startswith("check-") or "-check-" in phase_dir.name:
+        # Check phase
+        return [Phase(id=phase_dir.name, type="check", prompt=prompt)]
+    else:
+        # Implement phase
+        return [Phase(id=phase_dir.name, type="implement", prompt=prompt)]
 
 
 def _load_bare_file(path: Path) -> Workflow:
-    """Load a single .md file as a single-phase workflow."""
+    """Load a single .md file as a two-phase workflow: implement + check."""
     prompt = path.read_text()
-    phase = Phase(
-        id=path.stem,
-        prompt=prompt,
-        checkers=[Checker(name="tester", type="agent", role="tester")],
-    )
-    return Workflow(name=path.stem, phases=[phase])
-
-
-def _checker_name(checker_data: dict) -> str:
-    """Generate a name for a checker from its data."""
-    if checker_data.get("role"):
-        return checker_data["role"]
-    if checker_data.get("run"):
-        cmd = checker_data["run"]
-        return cmd.split()[0] if cmd else "script"
-    return checker_data.get("type", "checker")
+    phases = [
+        Phase(id=path.stem, type="implement", prompt=prompt),
+        Phase(id=f"{path.stem}-check", type="check", role="tester"),
+    ]
+    return Workflow(name=path.stem, phases=phases)
 
 
 def _load_role_prompt(role: str) -> str:

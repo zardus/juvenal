@@ -7,36 +7,47 @@ import shutil
 import pytest
 
 from juvenal.backends import AgentResult, Backend
-from juvenal.workflow import Checker, Phase, Workflow
+from juvenal.workflow import Phase, Workflow
 
 
 @pytest.fixture
 def tmp_workflow(tmp_path):
-    """Create a temporary workflow directory with phases."""
+    """Create a temporary workflow directory with phases.
+
+    New convention:
+    - Subdirectory with prompt.md and NO check- prefix -> implement
+    - Subdirectory with prompt.md and check- prefix -> check
+    - .sh file at top level -> script
+    """
     phases_dir = tmp_path / "phases"
     phases_dir.mkdir()
 
-    # Phase 1: setup
+    # Phase 1: implement (setup)
     p1 = phases_dir / "01-setup"
     p1.mkdir()
     (p1 / "prompt.md").write_text("Set up the project.")
-    (p1 / "check-build.sh").write_text("#!/bin/bash\nexit 0\n")
-    (p1 / "check-build.sh").chmod(0o755)
 
-    # Phase 2: implement
-    p2 = phases_dir / "02-implement"
-    p2.mkdir()
-    (p2 / "prompt.md").write_text("Implement the feature.")
-    (p2 / "check-tests.sh").write_text("#!/bin/bash\nexit 0\n")
-    (p2 / "check-tests.sh").chmod(0o755)
-    (p2 / "check-tests.md").write_text("Review tests.\nVERDICT: {script_output}")
+    # Phase 2: script (build check)
+    build_script = phases_dir / "02-check-build.sh"
+    build_script.write_text("#!/bin/bash\nexit 0\n")
+    build_script.chmod(0o755)
+
+    # Phase 3: implement (feature)
+    p3 = phases_dir / "03-implement"
+    p3.mkdir()
+    (p3 / "prompt.md").write_text("Implement the feature.")
+
+    # Phase 4: check (review)
+    p4 = phases_dir / "04-check-review"
+    p4.mkdir()
+    (p4 / "prompt.md").write_text("Review the implementation.\nVERDICT: PASS or FAIL")
 
     return tmp_path
 
 
 @pytest.fixture
 def sample_yaml(tmp_path):
-    """Create a sample workflow YAML file."""
+    """Create a sample workflow YAML file with flat phases."""
     yaml_content = """\
 name: test-workflow
 backend: claude
@@ -46,16 +57,17 @@ max_retries: 3
 phases:
   - id: setup
     prompt: "Set up the project scaffolding."
-    checkers:
-      - type: script
-        run: "echo ok"
+  - id: setup-check
+    type: script
+    run: "echo ok"
   - id: implement
     prompt: "Implement the feature."
-    checkers:
-      - type: script
-        run: "echo ok"
-      - type: agent
-        role: tester
+  - id: implement-script
+    type: script
+    run: "echo ok"
+  - id: implement-review
+    type: check
+    role: tester
 
 bounce_targets:
   implement: setup
@@ -104,15 +116,12 @@ def mock_backend():
 
 @pytest.fixture
 def simple_workflow():
-    """A simple workflow with one phase and one script checker."""
+    """A simple workflow with an implement phase and a script phase."""
     return Workflow(
         name="test",
         phases=[
-            Phase(
-                id="setup",
-                prompt="Do the thing.",
-                checkers=[Checker(name="check", type="script", run="exit 0")],
-            )
+            Phase(id="setup", type="implement", prompt="Do the thing."),
+            Phase(id="setup-check", type="script", run="exit 0"),
         ],
         backend="claude",
         max_retries=3,

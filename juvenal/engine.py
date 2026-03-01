@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from juvenal.backends import create_backend
-from juvenal.checkers import run_checker
+from juvenal.checkers import parse_verdict, run_script
 from juvenal.display import Display
 from juvenal.state import PipelineState
 from juvenal.workflow import Phase, Workflow
@@ -90,13 +90,22 @@ class Engine:
                     phase_idx = self._find_phase_index(last_pg_phase) + 1
                     continue
 
-                result = self._run_phase(phase)
+                if phase.type == "implement":
+                    result = self._run_implement(phase)
+                elif phase.type == "script":
+                    result = self._run_script(phase, phases, phase_idx)
+                elif phase.type == "check":
+                    result = self._run_check(phase, phases, phase_idx)
+                else:
+                    raise ValueError(f"Unknown phase type: {phase.type!r}")
 
                 if result.success:
                     self.state.mark_completed(phase.id)
                     phase_idx += 1
                 elif result.bounce_target:
-                    self.state.invalidate_from(result.bounce_target)
+                    if phase.type == "implement":
+                        # Workflow-level bounce (exhausted retries) — reset target
+                        self.state.invalidate_from(result.bounce_target)
                     phase_idx = self._find_phase_index(result.bounce_target)
                 else:
                     raise PipelineExhausted(phase.id)
@@ -113,15 +122,22 @@ class Engine:
             self.display.pipeline_done(False)
             return 1
 
-    def _run_phase(self, phase: Phase) -> PhaseResult:
-        """Run a single phase: implement + check loop."""
+    def _run_implement(self, phase: Phase) -> PhaseResult:
+        """Run an implement phase with self-retry on crash.
+
+        Resumes from the state's current attempt count so that retries
+        accumulate across bounces from downstream script/check failures.
+        """
         failure_context = self.state.get_failure_context(phase.id)
 
-        for attempt in range(1, self.workflow.max_retries + 1):
+        # Resume from last attempt (preserves count across bounces)
+        ps = self.state.phases.get(phase.id)
+        start_attempt = (ps.attempt if ps and ps.attempt > 0 else 0) + 1
+
+        for attempt in range(start_attempt, self.workflow.max_retries + 1):
             self.state.set_attempt(phase.id, attempt)
             self.display.phase_start(phase.id, attempt)
 
-            # Step 1: Implementation
             prompt = phase.render_prompt(failure_context=failure_context)
             self.display.step_start("implement")
             result = self.backend.run_agent(
@@ -137,32 +153,7 @@ class Engine:
                 continue
 
             self.display.step_pass("implement")
-
-            # Step 2: Run all checkers sequentially
-            all_passed = True
-            for checker in phase.checkers:
-                self.display.step_start(f"check: {checker.name}")
-                check_result = run_checker(
-                    checker,
-                    self.backend,
-                    self.workflow.working_dir,
-                    display_callback=self.display.live_update,
-                )
-                self.state.log_step(phase.id, attempt, checker.name, check_result.output)
-
-                if check_result.passed:
-                    self.display.step_pass(checker.name)
-                else:
-                    self.display.step_fail(checker.name, check_result.reason)
-                    failure_context = (
-                        f"{checker.name}: {check_result.reason}\n"
-                        f"Full output (last 3000 chars):\n{check_result.output[-3000:]}"
-                    )
-                    all_passed = False
-                    break
-
-            if all_passed:
-                return PhaseResult(success=True)
+            return PhaseResult(success=True)
 
         # Exhausted retries
         bounce_target = self.workflow.bounce_targets.get(phase.id)
@@ -171,13 +162,82 @@ class Engine:
             return PhaseResult(success=False, bounce_target=bounce_target)
         return PhaseResult(success=False)
 
+    def _run_script(self, phase: Phase, phases: list[Phase], phase_idx: int) -> PhaseResult:
+        """Run a script phase. Exit 0 = advance. Nonzero = jump back to most recent implement."""
+        self.display.phase_start(phase.id, 1)
+        self.display.step_start(f"script: {phase.id}")
+
+        result = run_script(phase.run, self.workflow.working_dir)
+        self.state.log_step(phase.id, 1, "script", result.output)
+
+        if result.exit_code == 0:
+            self.display.step_pass(phase.id)
+            return PhaseResult(success=True)
+
+        # Failure — find most recent implement phase and jump back
+        failure_context = (
+            f"Script '{phase.run}' failed (exit {result.exit_code}).\n"
+            f"Output:\n{result.output[-3000:]}"
+        )
+        self.display.step_fail(phase.id, failure_context[:500])
+
+        target_id = self._find_last_implement(phases, phase_idx)
+        if target_id:
+            self.state.set_failure_context(target_id, failure_context)
+            return PhaseResult(success=False, bounce_target=target_id)
+        return PhaseResult(success=False)
+
+    def _run_check(self, phase: Phase, phases: list[Phase], phase_idx: int) -> PhaseResult:
+        """Run a check phase. PASS = advance. FAIL = jump back to most recent implement."""
+        self.display.phase_start(phase.id, 1)
+        self.display.step_start(f"check: {phase.id}")
+
+        prompt = phase.render_check_prompt()
+        result = self.backend.run_agent(
+            prompt,
+            working_dir=self.workflow.working_dir,
+            display_callback=self.display.live_update,
+        )
+        self.state.log_step(phase.id, 1, "check", result.output)
+
+        if result.exit_code != 0:
+            failure_context = f"Checker agent crashed (exit {result.exit_code}).\n{result.output[-3000:]}"
+            self.display.step_fail(phase.id, failure_context[:500])
+            target_id = self._find_last_implement(phases, phase_idx)
+            if target_id:
+                self.state.set_failure_context(target_id, failure_context)
+                return PhaseResult(success=False, bounce_target=target_id)
+            return PhaseResult(success=False)
+
+        passed, reason = parse_verdict(result.output)
+        if passed:
+            self.display.step_pass(phase.id)
+            return PhaseResult(success=True)
+
+        # FAIL — jump back to most recent implement
+        failure_context = f"{phase.id}: {reason}\nFull output (last 3000 chars):\n{result.output[-3000:]}"
+        self.display.step_fail(phase.id, reason)
+
+        target_id = self._find_last_implement(phases, phase_idx)
+        if target_id:
+            self.state.set_failure_context(target_id, failure_context)
+            return PhaseResult(success=False, bounce_target=target_id)
+        return PhaseResult(success=False)
+
+    def _find_last_implement(self, phases: list[Phase], before_idx: int) -> str | None:
+        """Find the most recent implement phase before the given index."""
+        for i in range(before_idx - 1, -1, -1):
+            if phases[i].type == "implement":
+                return phases[i].id
+        return None
+
     def _run_parallel_group(self, phase_ids: list[str]) -> PhaseResult:
         """Run a group of phases in parallel."""
         phases_map = {p.id: p for p in self.workflow.phases}
         results: dict[str, PhaseResult] = {}
 
         with ThreadPoolExecutor(max_workers=len(phase_ids)) as pool:
-            futures = {pool.submit(self._run_phase, phases_map[pid]): pid for pid in phase_ids}
+            futures = {pool.submit(self._run_implement, phases_map[pid]): pid for pid in phase_ids}
             for future in as_completed(futures):
                 pid = futures[future]
                 result = future.result()
@@ -214,14 +274,14 @@ class Engine:
         print(f"Max retries: {self.workflow.max_retries}")
         print()
         for i, phase in enumerate(self.workflow.phases):
-            print(f"Phase {i + 1}: {phase.id}")
-            print(f"  Prompt: {phase.prompt[:100]}...")
-            for checker in phase.checkers:
-                print(f"  Checker: {checker.name} ({checker.type})")
-                if checker.run:
-                    print(f"    Run: {checker.run}")
-                if checker.role:
-                    print(f"    Role: {checker.role}")
+            print(f"Phase {i + 1}: {phase.id} ({phase.type})")
+            if phase.type == "implement":
+                print(f"  Prompt: {phase.prompt[:100]}...")
+            elif phase.type == "script":
+                print(f"  Run: {phase.run}")
+            elif phase.type == "check":
+                prompt_preview = phase.prompt[:100] if phase.prompt else f"role={phase.role}"
+                print(f"  Prompt: {prompt_preview}")
             print()
         if self.workflow.bounce_targets:
             print("Bounce targets:")

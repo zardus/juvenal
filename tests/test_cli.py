@@ -92,4 +92,4 @@ class TestArgumentParsing:
         except SystemExit:
             pass
         captured = capsys.readouterr()
-        assert "0.1.0" in captured.out
+        assert "0.3.0" in captured.out
