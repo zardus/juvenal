@@ -114,9 +114,7 @@ def _load_yaml(path: Path) -> Workflow:
         bounce_target = phase_data.get("bounce_target")
         bounce_targets = phase_data.get("bounce_targets", [])
         if bounce_target and bounce_targets:
-            raise ValueError(
-                f"Phase '{phase_data['id']}': bounce_target and bounce_targets are mutually exclusive"
-            )
+            raise ValueError(f"Phase '{phase_data['id']}': bounce_target and bounce_targets are mutually exclusive")
         phases.append(
             Phase(
                 id=phase_data["id"],
