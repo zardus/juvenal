@@ -44,6 +44,8 @@ class Engine:
         self,
         workflow: Workflow,
         resume: bool = False,
+        rewind: int | None = None,
+        rewind_to: str | None = None,
         start_phase: str | None = None,
         dry_run: bool = False,
         state_file: str | None = None,
@@ -55,10 +57,18 @@ class Engine:
         self.dry_run = dry_run
 
         sf = state_file or ".juvenal-state.json"
-        self.state = PipelineState.load(sf) if resume else PipelineState(state_file=Path(sf))
+        needs_state = resume or rewind is not None or rewind_to is not None
+        self.state = PipelineState.load(sf) if needs_state else PipelineState(state_file=Path(sf))
 
         # Determine starting phase index
-        if start_phase:
+        if rewind_to is not None:
+            self._start_idx = self._find_phase_index(rewind_to)
+            self.state.invalidate_from(rewind_to)
+        elif rewind is not None:
+            resume_idx = self.state.get_resume_phase_index(self.workflow.phases)
+            self._start_idx = max(0, resume_idx - rewind)
+            self.state.invalidate_from(self.workflow.phases[self._start_idx].id)
+        elif start_phase:
             self._start_idx = self._find_phase_index(start_phase)
         elif resume:
             self._start_idx = self.state.get_resume_phase_index(self.workflow.phases)

@@ -19,6 +19,8 @@ def build_parser() -> argparse.ArgumentParser:
     run_p = sub.add_parser("run", help="Execute a workflow")
     run_p.add_argument("workflow", help="Path to workflow YAML, directory, or bare .md file")
     run_p.add_argument("--resume", action="store_true", help="Resume from last saved state")
+    run_p.add_argument("--rewind", type=int, metavar="N", help="Rewind N phases back from the resume point")
+    run_p.add_argument("--rewind-to", metavar="PHASE_ID", help="Rewind to a specific phase by ID")
     run_p.add_argument("--phase", help="Start from a specific phase")
     run_p.add_argument("--max-bounces", type=int, default=999, help="Max bounces across all phases (default: 999)")
     run_p.add_argument("--backend", choices=["claude", "codex"], default="codex", help="AI backend to use")
@@ -84,6 +86,8 @@ def cmd_run(args: argparse.Namespace) -> int:
     engine = Engine(
         workflow,
         resume=args.resume,
+        rewind=args.rewind,
+        rewind_to=args.rewind_to,
         start_phase=args.phase,
         dry_run=args.dry_run,
         state_file=state_file,

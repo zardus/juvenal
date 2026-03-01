@@ -359,6 +359,96 @@ class TestEngineWithMockedBackend:
         assert "Run Summary" in captured.out
         assert "Total bounces: 1" in captured.out
 
+    def test_rewind_n_phases(self, tmp_path):
+        """--rewind N goes back N phases from the resume point and invalidates."""
+        backend = MockBackend()
+        # First run: complete phase1 and phase2, fail phase3
+        backend.add_response(exit_code=0, output="phase1 done")
+        backend.add_response(exit_code=0, output="phase2 done")
+        backend.add_response(exit_code=1, output="crash")  # phase3 fails -> exhausted
+        workflow = Workflow(
+            name="test",
+            phases=[
+                Phase(id="phase1", type="implement", prompt="Do phase 1."),
+                Phase(id="phase2", type="implement", prompt="Do phase 2."),
+                Phase(id="phase3", type="implement", prompt="Do phase 3."),
+            ],
+            max_bounces=1,
+        )
+        state_file = str(tmp_path / "state.json")
+        engine = self._make_engine(workflow, backend, tmp_path)
+        engine.run()
+        # phase1 and phase2 completed, phase3 failed
+        assert engine.state.phases["phase1"].status == "completed"
+        assert engine.state.phases["phase2"].status == "completed"
+
+        # Now rewind 2 from resume point (phase3, idx=2) -> starts at phase1 (idx=0)
+        backend2 = MockBackend()
+        backend2.add_response(exit_code=0, output="phase1 redone")
+        backend2.add_response(exit_code=0, output="phase2 redone")
+        backend2.add_response(exit_code=0, output="phase3 done")
+        engine2 = Engine(workflow, rewind=2, state_file=state_file)
+        engine2.backend = backend2
+        assert engine2._start_idx == 0
+        assert engine2.run() == 0
+
+    def test_rewind_to_phase(self, tmp_path):
+        """--rewind-to PHASE_ID starts from that phase and invalidates it onward."""
+        backend = MockBackend()
+        backend.add_response(exit_code=0, output="phase1 done")
+        backend.add_response(exit_code=0, output="phase2 done")
+        backend.add_response(exit_code=1, output="crash")
+        workflow = Workflow(
+            name="test",
+            phases=[
+                Phase(id="phase1", type="implement", prompt="Do phase 1."),
+                Phase(id="phase2", type="implement", prompt="Do phase 2."),
+                Phase(id="phase3", type="implement", prompt="Do phase 3."),
+            ],
+            max_bounces=1,
+        )
+        state_file = str(tmp_path / "state.json")
+        engine = self._make_engine(workflow, backend, tmp_path)
+        engine.run()
+
+        # Rewind to phase2
+        backend2 = MockBackend()
+        backend2.add_response(exit_code=0, output="phase2 redone")
+        backend2.add_response(exit_code=0, output="phase3 done")
+        engine2 = Engine(workflow, rewind_to="phase2", state_file=state_file)
+        engine2.backend = backend2
+        assert engine2._start_idx == 1
+        # phase1 should still be completed, phase2 invalidated
+        assert engine2.state.phases["phase1"].status == "completed"
+        assert engine2.state.phases["phase2"].status == "pending"
+        assert engine2.run() == 0
+
+    def test_rewind_clamps_to_zero(self, tmp_path):
+        """--rewind N larger than current position clamps to phase 0."""
+        backend = MockBackend()
+        backend.add_response(exit_code=0, output="phase1 done")
+        backend.add_response(exit_code=1, output="crash")
+        workflow = Workflow(
+            name="test",
+            phases=[
+                Phase(id="phase1", type="implement", prompt="Do phase 1."),
+                Phase(id="phase2", type="implement", prompt="Do phase 2."),
+            ],
+            max_bounces=1,
+        )
+        state_file = str(tmp_path / "state.json")
+        engine = self._make_engine(workflow, backend, tmp_path)
+        engine.run()
+
+        # Rewind 100 from resume point (phase2, idx=1) -> clamps to 0
+        backend2 = MockBackend()
+        backend2.add_response(exit_code=0, output="phase1 redone")
+        backend2.add_response(exit_code=0, output="phase2 done")
+        engine2 = Engine(workflow, rewind=100, state_file=state_file)
+        engine2.backend = backend2
+        assert engine2._start_idx == 0
+        assert engine2.run() == 0
+
     def test_timeout_on_phase(self, tmp_path):
         """Phase timeout field is stored correctly."""
         workflow = Workflow(

@@ -42,6 +42,24 @@ class TestArgumentParsing:
         assert args.working_dir == "/tmp"
         assert args.state_file == "custom-state.json"
 
+    def test_run_rewind(self):
+        parser = build_parser()
+        args = parser.parse_args(["run", "workflow.yaml", "--rewind", "2"])
+        assert args.rewind == 2
+        assert args.rewind_to is None
+
+    def test_run_rewind_to(self):
+        parser = build_parser()
+        args = parser.parse_args(["run", "workflow.yaml", "--rewind-to", "phase-a"])
+        assert args.rewind_to == "phase-a"
+        assert args.rewind is None
+
+    def test_run_defaults_no_rewind(self):
+        parser = build_parser()
+        args = parser.parse_args(["run", "workflow.yaml"])
+        assert args.rewind is None
+        assert args.rewind_to is None
+
     def test_run_state_file_default(self):
         parser = build_parser()
         args = parser.parse_args(["run", "workflow.yaml"])
