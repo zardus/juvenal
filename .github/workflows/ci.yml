@@ -30,7 +30,7 @@ jobs:
 
   e2e-claude:
     runs-on: ubuntu-latest
-    if: github.event_name == 'push'
+    if: ${{ secrets.ANTHROPIC_API_KEY != '' }}
     needs: [lint, unit]
     steps:
       - uses: actions/checkout@v4
@@ -45,7 +45,7 @@ jobs:
 
   e2e-codex:
     runs-on: ubuntu-latest
-    if: github.event_name == 'push'
+    if: ${{ secrets.OPENAI_API_KEY != '' }}
     needs: [lint, unit]
     steps:
       - uses: actions/checkout@v4
@@ -66,7 +66,7 @@ jobs:
 
   e2e-skill:
     runs-on: ubuntu-latest
-    if: github.event_name == 'push'
+    if: ${{ secrets.ANTHROPIC_API_KEY != '' }}
     needs: [lint, unit]
     steps:
       - uses: actions/checkout@v4
