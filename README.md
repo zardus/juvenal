@@ -1,117 +1,140 @@
-# juvenal
+# Juvenal
 
-`juvenal` is a deterministic Rust CLI that generates configurable greetings in text or JSON.
+> *Quis custodiet ipsos custodes?* — Who guards the agents?
 
-## Features
+Juvenal is a framework for orchestrating AI coding agents through verified implementation phases. It prevents agents from cheating on success criteria by separating implementation from verification, helps agents implement complex projects in phases, etc.
 
-- Configurable `name`, `language`, `style`, `punctuation`, and `intensity`
-- Output formats: plain text (`--output text`) or JSON (`--output json`)
-- Optional UNIX timestamp injection with `--timestamp`
-- Input normalization (whitespace collapse, default name fallback)
-- Strict validation and typed error messages
-- Stable exit code contract for automation
+## How It Works
 
-## Build and Install
+A non-agentic Python script orchestrates AI coding agents (Claude or Codex) through alternating steps:
 
-```bash
-# Build debug binary
-cargo build
+1. **Implementation** — an agent executes a prompt to build/modify code
+2. **Verification** — separate checkers (scripts, agents, or both) verify the work
+3. **Bounce** — if verification fails, the pipeline bounces back (to a configurable target phase or the most recent implement phase) with failure context injected. A global bounce limit (`max_bounces`) prevents infinite loops.
 
-# Build optimized binary
-cargo build --release
+The implementing agent and the checking agent are separate processes, so the implementer can't cheat by weakening tests.
 
-# Optional: install locally
-cargo install --path .
-```
+## Other Such Frameworks
 
-## CLI Usage
+Juvenal is conceptually similar to [ralph](https://github.com/snarktank/ralph), but it works slightly better for my exact purposes and reinventing the wheel is cheap now!
+
+## Install
 
 ```bash
-juvenal [OPTIONS]
+pip install -e ".[dev]"
 ```
 
-Options:
+## Claude Code Skill
 
-- `--name <NAME>` (default: `World`)
-- `--language <english|spanish|french>` (default: `english`)
-- `--style <casual|formal|excited>` (default: `casual`)
-- `--punctuation <auto|none|period|exclamation>` (default: `auto`)
-- `--intensity <0..=5>` (default: `1`)
-- `--output <text|json>` (default: `text`)
-- `--timestamp` (include `timestamp_unix_seconds`)
-- `-h, --help`
-- `-V, --version`
+Juvenal ships as a Claude Code plugin, so you can use it directly from Claude Code with `/juvenal`.
 
-## CLI Examples
+### Install the plugin
 
-Default output:
+**From the marketplace** (pending approval):
+```
+/plugin install juvenal
+```
+
+**From source** (works now):
+```bash
+claude --plugin-dir /path/to/juvenal/plugin
+```
+
+### Usage
+
+Once installed, invoke the skill in Claude Code:
+
+```
+/juvenal add authentication to the Flask app
+```
+
+Claude will create a Juvenal workflow for your goal and run it. You can also ask for help with workflow formats or run existing workflows.
+
+## Quick Start
 
 ```bash
-$ juvenal
-Hello, World!!
+# Scaffold a workflow
+juvenal init my-project
+
+# Run a workflow
+juvenal run workflow.yaml
+
+# Generate a workflow from a goal
+juvenal plan "implement a REST API with tests" -o workflow.yaml
+
+# Plan and immediately run
+juvenal do "add authentication to the Flask app"
 ```
 
-JSON output:
+## Workflow Formats
 
-```bash
-$ juvenal --output json
-{"message":"Hello, World!!"}
+### YAML
+
+```yaml
+name: "my-workflow"
+backend: claude
+max_bounces: 999
+
+phases:
+  - id: implement
+    prompt: "Implement the feature."
+    checkers:
+      - type: script
+        run: "pytest tests/ -x"
+      - type: agent
+        role: tester
 ```
 
-Custom greeting:
+### Directory Convention
 
-```bash
-$ juvenal --name "  Ada   Lovelace  " --language french --style excited --punctuation exclamation --intensity 2
-BONJOUR, ADA LOVELACE!!!
+```
+my-workflow/
+  phases/
+    01-setup/
+      prompt.md            # implementation prompt
+      check-build.sh       # script checker (exit 0 = pass)
+      check-quality.md     # agent checker
+    02-implement/
+      prompt.md
+      check-tests.sh       # paired with .md = composite
+      check-tests.md       # gets {script_output} injected
 ```
 
-JSON with timestamp:
+### Bare Markdown
 
-```bash
-$ juvenal --output json --timestamp
-{"message":"Hello, World!!","timestamp_unix_seconds":1700000123}
+```
+phases/
+  01-setup.md              # single phase, default tester checker
 ```
 
-`timestamp_unix_seconds` is generated at runtime and will vary.
+## Checker Types
 
-Validation error (user input error, exit code `2`):
+| Type | Description |
+|------|-------------|
+| `script` | Shell command; exit 0 = PASS, nonzero = FAIL |
+| `agent` | AI agent that emits `VERDICT: PASS` or `VERDICT: FAIL: reason` |
+| `composite` | Script runs first, output fed to agent via `{script_output}` |
 
-```bash
-$ juvenal --style formal --punctuation exclamation --intensity 4
-formal style cannot be combined with exclamation punctuation above intensity 3 (received 4)
+## Built-in Roles
+
+Agent checkers can use built-in verification personas:
+
+- `tester` — runs tests, checks for build errors
+- `architect` — validates design, checks for circular dependencies
+- `pm` — confirms requirements are met, no TODOs remain
+- `senior-tester` — checks test integrity, looks for cheating
+- `senior-engineer` — reviews code quality, completeness, security
+
+## CLI
+
+```
+juvenal run <workflow> [--resume] [--phase X] [--max-retries N] [--backend claude|codex] [--dry-run]
+juvenal plan "goal" [-o output.yaml] [--backend claude|codex]
+juvenal do "goal" [--backend claude|codex] [--max-retries N]
+juvenal status [--state-file path]
+juvenal init [directory] [--template name]
 ```
 
-## Output and Exit Code Contracts
+## License
 
-- Text mode prints exactly one line to `stdout`, newline-terminated.
-- JSON mode prints exactly one JSON object per line to `stdout`.
-- JSON always includes:
-  - `message: string`
-- JSON includes `timestamp_unix_seconds: u64` only when `--timestamp` is set.
-- Validation and parsing errors print to `stderr` and return exit code `2`.
-- Runtime errors (I/O, time, serialization) return exit code `1`.
-- `--help` and `--version` return exit code `0`.
-
-## Verification Commands
-
-Use these before merging:
-
-```bash
-# Format check
-cargo fmt -- --check
-
-# Full test suite
-cargo test
-
-# High-volume matrix coverage
-cargo test --test output_matrix
-
-# Property-based invariants (fixed-seed, bounded cases)
-cargo test --test properties
-```
-
-Optional lint gate (if clippy is installed):
-
-```bash
-cargo clippy --all-targets --all-features -- -D warnings
-```
+MIT
