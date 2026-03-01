@@ -24,6 +24,7 @@ def build_parser() -> argparse.ArgumentParser:
     run_p.add_argument("--backend", choices=["claude", "codex"], default="codex", help="AI backend to use")
     run_p.add_argument("--dry-run", action="store_true", help="Show what would be done without executing")
     run_p.add_argument("--working-dir", help="Working directory for the agent")
+    run_p.add_argument("--state-file", help="Path to state file (default: .juvenal-state.json)")
 
     # plan
     plan_p = sub.add_parser("plan", help="Generate a workflow from a goal description")
@@ -46,14 +47,24 @@ def build_parser() -> argparse.ArgumentParser:
     init_p.add_argument("directory", nargs="?", default=".", help="Directory to scaffold (default: .)")
     init_p.add_argument("--template", default="default", help="Template to use (default: default)")
 
+    # validate
+    validate_p = sub.add_parser("validate", help="Validate a workflow definition")
+    validate_p.add_argument("workflow", help="Path to workflow YAML, directory, or bare .md file")
+
     return parser
 
 
 def cmd_run(args: argparse.Namespace) -> int:
     from juvenal.engine import Engine
-    from juvenal.workflow import load_workflow
+    from juvenal.workflow import load_workflow, validate_workflow
 
     workflow = load_workflow(args.workflow)
+    errors = validate_workflow(workflow)
+    if errors:
+        print(f"Workflow validation failed with {len(errors)} error(s):")
+        for err in errors:
+            print(f"  - {err}")
+        return 1
     if args.backend:
         workflow.backend = args.backend
     if args.max_bounces:
@@ -61,7 +72,15 @@ def cmd_run(args: argparse.Namespace) -> int:
     if args.working_dir:
         workflow.working_dir = args.working_dir
 
-    engine = Engine(workflow, resume=args.resume, start_phase=args.phase, dry_run=args.dry_run, plain=args.plain)
+    state_file = getattr(args, "state_file", None)
+    engine = Engine(
+        workflow,
+        resume=args.resume,
+        start_phase=args.phase,
+        dry_run=args.dry_run,
+        state_file=state_file,
+        plain=args.plain,
+    )
     return engine.run()
 
 
@@ -106,6 +125,20 @@ def cmd_init(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_validate(args: argparse.Namespace) -> int:
+    from juvenal.workflow import load_workflow, validate_workflow
+
+    workflow = load_workflow(args.workflow)
+    errors = validate_workflow(workflow)
+    if errors:
+        print(f"Validation found {len(errors)} error(s):")
+        for err in errors:
+            print(f"  - {err}")
+        return 1
+    print(f"Workflow {workflow.name!r} is valid ({len(workflow.phases)} phases).")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
@@ -120,6 +153,7 @@ def main(argv: list[str] | None = None) -> int:
         "do": cmd_do,
         "status": cmd_status,
         "init": cmd_init,
+        "validate": cmd_validate,
     }
     return handlers[args.command](args)
 

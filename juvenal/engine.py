@@ -120,6 +120,7 @@ class Engine:
             self.state.completed_at = time.time()
             self.state.save()
             self.display.pipeline_done(True)
+            self.display.run_summary(self.state, bounces)
             return 0
 
         except PipelineExhausted as e:
@@ -127,6 +128,7 @@ class Engine:
             self.state.completed_at = time.time()
             self.state.save()
             self.display.pipeline_done(False)
+            self.display.run_summary(self.state, bounces)
             return 1
 
     def _run_implement(self, phase: Phase) -> PhaseResult:
@@ -144,6 +146,8 @@ class Engine:
             prompt,
             working_dir=self.workflow.working_dir,
             display_callback=self.display.live_update,
+            timeout=phase.timeout,
+            env=phase.env or None,
         )
         self.state.log_step(phase.id, attempt, "implement", result.output)
 
@@ -163,7 +167,8 @@ class Engine:
         self.display.phase_start(phase.id, 1)
         self.display.step_start(f"script: {phase.id}")
 
-        result = run_script(phase.run, self.workflow.working_dir)
+        timeout = phase.timeout or 600
+        result = run_script(phase.run, self.workflow.working_dir, timeout=timeout, env=phase.env or None)
         self.state.log_step(phase.id, 1, "script", result.output)
 
         if result.exit_code == 0:
@@ -190,6 +195,8 @@ class Engine:
             prompt,
             working_dir=self.workflow.working_dir,
             display_callback=self.display.live_update,
+            timeout=phase.timeout,
+            env=phase.env or None,
         )
         self.state.log_step(phase.id, 1, "check", result.output)
 

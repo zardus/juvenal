@@ -26,6 +26,8 @@ class Phase:
     role: str | None = None  # built-in role name for check
     bounce_target: str | None = None  # fixed phase to bounce back to on failure
     bounce_targets: list[str] = field(default_factory=list)  # agent-guided: checker picks from this list
+    timeout: int | None = None  # timeout in seconds (None = no limit)
+    env: dict[str, str] = field(default_factory=dict)  # environment variables for the phase
 
     def render_prompt(self, failure_context: str = "") -> str:
         """Render the implementation prompt, injecting failure context on retry."""
@@ -124,6 +126,8 @@ def _load_yaml(path: Path) -> Workflow:
                 role=phase_data.get("role"),
                 bounce_target=bounce_target,
                 bounce_targets=bounce_targets,
+                timeout=phase_data.get("timeout"),
+                env=phase_data.get("env", {}),
             )
         )
 
@@ -227,6 +231,66 @@ def _load_role_prompt(role: str) -> str:
     if role_path.exists():
         return role_path.read_text()
     raise FileNotFoundError(f"Built-in role prompt not found: {role_file}")
+
+
+VALID_PHASE_TYPES = {"implement", "check", "script"}
+VALID_ROLES = {"tester", "architect", "pm", "senior-tester", "senior-engineer"}
+
+
+def validate_workflow(workflow: Workflow) -> list[str]:
+    """Validate a workflow definition and return a list of errors.
+
+    Checks:
+    - Phase IDs are unique
+    - Phase types are valid
+    - bounce_target references existing phase IDs
+    - implement/check phases have a prompt, prompt_file, or role
+    - script phases have a run command
+    - Parallel group phase IDs reference existing phases
+    - Check phases with roles reference valid built-in roles
+    """
+    errors: list[str] = []
+    phase_ids = set()
+    all_ids = {p.id for p in workflow.phases}
+
+    for phase in workflow.phases:
+        # Duplicate ID check
+        if phase.id in phase_ids:
+            errors.append(f"Duplicate phase ID: {phase.id!r}")
+        phase_ids.add(phase.id)
+
+        # Valid type
+        if phase.type not in VALID_PHASE_TYPES:
+            errors.append(f"Phase {phase.id!r}: invalid type {phase.type!r} (must be one of {VALID_PHASE_TYPES})")
+
+        # bounce_target references existing phase
+        if phase.bounce_target and phase.bounce_target not in all_ids:
+            errors.append(f"Phase {phase.id!r}: bounce_target {phase.bounce_target!r} does not match any phase ID")
+
+        # bounce_targets all reference existing phases
+        for bt in phase.bounce_targets:
+            if bt not in all_ids:
+                errors.append(f"Phase {phase.id!r}: bounce_targets entry {bt!r} does not match any phase ID")
+
+        # Type-specific validation
+        if phase.type == "implement" and not phase.prompt:
+            errors.append(f"Phase {phase.id!r}: implement phase has no prompt")
+        if phase.type == "check" and not phase.prompt and not phase.role:
+            errors.append(f"Phase {phase.id!r}: check phase has no prompt or role")
+        if phase.type == "script" and not phase.run:
+            errors.append(f"Phase {phase.id!r}: script phase has no run command")
+
+        # Role validation
+        if phase.role and phase.role not in VALID_ROLES:
+            errors.append(f"Phase {phase.id!r}: unknown role {phase.role!r} (valid: {sorted(VALID_ROLES)})")
+
+    # Parallel group validation
+    for i, group in enumerate(workflow.parallel_groups):
+        for pid in group:
+            if pid not in all_ids:
+                errors.append(f"Parallel group {i}: phase ID {pid!r} does not match any phase")
+
+    return errors
 
 
 def scaffold_workflow(directory: str, template: str = "default") -> None:

@@ -321,6 +321,54 @@ class TestEngineWithMockedBackend:
         assert "implement" in captured.out
         assert "script" in captured.out
 
+    def test_run_summary_on_success(self, tmp_path, capsys):
+        """Successful run prints a summary with phase info and bounce count."""
+        backend = MockBackend()
+        backend.add_response(exit_code=0, output="done")
+        workflow = Workflow(
+            name="test",
+            phases=[
+                Phase(id="setup", type="implement", prompt="Do it."),
+                Phase(id="setup-check", type="script", run="true"),
+            ],
+            max_bounces=3,
+        )
+        engine = self._make_engine(workflow, backend, tmp_path, plain=True)
+        assert engine.run() == 0
+        captured = capsys.readouterr()
+        assert "Run Summary" in captured.out
+        assert "setup" in captured.out
+        assert "Total bounces: 0" in captured.out
+
+    def test_run_summary_on_failure(self, tmp_path, capsys):
+        """Failed run also prints a summary with bounce count."""
+        backend = MockBackend()
+        backend.add_response(exit_code=0, output="done")
+        # Script always fails
+        workflow = Workflow(
+            name="test",
+            phases=[
+                Phase(id="setup", type="implement", prompt="Do it."),
+                Phase(id="setup-check", type="script", run="false"),
+            ],
+            max_bounces=1,
+        )
+        engine = self._make_engine(workflow, backend, tmp_path, plain=True)
+        assert engine.run() == 1
+        captured = capsys.readouterr()
+        assert "Run Summary" in captured.out
+        assert "Total bounces: 1" in captured.out
+
+    def test_timeout_on_phase(self, tmp_path):
+        """Phase timeout field is stored correctly."""
+        workflow = Workflow(
+            name="test",
+            phases=[
+                Phase(id="setup", type="implement", prompt="Do it.", timeout=60),
+            ],
+        )
+        assert workflow.phases[0].timeout == 60
+
 
 class TestExtractYaml:
     def test_yaml_code_fence(self):

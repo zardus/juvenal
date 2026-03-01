@@ -33,6 +33,8 @@ class Backend(ABC):
         prompt: str,
         working_dir: str,
         display_callback: Callable[[str], None] | None = None,
+        timeout: int | None = None,
+        env: dict[str, str] | None = None,
     ) -> AgentResult:
         """Run an agent with the given prompt. Returns AgentResult."""
         ...
@@ -49,6 +51,8 @@ class ClaudeBackend(Backend):
         prompt: str,
         working_dir: str,
         display_callback: Callable[[str], None] | None = None,
+        timeout: int | None = None,
+        env: dict[str, str] | None = None,
     ) -> AgentResult:
         cmd = [
             "claude",
@@ -61,7 +65,9 @@ class ClaudeBackend(Backend):
         ]
 
         # Strip CLAUDECODE env var so juvenal can be invoked from inside Claude Code
-        env = {k: v for k, v in os.environ.items() if k != "CLAUDECODE"}
+        proc_env = {k: v for k, v in os.environ.items() if k != "CLAUDECODE"}
+        if env:
+            proc_env.update(env)
 
         start = time.time()
         proc = subprocess.Popen(
@@ -71,29 +77,43 @@ class ClaudeBackend(Backend):
             stderr=subprocess.PIPE,
             text=True,
             bufsize=1,
-            env=env,
+            env=proc_env,
         )
 
         transcript_lines: list[str] = []
         assistant_messages: list[str] = []
 
-        for raw_line in proc.stdout:
-            line = raw_line.rstrip("\n")
-            if not line:
-                continue
-            event = _parse_json_event(line)
-            if event:
-                display_text, assistant_text = _process_claude_event(event)
-                if display_text:
-                    transcript_lines.append(display_text)
+        try:
+            for raw_line in proc.stdout:
+                if timeout and (time.time() - start) > timeout:
+                    proc.kill()
+                    proc.wait()
+                    return AgentResult(
+                        exit_code=1,
+                        output=f"Agent timed out after {timeout}s",
+                        transcript="\n".join(transcript_lines),
+                        duration=time.time() - start,
+                    )
+                line = raw_line.rstrip("\n")
+                if not line:
+                    continue
+                event = _parse_json_event(line)
+                if event:
+                    display_text, assistant_text = _process_claude_event(event)
+                    if display_text:
+                        transcript_lines.append(display_text)
+                        if display_callback:
+                            display_callback(display_text)
+                    if assistant_text:
+                        assistant_messages.append(assistant_text)
+                else:
+                    transcript_lines.append(line)
                     if display_callback:
-                        display_callback(display_text)
-                if assistant_text:
-                    assistant_messages.append(assistant_text)
-            else:
-                transcript_lines.append(line)
-                if display_callback:
-                    display_callback(line)
+                        display_callback(line)
+        except Exception:
+            proc.kill()
+            proc.wait()
+            raise
 
         stderr_output = proc.stderr.read()
         returncode = proc.wait()
@@ -125,6 +145,8 @@ class CodexBackend(Backend):
         prompt: str,
         working_dir: str,
         display_callback: Callable[[str], None] | None = None,
+        timeout: int | None = None,
+        env: dict[str, str] | None = None,
     ) -> AgentResult:
         cmd = [
             "npx",
@@ -139,6 +161,10 @@ class CodexBackend(Backend):
             prompt,
         ]
 
+        proc_env = dict(os.environ)
+        if env:
+            proc_env.update(env)
+
         start = time.time()
         proc = subprocess.Popen(
             cmd,
@@ -146,28 +172,43 @@ class CodexBackend(Backend):
             stderr=subprocess.STDOUT,
             text=True,
             bufsize=1,
+            env=proc_env,
         )
 
         transcript_lines: list[str] = []
         assistant_messages: list[str] = []
 
-        for raw_line in proc.stdout:
-            line = raw_line.rstrip("\n")
-            if not line:
-                continue
-            event = _parse_json_event(line)
-            if event:
-                display_text, assistant_text = _process_codex_event(event)
-                if display_text:
-                    transcript_lines.append(display_text)
+        try:
+            for raw_line in proc.stdout:
+                if timeout and (time.time() - start) > timeout:
+                    proc.kill()
+                    proc.wait()
+                    return AgentResult(
+                        exit_code=1,
+                        output=f"Agent timed out after {timeout}s",
+                        transcript="\n".join(transcript_lines),
+                        duration=time.time() - start,
+                    )
+                line = raw_line.rstrip("\n")
+                if not line:
+                    continue
+                event = _parse_json_event(line)
+                if event:
+                    display_text, assistant_text = _process_codex_event(event)
+                    if display_text:
+                        transcript_lines.append(display_text)
+                        if display_callback:
+                            display_callback(display_text)
+                    if assistant_text:
+                        assistant_messages.append(assistant_text)
+                else:
+                    transcript_lines.append(line)
                     if display_callback:
-                        display_callback(display_text)
-                if assistant_text:
-                    assistant_messages.append(assistant_text)
-            else:
-                transcript_lines.append(line)
-                if display_callback:
-                    display_callback(line)
+                        display_callback(line)
+        except Exception:
+            proc.kill()
+            proc.wait()
+            raise
 
         returncode = proc.wait()
         duration = time.time() - start

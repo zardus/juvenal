@@ -97,7 +97,7 @@ class MockBackend(Backend):
     def add_response(self, exit_code: int = 0, output: str = "", transcript: str = ""):
         self._responses.append(AgentResult(exit_code=exit_code, output=output, transcript=transcript, duration=0.1))
 
-    def run_agent(self, prompt, working_dir, display_callback=None):
+    def run_agent(self, prompt, working_dir, display_callback=None, timeout=None, env=None):
         self.calls.append(prompt)
         if self._call_count < len(self._responses):
             result = self._responses[self._call_count]

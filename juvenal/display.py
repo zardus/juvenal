@@ -95,6 +95,56 @@ class Display:
             else:
                 print("\nPipeline failed.", flush=True)
 
+    def run_summary(self, state, total_bounces: int) -> None:
+        """Print a post-run summary with timing and bounce stats."""
+        if self._console and RICH_AVAILABLE:
+            self._run_summary_rich(state, total_bounces)
+        else:
+            self._run_summary_plain(state, total_bounces)
+
+    def _run_summary_rich(self, state, total_bounces: int) -> None:
+        from rich.table import Table
+
+        table = Table(title="Run Summary")
+        table.add_column("Phase", style="cyan")
+        table.add_column("Status", style="bold")
+        table.add_column("Attempts", justify="right")
+        table.add_column("Duration", justify="right")
+
+        for pid, ps in state.phases.items():
+            status_style = {"completed": "green", "running": "yellow", "failed": "red", "pending": "dim"}.get(
+                ps.status, "dim"
+            )
+            duration = ""
+            if ps.started_at and ps.completed_at:
+                dur = ps.completed_at - ps.started_at
+                duration = f"{dur:.1f}s"
+            table.add_row(pid, f"[{status_style}]{ps.status}[/]", str(ps.attempt), duration)
+
+        self._console.print(table)
+
+        # Overall stats
+        total_duration = ""
+        if state.started_at and state.completed_at:
+            total_duration = _elapsed(state.started_at + (time.time() - state.completed_at))
+            dur = state.completed_at - state.started_at
+            total_duration = f"{dur:.1f}s"
+        self._console.print(f"  Total time: {total_duration}")
+        self._console.print(f"  Total bounces: {total_bounces}")
+
+    def _run_summary_plain(self, state, total_bounces: int) -> None:
+        print("\n--- Run Summary ---", flush=True)
+        for pid, ps in state.phases.items():
+            duration = ""
+            if ps.started_at and ps.completed_at:
+                dur = ps.completed_at - ps.started_at
+                duration = f" ({dur:.1f}s)"
+            print(f"  {pid}: {ps.status} (attempts: {ps.attempt}){duration}", flush=True)
+        if state.started_at and state.completed_at:
+            total = state.completed_at - state.started_at
+            print(f"  Total time: {total:.1f}s", flush=True)
+        print(f"  Total bounces: {total_bounces}", flush=True)
+
     def live_update(self, line: str) -> None:
         """Feed a line of output to the live display."""
         self._live_lines.append(line)
