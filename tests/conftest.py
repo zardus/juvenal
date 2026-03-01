@@ -62,15 +62,13 @@ phases:
     run: "echo ok"
   - id: implement
     prompt: "Implement the feature."
+    bounce_target: setup
   - id: implement-script
     type: script
     run: "echo ok"
   - id: implement-review
     type: check
     role: tester
-
-bounce_targets:
-  implement: setup
 """
     yaml_path = tmp_path / "workflow.yaml"
     yaml_path.write_text(yaml_content)

@@ -24,6 +24,7 @@ class Phase:
     prompt: str = ""  # for implement and check
     run: str | None = None  # shell command for script
     role: str | None = None  # built-in role name for check
+    bounce_target: str | None = None  # phase to bounce back to on failure
 
     def render_prompt(self, failure_context: str = "") -> str:
         """Render the implementation prompt, injecting failure context on retry."""
@@ -54,7 +55,6 @@ class Workflow:
     backend: str = "codex"
     working_dir: str = "."
     max_retries: int = 999
-    bounce_targets: dict[str, str] = field(default_factory=dict)
     parallel_groups: list[list[str]] = field(default_factory=list)
 
 
@@ -117,6 +117,7 @@ def _load_yaml(path: Path) -> Workflow:
                 prompt=prompt,
                 run=phase_data.get("run"),
                 role=phase_data.get("role"),
+                bounce_target=phase_data.get("bounce_target"),
             )
         )
 
@@ -130,7 +131,6 @@ def _load_yaml(path: Path) -> Workflow:
         backend=data.get("backend", "codex"),
         working_dir=data.get("working_dir", "."),
         max_retries=data.get("max_retries", 999),
-        bounce_targets=data.get("bounce_targets", {}),
         parallel_groups=parallel_groups,
     )
 
@@ -180,7 +180,6 @@ def _load_directory(root: Path, phases_dir: Path) -> Workflow:
         backend=overrides.get("backend", "claude"),
         working_dir=overrides.get("working_dir", "."),
         max_retries=overrides.get("max_retries", 999),
-        bounce_targets=overrides.get("bounce_targets", {}),
         parallel_groups=[pg.get("phases", []) for pg in overrides.get("parallel_groups", [])],
     )
 

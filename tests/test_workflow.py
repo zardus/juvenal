@@ -29,9 +29,12 @@ class TestYAMLLoading:
         assert wf.phases[4].type == "check"
         assert wf.phases[4].role == "tester"
 
-    def test_yaml_bounce_targets(self, sample_yaml):
+    def test_yaml_bounce_target(self, sample_yaml):
         wf = load_workflow(sample_yaml)
-        assert wf.bounce_targets == {"implement": "setup"}
+        assert wf.phases[2].id == "implement"
+        assert wf.phases[2].bounce_target == "setup"
+        # Phases without bounce_target should be None
+        assert wf.phases[0].bounce_target is None
 
     def test_yaml_type_defaults_to_implement(self, tmp_path):
         yaml_content = """\

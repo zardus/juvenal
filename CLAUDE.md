@@ -31,7 +31,7 @@ The system uses a **non-agentic, deterministic execution loop**. All control flo
 
 | Module | Purpose |
 |--------|---------|
-| `engine.py` | Main orchestration loop (`Engine.run()`). Executes phases sequentially or in parallel groups. Handles bounce-back on verification failure. |
+| `engine.py` | Main orchestration loop (`Engine.run()`). Executes phases sequentially or in parallel groups. Global bounce counter (`max_retries`) limits total bounces across all phases. |
 | `workflow.py` | Workflow loading and `Phase`/`Workflow` dataclasses. Supports YAML, directory convention, and bare `.md` formats. |
 | `backends.py` | Abstract `Backend` base class with `ClaudeBackend` and `CodexBackend`. Manages subprocess invocation and JSON stream parsing. |
 | `state.py` | Atomic JSON state persistence (`PipelineState`). Writes to `.tmp`, fsyncs, then atomic renames. Supports resume from last checkpoint. |
@@ -52,7 +52,7 @@ The system uses a **non-agentic, deterministic execution loop**. All control flo
 
 - **implement** — agent executes a prompt to build/modify code
 - **check** — separate agent verifies work, emits `VERDICT: PASS` or `VERDICT: FAIL: reason`
-- **script** — shell command; exit 0 = pass, nonzero = fail (bounces back to most recent implement phase)
+- **script** — shell command; exit 0 = pass, nonzero = fail (bounces back to phase's `bounce_target` or most recent implement phase)
 
 ## Code Conventions
 
@@ -84,7 +84,7 @@ The system uses a **non-agentic, deterministic execution loop**. All control flo
 
 ```
 juvenal/
-├── __init__.py          # Version (__version__ = "0.3.2")
+├── __init__.py          # Version (__version__ = "0.4.0")
 ├── backends.py          # Backend ABC + Claude/Codex implementations
 ├── checkers.py          # Verdict parsing, script execution
 ├── cli.py               # CLI argument parsing and dispatch

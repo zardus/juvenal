@@ -30,7 +30,7 @@ The key insight: the implementing agent and the checking agent are separate, so 
 name: "my-workflow"
 backend: claude  # or "codex"
 working_dir: "."
-max_retries: 999
+max_retries: 999  # global bounce limit
 
 phases:
   - id: setup
@@ -43,6 +43,7 @@ phases:
 
   - id: implement
     prompt_file: phases/implement/prompt.md
+    bounce_target: setup  # on failure, bounce back to setup
     checkers:
       - type: script
         run: "make test"
@@ -51,9 +52,6 @@ phases:
       - type: composite
         run: "pytest tests/ --tb=long"
         prompt: "Review test output:\n{script_output}"
-
-bounce_targets:
-  implement: setup  # on failure, go back to setup
 ```
 
 ### 2. Directory convention

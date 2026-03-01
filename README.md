@@ -10,7 +10,7 @@ A non-agentic Python script orchestrates AI coding agents (Claude or Codex) thro
 
 1. **Implementation** — an agent executes a prompt to build/modify code
 2. **Verification** — separate checkers (scripts, agents, or both) verify the work
-3. **Retry** — if verification fails, the failure context is injected and the agent tries again
+3. **Bounce** — if verification fails, the pipeline bounces back (to a configurable target phase or the most recent implement phase) with failure context injected. A global bounce limit (`max_retries`) prevents infinite loops.
 
 The implementing agent and the checking agent are separate processes, so the implementer can't cheat by weakening tests.
 

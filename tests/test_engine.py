@@ -57,9 +57,10 @@ class TestEngineWithMockedBackend:
         engine = self._make_engine(workflow, backend, tmp_path)
         assert engine.run() == 0
 
-    def test_implementation_crash_retries(self, tmp_path):
+    def test_implementation_crash_bounces(self, tmp_path):
+        """Implement crash bounces back to self, retried on next visit."""
         backend = MockBackend()
-        backend.add_response(exit_code=1, output="crash")  # attempt 1 crashes
+        backend.add_response(exit_code=1, output="crash")  # attempt 1 crashes -> bounce
         backend.add_response(exit_code=0, output="done")  # attempt 2 succeeds
         workflow = Workflow(
             name="test",
@@ -72,13 +73,13 @@ class TestEngineWithMockedBackend:
         engine = self._make_engine(workflow, backend, tmp_path)
         assert engine.run() == 0
 
-    def test_script_checker_failure_retries(self, tmp_path):
-        """Script failure jumps back to most recent implement phase."""
+    def test_script_checker_failure_bounces(self, tmp_path):
+        """Script failure bounces back; global bounce counter exhausts."""
         backend = MockBackend()
         backend.add_response(exit_code=0, output="done")  # implement attempt 1
-        # Script fails -> jumps back to implement
+        # Script fails -> bounce 1 -> back to implement
         backend.add_response(exit_code=0, output="done")  # implement attempt 2
-        # Script fails again -> exhausted
+        # Script fails -> bounce 2 -> exhausted (max_retries=2)
         workflow = Workflow(
             name="test",
             phases=[
@@ -106,11 +107,11 @@ class TestEngineWithMockedBackend:
         engine = self._make_engine(workflow, backend, tmp_path)
         assert engine.run() == 0
 
-    def test_agent_checker_fail_retries(self, tmp_path):
-        """Check failure jumps back to most recent implement phase."""
+    def test_agent_checker_fail_bounces(self, tmp_path):
+        """Check failure bounces back to most recent implement phase."""
         backend = MockBackend()
         backend.add_response(exit_code=0, output="implemented")  # implement attempt 1
-        backend.add_response(exit_code=0, output="VERDICT: FAIL: bad code")  # check fails
+        backend.add_response(exit_code=0, output="VERDICT: FAIL: bad code")  # check fails -> bounce 1
         backend.add_response(exit_code=0, output="fixed")  # implement attempt 2
         backend.add_response(exit_code=0, output="VERDICT: PASS")  # check passes
         workflow = Workflow(
@@ -137,6 +138,52 @@ class TestEngineWithMockedBackend:
                 Phase(id="phase1-check", type="script", run="true"),
                 Phase(id="phase2", type="implement", prompt="Do phase 2."),
                 Phase(id="phase2-check", type="script", run="true"),
+            ],
+            max_retries=3,
+        )
+        engine = self._make_engine(workflow, backend, tmp_path)
+        assert engine.run() == 0
+
+    def test_global_bounce_exhaustion_across_phases(self, tmp_path):
+        """Global bounce counter accumulates across different phases."""
+        backend = MockBackend()
+        # Phase 1 implement: pass
+        backend.add_response(exit_code=0, output="phase1 done")
+        # Phase 1 check: fail -> bounce 1
+        backend.add_response(exit_code=0, output="VERDICT: FAIL: not good")
+        # Phase 1 implement again: pass
+        backend.add_response(exit_code=0, output="phase1 fixed")
+        # Phase 1 check: pass
+        backend.add_response(exit_code=0, output="VERDICT: PASS")
+        # Phase 2 implement: crash -> bounce 2 -> exhausted (max_retries=2)
+        backend.add_response(exit_code=1, output="crash")
+        workflow = Workflow(
+            name="test",
+            phases=[
+                Phase(id="phase1", type="implement", prompt="Do phase 1."),
+                Phase(id="phase1-review", type="check", role="tester"),
+                Phase(id="phase2", type="implement", prompt="Do phase 2."),
+            ],
+            max_retries=2,
+        )
+        engine = self._make_engine(workflow, backend, tmp_path)
+        assert engine.run() == 1  # exhausted
+
+    def test_per_phase_bounce_target(self, tmp_path):
+        """Phase-level bounce_target directs bounce to a specific phase."""
+        backend = MockBackend()
+        backend.add_response(exit_code=0, output="setup done")  # setup implement
+        backend.add_response(exit_code=0, output="feature done")  # feature implement
+        backend.add_response(exit_code=0, output="VERDICT: FAIL: bad")  # feature check -> bounce to setup
+        backend.add_response(exit_code=0, output="setup redone")  # setup implement again
+        backend.add_response(exit_code=0, output="feature redone")  # feature implement again
+        backend.add_response(exit_code=0, output="VERDICT: PASS")  # feature check passes
+        workflow = Workflow(
+            name="test",
+            phases=[
+                Phase(id="setup", type="implement", prompt="Set up."),
+                Phase(id="feature", type="implement", prompt="Build feature."),
+                Phase(id="feature-review", type="check", role="tester", bounce_target="setup"),
             ],
             max_retries=3,
         )
