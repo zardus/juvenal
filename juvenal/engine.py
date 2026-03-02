@@ -25,6 +25,18 @@ class PhaseResult:
     bounce_target: str | None = None
 
 
+@dataclass
+class PlanResult:
+    """Result of planning a workflow from a goal description."""
+
+    success: bool
+    workflow_yaml_path: str | None = None
+    temp_dir: str | None = None
+    error: str | None = None
+    input_tokens: int = 0
+    output_tokens: int = 0
+
+
 class PipelineExhausted(Exception):
     """Raised when the pipeline exhausts the global bounce limit."""
 
@@ -50,10 +62,14 @@ class Engine:
         dry_run: bool = False,
         state_file: str | None = None,
         plain: bool = False,
+        _depth: int = 0,
+        _max_depth: int = 3,
     ):
         self.workflow = workflow
         self.backend = create_backend(workflow.backend)
         self.display = Display(plain=plain)
+        self._depth = _depth
+        self._max_depth = _max_depth
         self.dry_run = dry_run
 
         sf = state_file or ".juvenal-state.json"
@@ -114,6 +130,8 @@ class Engine:
                     result = self._run_script(phase, phases, phase_idx)
                 elif phase.type == "check":
                     result = self._run_check(phase, phases, phase_idx)
+                elif phase.type == "workflow":
+                    result = self._run_workflow(phase)
                 else:
                     raise ValueError(f"Unknown phase type: {phase.type!r}")
 
@@ -240,6 +258,82 @@ class Engine:
             self.state.set_failure_context(target_id, failure_context)
             return PhaseResult(success=False, bounce_target=target_id)
         return PhaseResult(success=False)
+
+    def _run_workflow(self, phase: Phase) -> PhaseResult:
+        """Run a workflow phase: plan a sub-workflow from the prompt, then execute it."""
+        effective_max_depth = phase.max_depth if phase.max_depth is not None else self._max_depth
+
+        # Check recursion depth
+        if self._depth >= effective_max_depth:
+            failure_context = (
+                f"Workflow phase '{phase.id}' exceeded max recursion depth ({self._depth} >= {effective_max_depth})"
+            )
+            self.display.step_fail(phase.id, failure_context)
+            bounce_target = phase.bounce_target or phase.id
+            self.state.set_failure_context(bounce_target, failure_context)
+            return PhaseResult(success=False, bounce_target=bounce_target)
+
+        failure_context = self.state.get_failure_context(phase.id)
+        ps = self.state.phases.get(phase.id)
+        attempt = (ps.attempt if ps and ps.attempt > 0 else 0) + 1
+        self.state.set_attempt(phase.id, attempt)
+        self.display.phase_start(phase.id, attempt)
+
+        # Step 1: Plan the sub-workflow
+        self.display.step_start(f"workflow-plan: {phase.id}")
+        prompt = phase.render_prompt(failure_context=failure_context)
+        plan_result = _plan_workflow_internal(
+            goal=prompt,
+            backend_instance=self.backend,
+            display=self.display,
+            working_dir=self.workflow.working_dir,
+            depth=self._depth + 1,
+            max_depth=effective_max_depth,
+        )
+        self.state.add_tokens(phase.id, plan_result.input_tokens, plan_result.output_tokens)
+
+        if not plan_result.success:
+            failure_context = f"Sub-workflow planning failed: {plan_result.error}"
+            self.display.step_fail(phase.id, failure_context[:500])
+            bounce_target = phase.bounce_target or phase.id
+            self.state.set_failure_context(bounce_target, failure_context)
+            return PhaseResult(success=False, bounce_target=bounce_target)
+
+        # Step 2: Load and execute the sub-workflow
+        self.display.step_start(f"workflow-exec: {phase.id}")
+        from juvenal.workflow import load_workflow
+
+        sub_workflow = load_workflow(plan_result.workflow_yaml_path)
+        sub_workflow.working_dir = self.workflow.working_dir
+
+        sub_engine = Engine(
+            sub_workflow,
+            state_file=str(Path(plan_result.temp_dir) / ".juvenal-state.json"),
+            _depth=self._depth + 1,
+            _max_depth=effective_max_depth,
+        )
+        sub_engine.backend = self.backend
+        sub_engine.display = self.display
+
+        exit_code = sub_engine.run()
+
+        # Aggregate tokens from sub-workflow execution
+        sub_inp, sub_out = sub_engine.state.total_tokens()
+        self.state.add_tokens(phase.id, sub_inp, sub_out)
+
+        if exit_code != 0:
+            failure_context = f"Sub-workflow execution failed for phase '{phase.id}'"
+            self.display.step_fail(phase.id, failure_context)
+            bounce_target = phase.bounce_target or phase.id
+            self.state.set_failure_context(bounce_target, failure_context)
+            # Preserve temp dir for debugging
+            return PhaseResult(success=False, bounce_target=bounce_target)
+
+        # Success — clean up temp dir
+        self.display.step_pass(phase.id)
+        if plan_result.temp_dir:
+            shutil.rmtree(plan_result.temp_dir, ignore_errors=True)
+        return PhaseResult(success=True)
 
     def _resolve_bounce_target(
         self, phase: Phase, phases: list[Phase], phase_idx: int, agent_target: str | None = None
@@ -390,6 +484,8 @@ class Engine:
                 extras.append(f"bounce->{phase.bounce_target}")
             if phase.bounce_targets:
                 extras.append(f"bounce->{phase.bounce_targets}")
+            if phase.max_depth is not None:
+                extras.append(f"max_depth={phase.max_depth}")
             extra_str = f" [{', '.join(extras)}]" if extras else ""
             if phase.type == "implement":
                 prompt_preview = phase.prompt[:80].replace("\n", " ")
@@ -400,6 +496,10 @@ class Engine:
             elif phase.type == "check":
                 target = phase.role or phase.prompt[:60].replace("\n", " ")
                 print(f"{prefix} [{phase.type}] {phase.id}: {target}{extra_str}")
+            elif phase.type == "workflow":
+                prompt_preview = phase.prompt[:80].replace("\n", " ")
+                print(f"{prefix} [{phase.type}] {phase.id}{extra_str}")
+                print(f"     prompt: {prompt_preview}...")
             print()
 
         if self.workflow.parallel_groups:
@@ -409,13 +509,25 @@ class Engine:
         return 0
 
 
-def plan_workflow(goal: str, output_path: str, backend_name: str = "codex", plain: bool = False) -> None:
-    """Generate a workflow YAML from a goal description using a multi-phase pipeline."""
+def _plan_workflow_internal(
+    goal: str,
+    backend_instance: object | None = None,
+    display: Display | None = None,
+    working_dir: str | None = None,
+    backend_name: str = "codex",
+    plain: bool = False,
+    depth: int = 0,
+    max_depth: int = 3,
+) -> PlanResult:
+    """Internal planning logic: generate a sub-workflow YAML from a goal.
+
+    Returns a PlanResult with the path to the generated YAML and temp dir.
+    Callers are responsible for cleanup of temp_dir on success.
+    """
     import yaml as _yaml
 
     from juvenal.workflow import load_workflow
 
-    # Create temp working dir with .plan/ structure
     tmp_dir = tempfile.mkdtemp(prefix="juvenal-plan-")
     tmp_path = Path(tmp_dir)
     plan_dir = tmp_path / ".plan"
@@ -423,42 +535,86 @@ def plan_workflow(goal: str, output_path: str, backend_name: str = "codex", plai
     (plan_dir / "goal.md").write_text(goal)
 
     try:
-        # Load the canned planning workflow
         plan_yaml = Path(__file__).parent / "workflows" / "plan.yaml"
         workflow = load_workflow(plan_yaml)
-        workflow.backend = backend_name
         workflow.working_dir = tmp_dir
 
-        # Run through the engine
-        engine = Engine(workflow, state_file=str(tmp_path / ".juvenal-state.json"), plain=plain)
+        engine = Engine(
+            workflow,
+            state_file=str(tmp_path / ".juvenal-state.json"),
+            plain=plain,
+            _depth=depth,
+            _max_depth=max_depth,
+        )
+        # Share backend/display if provided, otherwise use defaults
+        if backend_instance is not None:
+            engine.backend = backend_instance
+        else:
+            engine.backend = create_backend(backend_name)
+        if display is not None:
+            engine.display = display
+
         exit_code = engine.run()
 
-        if exit_code != 0:
-            print(f"Planning failed. Working directory preserved at: {tmp_dir}")
-            raise SystemExit(1)
+        # Aggregate tokens from planning engine
+        plan_inp, plan_out = engine.state.total_tokens()
 
-        # Validate and copy the produced workflow.yaml
+        if exit_code != 0:
+            return PlanResult(
+                success=False,
+                temp_dir=tmp_dir,
+                error="Planning engine returned non-zero",
+                input_tokens=plan_inp,
+                output_tokens=plan_out,
+            )
+
         produced = tmp_path / "workflow.yaml"
         if not produced.exists():
-            print(f"Planning failed: no workflow.yaml produced. Working directory: {tmp_dir}")
-            raise SystemExit(1)
+            return PlanResult(
+                success=False,
+                temp_dir=tmp_dir,
+                error="No workflow.yaml produced",
+                input_tokens=plan_inp,
+                output_tokens=plan_out,
+            )
 
         yaml_content = produced.read_text()
         parsed = _yaml.safe_load(yaml_content)
         if not isinstance(parsed, dict) or "phases" not in parsed:
-            print(f"Planning produced invalid YAML. Working directory: {tmp_dir}")
-            raise SystemExit(1)
+            return PlanResult(
+                success=False,
+                temp_dir=tmp_dir,
+                error="Produced invalid YAML",
+                input_tokens=plan_inp,
+                output_tokens=plan_out,
+            )
 
-        Path(output_path).write_text(yaml_content)
-        print(f"Workflow written to {output_path}")
+        return PlanResult(
+            success=True,
+            workflow_yaml_path=str(produced),
+            temp_dir=tmp_dir,
+            input_tokens=plan_inp,
+            output_tokens=plan_out,
+        )
+    except Exception as e:
+        return PlanResult(success=False, temp_dir=tmp_dir, error=str(e))
 
-        # Clean up on success
-        shutil.rmtree(tmp_dir)
-    except SystemExit:
-        raise
-    except Exception:
-        print(f"Planning failed. Working directory preserved at: {tmp_dir}")
-        raise
+
+def plan_workflow(goal: str, output_path: str, backend_name: str = "codex", plain: bool = False) -> None:
+    """Generate a workflow YAML from a goal description using a multi-phase pipeline."""
+    result = _plan_workflow_internal(goal=goal, backend_name=backend_name, plain=plain)
+
+    if not result.success:
+        print(f"Planning failed: {result.error}. Working directory preserved at: {result.temp_dir}")
+        raise SystemExit(1)
+
+    # Copy the produced workflow to the output path
+    Path(output_path).write_text(Path(result.workflow_yaml_path).read_text())
+    print(f"Workflow written to {output_path}")
+
+    # Clean up on success
+    if result.temp_dir:
+        shutil.rmtree(result.temp_dir)
 
 
 def _extract_yaml(text: str) -> str:

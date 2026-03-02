@@ -17,17 +17,19 @@ class Phase:
     - "implement": agentic implementation (default)
     - "check": agentic checker (parses VERDICT)
     - "script": non-agentic shell command
+    - "workflow": dynamic sub-workflow (plan + execute)
     """
 
     id: str
-    type: str = "implement"  # "implement", "check", "script"
-    prompt: str = ""  # for implement and check
+    type: str = "implement"  # "implement", "check", "script", "workflow"
+    prompt: str = ""  # for implement, check, and workflow
     run: str | None = None  # shell command for script
     role: str | None = None  # built-in role name for check
     bounce_target: str | None = None  # fixed phase to bounce back to on failure
     bounce_targets: list[str] = field(default_factory=list)  # agent-guided: checker picks from this list
     timeout: int | None = None  # timeout in seconds (None = no limit)
     env: dict[str, str] = field(default_factory=dict)  # environment variables for the phase
+    max_depth: int | None = None  # recursion depth limit for workflow phases
 
     def render_prompt(self, failure_context: str = "") -> str:
         """Render the implementation prompt, injecting failure context on retry."""
@@ -152,6 +154,7 @@ def _load_yaml_with_includes(path: Path, seen: set[str]) -> Workflow:
                 bounce_targets=bounce_targets,
                 timeout=phase_data.get("timeout"),
                 env=phase_data.get("env", {}),
+                max_depth=phase_data.get("max_depth"),
             )
         )
 
@@ -260,7 +263,7 @@ def _load_role_prompt(role: str) -> str:
     raise FileNotFoundError(f"Built-in role prompt not found: {role_file}")
 
 
-VALID_PHASE_TYPES = {"implement", "check", "script"}
+VALID_PHASE_TYPES = {"implement", "check", "script", "workflow"}
 VALID_ROLES = {"tester", "architect", "pm", "senior-tester", "senior-engineer"}
 
 
@@ -306,6 +309,15 @@ def validate_workflow(workflow: Workflow) -> list[str]:
             errors.append(f"Phase {phase.id!r}: check phase has no prompt or role")
         if phase.type == "script" and not phase.run:
             errors.append(f"Phase {phase.id!r}: script phase has no run command")
+        if phase.type == "workflow":
+            if not phase.prompt:
+                errors.append(f"Phase {phase.id!r}: workflow phase has no prompt")
+            if phase.run:
+                errors.append(f"Phase {phase.id!r}: workflow phase must not have 'run'")
+            if phase.role:
+                errors.append(f"Phase {phase.id!r}: workflow phase must not have 'role'")
+        if phase.max_depth is not None and phase.max_depth < 1:
+            errors.append(f"Phase {phase.id!r}: max_depth must be >= 1, got {phase.max_depth}")
 
         # Role validation
         if phase.role and phase.role not in VALID_ROLES:

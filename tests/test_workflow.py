@@ -197,6 +197,44 @@ phases:
         assert wf.phases[0].bounce_targets == []
 
 
+class TestWorkflowPhaseLoading:
+    def test_workflow_type_with_max_depth(self, tmp_path):
+        """type: workflow with max_depth loads correctly from YAML."""
+        yaml_content = """\
+name: test
+phases:
+  - id: dynamic-feature
+    type: workflow
+    prompt: "Build a REST API with user authentication"
+    max_depth: 2
+    bounce_target: setup
+  - id: setup
+    prompt: "Set up."
+"""
+        yaml_path = tmp_path / "workflow.yaml"
+        yaml_path.write_text(yaml_content)
+        wf = load_workflow(yaml_path)
+        assert wf.phases[0].type == "workflow"
+        assert wf.phases[0].prompt == "Build a REST API with user authentication"
+        assert wf.phases[0].max_depth == 2
+        assert wf.phases[0].bounce_target == "setup"
+
+    def test_workflow_type_default_max_depth(self, tmp_path):
+        """type: workflow without max_depth defaults to None."""
+        yaml_content = """\
+name: test
+phases:
+  - id: dynamic
+    type: workflow
+    prompt: "Build something."
+"""
+        yaml_path = tmp_path / "workflow.yaml"
+        yaml_path.write_text(yaml_content)
+        wf = load_workflow(yaml_path)
+        assert wf.phases[0].type == "workflow"
+        assert wf.phases[0].max_depth is None
+
+
 class TestErrors:
     def test_nonexistent_path(self):
         with pytest.raises(FileNotFoundError):

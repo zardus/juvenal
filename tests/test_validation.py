@@ -209,6 +209,87 @@ phases:
         assert "hello123" in result.output
 
 
+class TestWorkflowPhaseValidation:
+    def test_workflow_phase_with_prompt_is_valid(self):
+        wf = Workflow(
+            name="test",
+            phases=[
+                Phase(id="dynamic", type="workflow", prompt="Build a REST API."),
+            ],
+        )
+        assert validate_workflow(wf) == []
+
+    def test_workflow_phase_missing_prompt(self):
+        wf = Workflow(
+            name="test",
+            phases=[
+                Phase(id="dynamic", type="workflow"),
+            ],
+        )
+        errors = validate_workflow(wf)
+        assert any("workflow phase has no prompt" in e for e in errors)
+
+    def test_workflow_phase_with_run_is_invalid(self):
+        wf = Workflow(
+            name="test",
+            phases=[
+                Phase(id="dynamic", type="workflow", prompt="Do it.", run="echo hi"),
+            ],
+        )
+        errors = validate_workflow(wf)
+        assert any("must not have 'run'" in e for e in errors)
+
+    def test_workflow_phase_with_role_is_invalid(self):
+        wf = Workflow(
+            name="test",
+            phases=[
+                Phase(id="dynamic", type="workflow", prompt="Do it.", role="tester"),
+            ],
+        )
+        errors = validate_workflow(wf)
+        assert any("must not have 'role'" in e for e in errors)
+
+    def test_max_depth_less_than_1_is_invalid(self):
+        wf = Workflow(
+            name="test",
+            phases=[
+                Phase(id="dynamic", type="workflow", prompt="Do it.", max_depth=0),
+            ],
+        )
+        errors = validate_workflow(wf)
+        assert any("max_depth must be >= 1" in e for e in errors)
+
+    def test_max_depth_negative_is_invalid(self):
+        wf = Workflow(
+            name="test",
+            phases=[
+                Phase(id="dynamic", type="workflow", prompt="Do it.", max_depth=-1),
+            ],
+        )
+        errors = validate_workflow(wf)
+        assert any("max_depth must be >= 1" in e for e in errors)
+
+    def test_max_depth_valid(self):
+        wf = Workflow(
+            name="test",
+            phases=[
+                Phase(id="dynamic", type="workflow", prompt="Do it.", max_depth=2),
+            ],
+        )
+        assert validate_workflow(wf) == []
+
+    def test_max_depth_on_non_workflow_phase_invalid(self):
+        """max_depth < 1 is invalid regardless of phase type."""
+        wf = Workflow(
+            name="test",
+            phases=[
+                Phase(id="setup", type="implement", prompt="Do it.", max_depth=0),
+            ],
+        )
+        errors = validate_workflow(wf)
+        assert any("max_depth must be >= 1" in e for e in errors)
+
+
 class TestValidateCLI:
     def test_validate_command_parsing(self):
         parser = build_parser()

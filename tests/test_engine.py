@@ -480,6 +480,192 @@ class TestEngineWithMockedBackend:
         assert workflow.phases[0].timeout == 60
 
 
+class TestWorkflowPhase:
+    def _make_engine(self, workflow, backend, tmp_path, **kwargs):
+        """Create an engine with injected mock backend."""
+        engine = Engine(workflow, state_file=str(tmp_path / "state.json"), **kwargs)
+        engine.backend = backend
+        return engine
+
+    def test_workflow_phase_success(self, tmp_path):
+        """Workflow phase succeeds when planning and execution both succeed."""
+        from unittest.mock import patch
+
+        from juvenal.engine import PlanResult
+
+        backend = MockBackend()
+        workflow = Workflow(
+            name="test",
+            phases=[Phase(id="dynamic", type="workflow", prompt="Build a thing.")],
+            max_bounces=3,
+        )
+        engine = self._make_engine(workflow, backend, tmp_path)
+
+        # Create a sub-workflow YAML for the sub-engine to load
+        sub_yaml = tmp_path / "sub" / "workflow.yaml"
+        sub_yaml.parent.mkdir(parents=True)
+        sub_yaml.write_text("name: sub\nphases:\n  - id: step1\n    prompt: do it\n")
+
+        plan_result = PlanResult(
+            success=True,
+            workflow_yaml_path=str(sub_yaml),
+            temp_dir=str(sub_yaml.parent),
+            input_tokens=100,
+            output_tokens=200,
+        )
+
+        # Mock _plan_workflow_internal and the sub-engine run
+        with patch("juvenal.engine._plan_workflow_internal", return_value=plan_result):
+            # The sub-engine will use MockBackend's default response (VERDICT: PASS)
+            result = engine.run()
+
+        assert result == 0
+
+    def test_workflow_phase_planning_failure_bounces(self, tmp_path):
+        """When sub-workflow planning fails, the phase bounces."""
+        from unittest.mock import patch
+
+        from juvenal.engine import PlanResult
+
+        backend = MockBackend()
+        # First attempt: planning fails -> bounce back to self
+        # Second attempt: also planning fails -> bounce 2 -> exhausted
+        plan_fail = PlanResult(
+            success=False,
+            temp_dir=str(tmp_path / "plan-tmp"),
+            error="Planning engine returned non-zero",
+            input_tokens=50,
+            output_tokens=60,
+        )
+        workflow = Workflow(
+            name="test",
+            phases=[Phase(id="dynamic", type="workflow", prompt="Build a thing.")],
+            max_bounces=2,
+        )
+        engine = self._make_engine(workflow, backend, tmp_path)
+
+        with patch("juvenal.engine._plan_workflow_internal", return_value=plan_fail):
+            result = engine.run()
+
+        assert result == 1  # exhausted bounces
+
+    def test_workflow_phase_execution_failure_bounces(self, tmp_path):
+        """When sub-workflow execution fails, the phase bounces."""
+        from unittest.mock import patch
+
+        from juvenal.engine import PlanResult
+
+        backend = MockBackend()
+        # Sub-engine will run implement phase that crashes
+        backend.add_response(exit_code=1, output="crash")  # sub-engine implement fails
+
+        sub_yaml = tmp_path / "sub" / "workflow.yaml"
+        sub_yaml.parent.mkdir(parents=True)
+        # max_bounces=1 so the crash exhausts the sub-workflow
+        sub_yaml.write_text("name: sub\nmax_bounces: 1\nphases:\n  - id: step1\n    prompt: do it\n")
+
+        plan_result = PlanResult(
+            success=True,
+            workflow_yaml_path=str(sub_yaml),
+            temp_dir=str(sub_yaml.parent),
+            input_tokens=10,
+            output_tokens=20,
+        )
+
+        workflow = Workflow(
+            name="test",
+            phases=[Phase(id="dynamic", type="workflow", prompt="Build a thing.")],
+            max_bounces=1,
+        )
+        engine = self._make_engine(workflow, backend, tmp_path)
+
+        with patch("juvenal.engine._plan_workflow_internal", return_value=plan_result):
+            result = engine.run()
+
+        assert result == 1  # sub-workflow failed, bounce exhausted
+
+    def test_workflow_phase_recursion_depth_exceeded(self, tmp_path):
+        """Workflow phase fails immediately when depth >= max_depth."""
+        backend = MockBackend()
+        workflow = Workflow(
+            name="test",
+            phases=[Phase(id="dynamic", type="workflow", prompt="Build a thing.")],
+            max_bounces=3,
+        )
+        # Set depth already at max
+        engine = self._make_engine(workflow, backend, tmp_path, _depth=3, _max_depth=3)
+        result = engine.run()
+        assert result == 1  # immediate failure due to depth
+
+    def test_workflow_phase_per_phase_max_depth(self, tmp_path):
+        """Per-phase max_depth overrides engine-level max_depth."""
+        backend = MockBackend()
+        workflow = Workflow(
+            name="test",
+            phases=[Phase(id="dynamic", type="workflow", prompt="Build.", max_depth=1)],
+            max_bounces=3,
+        )
+        # Engine depth=1, engine max=3, but phase max_depth=1 -> 1 >= 1 -> fail
+        engine = self._make_engine(workflow, backend, tmp_path, _depth=1, _max_depth=3)
+        result = engine.run()
+        assert result == 1
+
+    def test_workflow_phase_token_aggregation(self, tmp_path):
+        """Tokens from planning and execution are aggregated into parent phase."""
+        from unittest.mock import patch
+
+        from juvenal.engine import PlanResult
+
+        backend = MockBackend()
+        # Sub-engine will use one implement call
+        backend.add_response(exit_code=0, output="done", input_tokens=300, output_tokens=400)
+
+        sub_yaml = tmp_path / "sub" / "workflow.yaml"
+        sub_yaml.parent.mkdir(parents=True)
+        sub_yaml.write_text("name: sub\nphases:\n  - id: step1\n    prompt: do it\n")
+
+        plan_result = PlanResult(
+            success=True,
+            workflow_yaml_path=str(sub_yaml),
+            temp_dir=str(sub_yaml.parent),
+            input_tokens=100,
+            output_tokens=200,
+        )
+
+        workflow = Workflow(
+            name="test",
+            phases=[Phase(id="dynamic", type="workflow", prompt="Build.")],
+            max_bounces=3,
+        )
+        engine = self._make_engine(workflow, backend, tmp_path)
+
+        with patch("juvenal.engine._plan_workflow_internal", return_value=plan_result):
+            result = engine.run()
+
+        assert result == 0
+        # Check aggregated tokens: planning (100+200) + execution (300+400)
+        ps = engine.state.phases["dynamic"]
+        assert ps.input_tokens == 100 + 300
+        assert ps.output_tokens == 200 + 400
+
+    def test_workflow_phase_dry_run(self, tmp_path, capsys):
+        """Dry run displays workflow phase type correctly."""
+        workflow = Workflow(
+            name="test",
+            phases=[
+                Phase(id="setup", type="implement", prompt="Set up."),
+                Phase(id="dynamic", type="workflow", prompt="Build a REST API.", max_depth=2),
+            ],
+        )
+        engine = self._make_engine(workflow, MockBackend(), tmp_path, dry_run=True)
+        assert engine.run() == 0
+        captured = capsys.readouterr()
+        assert "workflow" in captured.out
+        assert "dynamic" in captured.out
+        assert "max_depth=2" in captured.out
+        assert "Build a REST API" in captured.out
+
+
 class TestExtractYaml:
     def test_yaml_code_fence(self):
         text = "Here's the workflow:\n```yaml\nname: test\nphases: []\n```\nDone."
@@ -519,7 +705,7 @@ class TestPlanWorkflow:
             self_engine.backend = MagicMock()
             self_engine.display = MagicMock()
             self_engine.dry_run = False
-            self_engine.state = MagicMock()
+            self_engine.state = MagicMock(**{"total_tokens.return_value": (0, 0)})
             self_engine._start_idx = 0
             # Verify .plan/goal.md was created
             assert (wd / ".plan" / "goal.md").exists()
@@ -551,7 +737,7 @@ class TestPlanWorkflow:
             self_engine.backend = MagicMock()
             self_engine.display = MagicMock()
             self_engine.dry_run = False
-            self_engine.state = MagicMock()
+            self_engine.state = MagicMock(**{"total_tokens.return_value": (0, 0)})
             self_engine._start_idx = 0
 
         with (
@@ -578,7 +764,7 @@ class TestPlanWorkflow:
             self_engine.backend = MagicMock()
             self_engine.display = MagicMock()
             self_engine.dry_run = False
-            self_engine.state = MagicMock()
+            self_engine.state = MagicMock(**{"total_tokens.return_value": (0, 0)})
             self_engine._start_idx = 0
 
         with (
