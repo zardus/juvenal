@@ -1,6 +1,6 @@
 # Juvenal
 
-> *Quis custodiet ipsos custodes?* — Who guards the agents?
+> *Quis custodiet ipsos agentes?* — Who guards the agents?
 
 Juvenal is a framework for orchestrating AI coding agents through verified implementation phases. It prevents agents from cheating on success criteria, helps agents implement complex projects in phases, etc.
 
