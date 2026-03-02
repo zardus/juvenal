@@ -1,10 +1,10 @@
-<p align="center">
-  <img src="juvenal.png" alt="Juvenal" width="200">
-</p>
-
 # Juvenal
 
 > *Quis custodiet ipsos agentes?* — Who guards the agents?
+
+<p align="center">
+  <img src="juvenal.png" alt="Juvenal" width="200">
+</p>
 
 Juvenal is a framework for orchestrating AI coding agents through verified implementation phases. It prevents agents from cheating on success criteria, helps agents implement complex projects in phases, etc.
 
