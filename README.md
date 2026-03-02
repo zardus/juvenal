@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="juvenal.png" alt="Juvenal" width="200">
+</p>
+
 # Juvenal
 
 > *Quis custodiet ipsos agentes?* — Who guards the agents?
