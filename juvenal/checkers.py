@@ -48,6 +48,9 @@ _FAIL_PLAIN = re.compile(r"^VERDICT:\s*FAIL:\s*(.*)")
 _FAIL_BARE = re.compile(r"^VERDICT:\s*FAIL\s*$")
 
 
+NO_VERDICT_REASON = "checker did not emit a VERDICT line"
+
+
 def parse_verdict(output: str) -> tuple[bool, str, str | None]:
     """Parse VERDICT from agent output, scanning backwards.
 
@@ -74,4 +77,4 @@ def parse_verdict(output: str) -> tuple[bool, str, str | None]:
         if _FAIL_BARE.match(line):
             return False, "unspecified", None
 
-    return False, "checker did not emit a VERDICT line", None
+    return False, NO_VERDICT_REASON, None

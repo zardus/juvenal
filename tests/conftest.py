@@ -90,6 +90,7 @@ class MockBackend(Backend):
         self._responses = list(responses or [])
         self._call_count = 0
         self.calls: list[str] = []
+        self.resume_calls: list[tuple[str, str]] = []
 
     def name(self) -> str:
         return "mock"
@@ -101,6 +102,7 @@ class MockBackend(Backend):
         transcript: str = "",
         input_tokens: int = 0,
         output_tokens: int = 0,
+        session_id: str | None = None,
     ):
         self._responses.append(
             AgentResult(
@@ -110,11 +112,21 @@ class MockBackend(Backend):
                 duration=0.1,
                 input_tokens=input_tokens,
                 output_tokens=output_tokens,
+                session_id=session_id,
             )
         )
 
     def run_agent(self, prompt, working_dir, display_callback=None, timeout=None, env=None):
         self.calls.append(prompt)
+        if self._call_count < len(self._responses):
+            result = self._responses[self._call_count]
+        else:
+            result = AgentResult(exit_code=0, output="VERDICT: PASS", transcript="", duration=0.1)
+        self._call_count += 1
+        return result
+
+    def resume_agent(self, session_id, prompt, working_dir, display_callback=None, timeout=None, env=None):
+        self.resume_calls.append((session_id, prompt))
         if self._call_count < len(self._responses):
             result = self._responses[self._call_count]
         else:

@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from juvenal.backends import create_backend
-from juvenal.checkers import parse_verdict, run_script
+from juvenal.checkers import NO_VERDICT_REASON, parse_verdict, run_script
 from juvenal.display import Display
 from juvenal.notifications import build_notification_payload, send_webhook
 from juvenal.state import PipelineState
@@ -219,6 +219,14 @@ class Engine:
             return PhaseResult(success=False, bounce_target=target_id)
         return PhaseResult(success=False)
 
+    _MAX_NO_VERDICT_RESUMES = 2
+    _RESUME_PROMPT = (
+        "Your previous response did not include a VERDICT line. Please review the work\n"
+        "you just examined and emit exactly one of:\n"
+        "- VERDICT: PASS\n"
+        "- VERDICT: FAIL: <reason>"
+    )
+
     def _run_check(self, phase: Phase, phases: list[Phase], phase_idx: int) -> PhaseResult:
         """Run a check phase. PASS = advance. FAIL = bounce back."""
         self.display.phase_start(phase.id, 1)
@@ -245,6 +253,28 @@ class Engine:
             return PhaseResult(success=False)
 
         passed, reason, agent_target = parse_verdict(result.output)
+
+        # If no verdict was emitted, try resuming the session to get one
+        if not passed and reason == NO_VERDICT_REASON and result.session_id:
+            for _ in range(self._MAX_NO_VERDICT_RESUMES):
+                resume_result = self.backend.resume_agent(
+                    result.session_id,
+                    self._RESUME_PROMPT,
+                    working_dir=self.workflow.working_dir,
+                    display_callback=self.display.live_update,
+                    timeout=phase.timeout,
+                    env=phase.env or None,
+                )
+                self.state.log_step(phase.id, 1, "check-resume", resume_result.output)
+                self.state.add_tokens(phase.id, resume_result.input_tokens, resume_result.output_tokens)
+
+                if resume_result.exit_code != 0:
+                    break
+
+                passed, reason, agent_target = parse_verdict(resume_result.output)
+                if reason != NO_VERDICT_REASON:
+                    break
+
         if passed:
             self.display.step_pass(phase.id)
             return PhaseResult(success=True)

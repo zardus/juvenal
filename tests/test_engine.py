@@ -666,6 +666,116 @@ class TestWorkflowPhase:
         assert "Build a REST API" in captured.out
 
 
+class TestNoVerdictResume:
+    def _make_engine(self, workflow, backend, tmp_path, **kwargs):
+        """Create an engine with injected mock backend."""
+        engine = Engine(workflow, state_file=str(tmp_path / "state.json"), **kwargs)
+        engine.backend = backend
+        return engine
+
+    def test_no_verdict_resume_succeeds(self, tmp_path):
+        """No verdict on check -> resume gets PASS, no bounce consumed."""
+        backend = MockBackend()
+        backend.add_response(exit_code=0, output="implemented")  # implement
+        backend.add_response(exit_code=0, output="looks good but forgot verdict", session_id="sess-1")  # check
+        backend.add_response(exit_code=0, output="VERDICT: PASS")  # resume -> PASS
+        workflow = Workflow(
+            name="test",
+            phases=[
+                Phase(id="setup", type="implement", prompt="Do it."),
+                Phase(id="setup-review", type="check", role="tester"),
+            ],
+            max_bounces=3,
+        )
+        engine = self._make_engine(workflow, backend, tmp_path)
+        assert engine.run() == 0
+        # Verify resume was called
+        assert len(backend.resume_calls) == 1
+        assert backend.resume_calls[0][0] == "sess-1"
+
+    def test_no_verdict_resume_gets_fail(self, tmp_path):
+        """No verdict on check -> resume gets explicit FAIL -> bounces normally."""
+        backend = MockBackend()
+        backend.add_response(exit_code=0, output="implemented")  # implement
+        backend.add_response(exit_code=0, output="no verdict here", session_id="sess-2")  # check
+        backend.add_response(exit_code=0, output="VERDICT: FAIL: bad code")  # resume -> FAIL
+        backend.add_response(exit_code=0, output="fixed")  # implement again
+        backend.add_response(exit_code=0, output="VERDICT: PASS")  # check passes
+        workflow = Workflow(
+            name="test",
+            phases=[
+                Phase(id="setup", type="implement", prompt="Do it."),
+                Phase(id="setup-review", type="check", role="tester"),
+            ],
+            max_bounces=3,
+        )
+        engine = self._make_engine(workflow, backend, tmp_path)
+        assert engine.run() == 0
+        assert len(backend.resume_calls) == 1
+
+    def test_no_verdict_resume_exhausted(self, tmp_path):
+        """2 resumes still no verdict -> falls through to bounce."""
+        backend = MockBackend()
+        backend.add_response(exit_code=0, output="implemented")  # implement
+        backend.add_response(exit_code=0, output="no verdict", session_id="sess-3")  # check
+        backend.add_response(exit_code=0, output="still no verdict")  # resume 1
+        backend.add_response(exit_code=0, output="still nothing")  # resume 2
+        # After exhausting resumes, it bounces. Re-implement + re-check:
+        backend.add_response(exit_code=0, output="fixed")  # implement again
+        backend.add_response(exit_code=0, output="VERDICT: PASS")  # check passes
+        workflow = Workflow(
+            name="test",
+            phases=[
+                Phase(id="setup", type="implement", prompt="Do it."),
+                Phase(id="setup-review", type="check", role="tester"),
+            ],
+            max_bounces=3,
+        )
+        engine = self._make_engine(workflow, backend, tmp_path)
+        assert engine.run() == 0
+        assert len(backend.resume_calls) == 2
+
+    def test_explicit_fail_does_not_resume(self, tmp_path):
+        """VERDICT: FAIL skips resume entirely."""
+        backend = MockBackend()
+        backend.add_response(exit_code=0, output="implemented")  # implement
+        backend.add_response(exit_code=0, output="VERDICT: FAIL: bad", session_id="sess-4")  # check -> explicit FAIL
+        backend.add_response(exit_code=0, output="fixed")  # implement again
+        backend.add_response(exit_code=0, output="VERDICT: PASS")  # check passes
+        workflow = Workflow(
+            name="test",
+            phases=[
+                Phase(id="setup", type="implement", prompt="Do it."),
+                Phase(id="setup-review", type="check", role="tester"),
+            ],
+            max_bounces=3,
+        )
+        engine = self._make_engine(workflow, backend, tmp_path)
+        assert engine.run() == 0
+        # No resume calls — the explicit FAIL should skip resume
+        assert len(backend.resume_calls) == 0
+
+    def test_no_session_id_skips_resume(self, tmp_path):
+        """Backend returns no session_id -> falls through to bounce without resume."""
+        backend = MockBackend()
+        backend.add_response(exit_code=0, output="implemented")  # implement
+        backend.add_response(exit_code=0, output="no verdict, no session")  # check (no session_id)
+        # Should bounce without attempting resume
+        backend.add_response(exit_code=0, output="fixed")  # implement again
+        backend.add_response(exit_code=0, output="VERDICT: PASS")  # check passes
+        workflow = Workflow(
+            name="test",
+            phases=[
+                Phase(id="setup", type="implement", prompt="Do it."),
+                Phase(id="setup-review", type="check", role="tester"),
+            ],
+            max_bounces=3,
+        )
+        engine = self._make_engine(workflow, backend, tmp_path)
+        assert engine.run() == 0
+        assert len(backend.resume_calls) == 0
+
+
 class TestExtractYaml:
     def test_yaml_code_fence(self):
         text = "Here's the workflow:\n```yaml\nname: test\nphases: []\n```\nDone."

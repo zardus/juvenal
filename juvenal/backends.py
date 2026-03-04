@@ -6,6 +6,7 @@ import json
 import os
 import subprocess
 import time
+import uuid
 from abc import ABC, abstractmethod
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -21,6 +22,7 @@ class AgentResult:
     duration: float  # seconds
     input_tokens: int = 0
     output_tokens: int = 0
+    session_id: str | None = None
 
 
 class Backend(ABC):
@@ -41,6 +43,18 @@ class Backend(ABC):
         """Run an agent with the given prompt. Returns AgentResult."""
         ...
 
+    def resume_agent(
+        self,
+        session_id: str,
+        prompt: str,
+        working_dir: str,
+        display_callback: Callable[[str], None] | None = None,
+        timeout: int | None = None,
+        env: dict[str, str] | None = None,
+    ) -> AgentResult:
+        """Resume an existing agent session. Default falls back to run_agent."""
+        return self.run_agent(prompt, working_dir, display_callback, timeout, env)
+
 
 class ClaudeBackend(Backend):
     """Claude CLI backend using stream-json output."""
@@ -56,6 +70,7 @@ class ClaudeBackend(Backend):
         timeout: int | None = None,
         env: dict[str, str] | None = None,
     ) -> AgentResult:
+        session_id = uuid.uuid4().hex
         cmd = [
             "claude",
             "-p",
@@ -63,9 +78,46 @@ class ClaudeBackend(Backend):
             "stream-json",
             "--dangerously-skip-permissions",
             "--verbose",
+            "--session-id",
+            session_id,
             prompt,
         ]
+        result = self._run_claude_process(cmd, working_dir, display_callback, timeout, env)
+        result.session_id = session_id
+        return result
 
+    def resume_agent(
+        self,
+        session_id: str,
+        prompt: str,
+        working_dir: str,
+        display_callback: Callable[[str], None] | None = None,
+        timeout: int | None = None,
+        env: dict[str, str] | None = None,
+    ) -> AgentResult:
+        cmd = [
+            "claude",
+            "-p",
+            "--output-format",
+            "stream-json",
+            "--dangerously-skip-permissions",
+            "--verbose",
+            "--resume",
+            session_id,
+            prompt,
+        ]
+        result = self._run_claude_process(cmd, working_dir, display_callback, timeout, env)
+        result.session_id = session_id
+        return result
+
+    def _run_claude_process(
+        self,
+        cmd: list[str],
+        working_dir: str,
+        display_callback: Callable[[str], None] | None = None,
+        timeout: int | None = None,
+        env: dict[str, str] | None = None,
+    ) -> AgentResult:
         # Strip CLAUDECODE env var so juvenal can be invoked from inside Claude Code
         proc_env = {k: v for k, v in os.environ.items() if k != "CLAUDECODE"}
         if env:
@@ -166,12 +218,42 @@ class CodexBackend(Backend):
             "--json",
             "--dangerously-bypass-approvals-and-sandbox",
             "--skip-git-repo-check",
-            "--ephemeral",
-            "-C",
-            working_dir,
             prompt,
         ]
+        return self._run_codex_process(cmd, working_dir, display_callback, timeout, env)
 
+    def resume_agent(
+        self,
+        session_id: str,
+        prompt: str,
+        working_dir: str,
+        display_callback: Callable[[str], None] | None = None,
+        timeout: int | None = None,
+        env: dict[str, str] | None = None,
+    ) -> AgentResult:
+        cmd = [
+            "npx",
+            "@openai/codex@latest",
+            "exec",
+            "resume",
+            session_id,
+            "--json",
+            "--dangerously-bypass-approvals-and-sandbox",
+            "--skip-git-repo-check",
+            prompt,
+        ]
+        result = self._run_codex_process(cmd, working_dir, display_callback, timeout, env)
+        result.session_id = session_id
+        return result
+
+    def _run_codex_process(
+        self,
+        cmd: list[str],
+        working_dir: str,
+        display_callback: Callable[[str], None] | None = None,
+        timeout: int | None = None,
+        env: dict[str, str] | None = None,
+    ) -> AgentResult:
         proc_env = dict(os.environ)
         if env:
             proc_env.update(env)
@@ -179,6 +261,7 @@ class CodexBackend(Backend):
         start = time.time()
         proc = subprocess.Popen(
             cmd,
+            cwd=working_dir,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             text=True,
@@ -190,6 +273,7 @@ class CodexBackend(Backend):
         assistant_messages: list[str] = []
         total_input_tokens = 0
         total_output_tokens = 0
+        thread_id: str | None = None
 
         try:
             for raw_line in proc.stdout:
@@ -209,6 +293,9 @@ class CodexBackend(Backend):
                     continue
                 event = _parse_json_event(line)
                 if event:
+                    # Capture thread_id from thread.started event
+                    if event.get("type") == "thread.started" and "thread_id" in event:
+                        thread_id = event["thread_id"]
                     display_text, assistant_text = _process_codex_event(event)
                     inp, out = _extract_codex_tokens(event)
                     total_input_tokens += inp
@@ -242,6 +329,7 @@ class CodexBackend(Backend):
             duration=duration,
             input_tokens=total_input_tokens,
             output_tokens=total_output_tokens,
+            session_id=thread_id,
         )
 
 
