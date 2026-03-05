@@ -112,6 +112,41 @@ class TestArgumentParsing:
         assert args.command == "validate"
         assert args.workflow == "workflow.yaml"
 
+    def test_run_checker_single(self):
+        parser = build_parser()
+        args = parser.parse_args(["run", "workflow.yaml", "--checker", "tester"])
+        assert args.checker == ["tester"]
+
+    def test_run_checker_multiple(self):
+        parser = build_parser()
+        args = parser.parse_args(["run", "workflow.yaml", "--checker", "tester", "--checker", "run:pytest -x"])
+        assert args.checker == ["tester", "run:pytest -x"]
+
+    def test_run_checker_default_empty(self):
+        parser = build_parser()
+        args = parser.parse_args(["run", "workflow.yaml"])
+        assert args.checker == []
+
+    def test_plan_checker(self):
+        parser = build_parser()
+        args = parser.parse_args(["plan", "build an API", "--checker", "senior-tester"])
+        assert args.checker == ["senior-tester"]
+
+    def test_plan_checker_default_empty(self):
+        parser = build_parser()
+        args = parser.parse_args(["plan", "build an API"])
+        assert args.checker == []
+
+    def test_do_checker(self):
+        parser = build_parser()
+        args = parser.parse_args(["do", "build a thing", "--checker", "tester", "--checker", "run:make lint"])
+        assert args.checker == ["tester", "run:make lint"]
+
+    def test_do_checker_default_empty(self):
+        parser = build_parser()
+        args = parser.parse_args(["do", "build a thing"])
+        assert args.checker == []
+
     def test_no_command(self):
         parser = build_parser()
         args = parser.parse_args([])

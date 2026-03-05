@@ -6,7 +6,7 @@ import pytest
 
 from juvenal.checkers import parse_verdict
 from juvenal.engine import Engine, _extract_yaml
-from juvenal.workflow import Phase, Workflow
+from juvenal.workflow import Phase, Workflow, inject_checkers
 from tests.conftest import MockBackend
 
 
@@ -707,6 +707,36 @@ class TestCheckersShorthandEngine:
         )
         engine = self._make_engine(workflow, backend, tmp_path)
         assert engine.run() == 1  # exhausted
+
+    def test_injected_checker_pass(self, tmp_path):
+        """Engine run with inject_checkers: checker passes."""
+        backend = MockBackend()
+        backend.add_response(exit_code=0, output="built it")  # implement
+        backend.add_response(exit_code=0, output="VERDICT: PASS")  # injected check
+        workflow = Workflow(
+            name="test",
+            phases=[Phase(id="build", type="implement", prompt="Build it.")],
+            max_bounces=3,
+        )
+        workflow = inject_checkers(workflow, ["tester"])
+        engine = self._make_engine(workflow, backend, tmp_path)
+        assert engine.run() == 0
+
+    def test_injected_checker_bounce(self, tmp_path):
+        """Engine run with inject_checkers: checker fails, bounces, then passes."""
+        backend = MockBackend()
+        backend.add_response(exit_code=0, output="built it")  # implement
+        backend.add_response(exit_code=0, output="VERDICT: FAIL: bad")  # injected check fails
+        backend.add_response(exit_code=0, output="fixed it")  # implement again
+        backend.add_response(exit_code=0, output="VERDICT: PASS")  # injected check passes
+        workflow = Workflow(
+            name="test",
+            phases=[Phase(id="build", type="implement", prompt="Build it.")],
+            max_bounces=3,
+        )
+        workflow = inject_checkers(workflow, ["tester"])
+        engine = self._make_engine(workflow, backend, tmp_path)
+        assert engine.run() == 0
 
 
 class TestNoVerdictResume:

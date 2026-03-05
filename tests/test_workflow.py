@@ -2,7 +2,7 @@
 
 import pytest
 
-from juvenal.workflow import load_workflow
+from juvenal.workflow import Phase, Workflow, inject_checkers, load_workflow, parse_checker_string
 
 
 class TestYAMLLoading:
@@ -470,3 +470,141 @@ class TestErrors:
         bad_yaml.write_text("")
         with pytest.raises(ValueError, match="expected a mapping"):
             load_workflow(bad_yaml)
+
+
+class TestParseCheckerString:
+    def test_role(self):
+        assert parse_checker_string("tester") == "tester"
+
+    def test_role_senior(self):
+        assert parse_checker_string("senior-tester") == "senior-tester"
+
+    def test_run(self):
+        assert parse_checker_string("run:pytest -x") == {"run": "pytest -x"}
+
+    def test_prompt(self):
+        assert parse_checker_string("prompt:Verify the API") == {"prompt": "Verify the API"}
+
+    def test_invalid_spec(self):
+        with pytest.raises(ValueError, match="Invalid --checker spec"):
+            parse_checker_string("not-a-valid-thing")
+
+
+class TestInjectCheckers:
+    def test_no_specs_is_noop(self):
+        """Empty spec list returns the workflow unchanged."""
+        wf = Workflow(
+            name="test",
+            phases=[Phase(id="build", type="implement", prompt="Build it.")],
+        )
+        result = inject_checkers(wf, [])
+        assert len(result.phases) == 1
+
+    def test_single_implement_role_checker(self):
+        """Inject a role checker onto a single implement phase."""
+        wf = Workflow(
+            name="test",
+            phases=[Phase(id="build", type="implement", prompt="Build it.")],
+        )
+        result = inject_checkers(wf, ["tester"])
+        assert len(result.phases) == 2
+        assert result.phases[1].id == "build~check-1"
+        assert result.phases[1].type == "check"
+        assert result.phases[1].role == "tester"
+        assert result.phases[1].bounce_target == "build"
+
+    def test_single_implement_script_checker(self):
+        """Inject a script checker onto a single implement phase."""
+        wf = Workflow(
+            name="test",
+            phases=[Phase(id="build", type="implement", prompt="Build it.")],
+        )
+        result = inject_checkers(wf, ["run:pytest -x"])
+        assert len(result.phases) == 2
+        assert result.phases[1].id == "build~script-1"
+        assert result.phases[1].type == "script"
+        assert result.phases[1].run == "pytest -x"
+        assert result.phases[1].bounce_target == "build"
+
+    def test_single_implement_prompt_checker(self):
+        """Inject a prompt checker onto a single implement phase."""
+        wf = Workflow(
+            name="test",
+            phases=[Phase(id="build", type="implement", prompt="Build it.")],
+        )
+        result = inject_checkers(wf, ["prompt:Verify the API"])
+        assert len(result.phases) == 2
+        assert result.phases[1].id == "build~check-1"
+        assert result.phases[1].type == "check"
+        assert result.phases[1].prompt == "Verify the API"
+
+    def test_with_existing_inline_checkers(self):
+        """Injected checkers get offset numbering to avoid ID collisions."""
+        wf = Workflow(
+            name="test",
+            phases=[
+                Phase(id="build", type="implement", prompt="Build it."),
+                Phase(id="build~check-1", type="check", role="tester", bounce_target="build"),
+                Phase(id="build~script-1", type="script", run="make test", bounce_target="build"),
+            ],
+        )
+        result = inject_checkers(wf, ["senior-tester", "run:pytest"])
+        assert len(result.phases) == 5
+        # Existing checkers preserved
+        assert result.phases[1].id == "build~check-1"
+        assert result.phases[2].id == "build~script-1"
+        # Injected with offsets
+        assert result.phases[3].id == "build~check-2"
+        assert result.phases[3].role == "senior-tester"
+        assert result.phases[4].id == "build~script-2"
+        assert result.phases[4].run == "pytest"
+
+    def test_multiple_implement_phases(self):
+        """Checkers are injected after each implement phase."""
+        wf = Workflow(
+            name="test",
+            phases=[
+                Phase(id="setup", type="implement", prompt="Set up."),
+                Phase(id="build", type="implement", prompt="Build it."),
+            ],
+        )
+        result = inject_checkers(wf, ["tester"])
+        assert len(result.phases) == 4
+        assert result.phases[0].id == "setup"
+        assert result.phases[1].id == "setup~check-1"
+        assert result.phases[1].bounce_target == "setup"
+        assert result.phases[2].id == "build"
+        assert result.phases[3].id == "build~check-1"
+        assert result.phases[3].bounce_target == "build"
+
+    def test_non_implement_phases_untouched(self):
+        """Check and script phases don't get checkers injected."""
+        wf = Workflow(
+            name="test",
+            phases=[
+                Phase(id="build", type="implement", prompt="Build it."),
+                Phase(id="verify", type="check", role="tester"),
+                Phase(id="lint", type="script", run="ruff check"),
+            ],
+        )
+        result = inject_checkers(wf, ["senior-tester"])
+        assert len(result.phases) == 4
+        assert result.phases[0].id == "build"
+        assert result.phases[1].id == "build~check-1"
+        assert result.phases[2].id == "verify"
+        assert result.phases[3].id == "lint"
+
+    def test_multiple_checkers_per_implement(self):
+        """Multiple --checker specs all get injected."""
+        wf = Workflow(
+            name="test",
+            phases=[Phase(id="build", type="implement", prompt="Build it.")],
+        )
+        result = inject_checkers(wf, ["tester", "run:pytest -x", "prompt:Check it"])
+        assert len(result.phases) == 4
+        assert result.phases[1].id == "build~check-1"
+        assert result.phases[1].role == "tester"
+        assert result.phases[2].id == "build~script-1"
+        assert result.phases[2].run == "pytest -x"
+        assert result.phases[3].id == "build~check-2"
+        assert result.phases[3].prompt == "Check it"
