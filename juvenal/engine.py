@@ -202,12 +202,15 @@ class Engine:
 
     def _run_script(self, phase: Phase, phases: list[Phase], phase_idx: int) -> PhaseResult:
         """Run a script phase. Exit 0 = advance. Nonzero = bounce back."""
-        self.display.phase_start(phase.id, 1)
+        ps = self.state.phases.get(phase.id)
+        attempt = (ps.attempt if ps and ps.attempt > 0 else 0) + 1
+        self.state.set_attempt(phase.id, attempt)
+        self.display.phase_start(phase.id, attempt)
         self.display.step_start(f"script: {phase.id}")
 
         timeout = phase.timeout or 600
         result = run_script(phase.run, self.workflow.working_dir, timeout=timeout, env=phase.env or None)
-        self.state.log_step(phase.id, 1, "script", result.output)
+        self.state.log_step(phase.id, attempt, "script", result.output)
 
         if result.exit_code == 0:
             self.display.step_pass(phase.id)
@@ -232,7 +235,10 @@ class Engine:
 
     def _run_check(self, phase: Phase, phases: list[Phase], phase_idx: int) -> PhaseResult:
         """Run a check phase. PASS = advance. FAIL = bounce back."""
-        self.display.phase_start(phase.id, 1)
+        ps = self.state.phases.get(phase.id)
+        attempt = (ps.attempt if ps and ps.attempt > 0 else 0) + 1
+        self.state.set_attempt(phase.id, attempt)
+        self.display.phase_start(phase.id, attempt)
         self.display.step_start(f"check: {phase.id}")
 
         prompt = phase.render_check_prompt()
@@ -243,7 +249,7 @@ class Engine:
             timeout=phase.timeout,
             env=phase.env or None,
         )
-        self.state.log_step(phase.id, 1, "check", result.output)
+        self.state.log_step(phase.id, attempt, "check", result.output)
         self.state.add_tokens(phase.id, result.input_tokens, result.output_tokens)
 
         if result.exit_code != 0:
@@ -267,7 +273,7 @@ class Engine:
                     timeout=phase.timeout,
                     env=phase.env or None,
                 )
-                self.state.log_step(phase.id, 1, "check-resume", resume_result.output)
+                self.state.log_step(phase.id, attempt, "check-resume", resume_result.output)
                 self.state.add_tokens(phase.id, resume_result.input_tokens, resume_result.output_tokens)
 
                 if resume_result.exit_code != 0:
