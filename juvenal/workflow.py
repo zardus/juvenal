@@ -482,9 +482,7 @@ def inject_implementer(workflow: Workflow, role: str) -> Workflow:
     Returns a new Workflow with modified prompts.
     """
     if role not in VALID_IMPLEMENTER_ROLES:
-        raise ValueError(
-            f"Invalid --implementer role {role!r}: must be one of {sorted(VALID_IMPLEMENTER_ROLES)}"
-        )
+        raise ValueError(f"Invalid --implementer role {role!r}: must be one of {sorted(VALID_IMPLEMENTER_ROLES)}")
 
     preamble = _load_implementer_prompt(role)
     new_phases = []
