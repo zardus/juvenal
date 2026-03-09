@@ -738,6 +738,54 @@ class TestCheckersShorthandEngine:
         engine = self._make_engine(workflow, backend, tmp_path)
         assert engine.run() == 0
 
+    def test_injected_checker_failure_context_delivered(self, tmp_path):
+        """When an injected checker fails, the implement phase receives the failure context on retry."""
+        backend = MockBackend()
+        backend.add_response(exit_code=0, output="built it")  # implement attempt 1
+        backend.add_response(exit_code=0, output="VERDICT: FAIL: missing error handling")  # check fails
+        backend.add_response(exit_code=0, output="fixed it")  # implement attempt 2 (should get failure context)
+        backend.add_response(exit_code=0, output="VERDICT: PASS")  # check passes
+        workflow = Workflow(
+            name="test",
+            phases=[Phase(id="build", type="implement", prompt="Build it.")],
+            max_bounces=3,
+        )
+        workflow = inject_checkers(workflow, ["tester"])
+        engine = self._make_engine(workflow, backend, tmp_path)
+        assert engine.run() == 0
+        # calls: [0]=implement, [1]=check, [2]=implement retry, [3]=check retry
+        # The implement retry (calls[2]) should contain the failure feedback
+        assert len(backend.calls) >= 3
+        retry_prompt = backend.calls[2]
+        assert "missing error handling" in retry_prompt
+
+    def test_checker_failure_context_delivered_multi_phase(self, tmp_path):
+        """With --checkers on multiple phases, bounced phase gets failure context."""
+        backend = MockBackend()
+        backend.add_response(exit_code=0, output="phase-a done")  # phase-a implement
+        backend.add_response(exit_code=0, output="VERDICT: PASS")  # phase-a check passes
+        backend.add_response(exit_code=0, output="phase-b done")  # phase-b implement
+        backend.add_response(exit_code=0, output="VERDICT: FAIL: tests not passing")  # phase-b check fails
+        backend.add_response(exit_code=0, output="phase-b fixed")  # phase-b implement retry
+        backend.add_response(exit_code=0, output="VERDICT: PASS")  # phase-b check passes
+        workflow = Workflow(
+            name="test",
+            phases=[
+                Phase(id="phase-a", type="implement", prompt="Do A."),
+                Phase(id="phase-b", type="implement", prompt="Do B."),
+            ],
+            max_bounces=3,
+        )
+        workflow = inject_checkers(workflow, ["tester"])
+        engine = self._make_engine(workflow, backend, tmp_path)
+        assert engine.run() == 0
+        # backend.calls: [phase-a prompt, phase-a check, phase-b prompt, phase-b check, phase-b retry, phase-b check]
+        # The phase-b retry (calls[3] since checks also go through run_agent) should have the failure context
+        # calls[0] = phase-a implement, calls[1] = phase-a check, calls[2] = phase-b implement, calls[3] = phase-b check
+        # calls[4] = phase-b retry implement — should contain failure context
+        retry_prompt = backend.calls[4]
+        assert "tests not passing" in retry_prompt
+
 
 class TestNoVerdictResume:
     def _make_engine(self, workflow, backend, tmp_path, **kwargs):

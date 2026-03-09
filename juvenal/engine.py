@@ -23,6 +23,7 @@ class PhaseResult:
 
     success: bool
     bounce_target: str | None = None
+    failure_context: str = ""
 
 
 @dataclass
@@ -115,6 +116,8 @@ class Engine:
                             raise PipelineExhausted(phase.id)
                         self._apply_backoff(bounces)
                         self.state.invalidate_from(result.bounce_target)
+                        if result.failure_context:
+                            self.state.set_failure_context(result.bounce_target, result.failure_context)
                         phase_idx = self._find_phase_index(result.bounce_target)
                         continue
                     if not result.success:
@@ -144,6 +147,8 @@ class Engine:
                         raise PipelineExhausted(phase.id)
                     self._apply_backoff(bounces)
                     self.state.invalidate_from(result.bounce_target)
+                    if result.failure_context:
+                        self.state.set_failure_context(result.bounce_target, result.failure_context)
                     phase_idx = self._find_phase_index(result.bounce_target)
                 else:
                     raise PipelineExhausted(phase.id)
@@ -190,8 +195,7 @@ class Engine:
             self.display.step_fail("implement", failure_context[:500])
             # Bounce to explicit target, or back to self
             bounce_target = phase.bounce_target or phase.id
-            self.state.set_failure_context(bounce_target, failure_context)
-            return PhaseResult(success=False, bounce_target=bounce_target)
+            return PhaseResult(success=False, bounce_target=bounce_target, failure_context=failure_context)
 
         self.display.step_pass("implement")
         return PhaseResult(success=True)
@@ -215,8 +219,7 @@ class Engine:
 
         target_id = self._resolve_bounce_target(phase, phases, phase_idx)
         if target_id:
-            self.state.set_failure_context(target_id, failure_context)
-            return PhaseResult(success=False, bounce_target=target_id)
+            return PhaseResult(success=False, bounce_target=target_id, failure_context=failure_context)
         return PhaseResult(success=False)
 
     _MAX_NO_VERDICT_RESUMES = 2
@@ -248,8 +251,7 @@ class Engine:
             self.display.step_fail(phase.id, failure_context[:500])
             target_id = self._resolve_bounce_target(phase, phases, phase_idx)
             if target_id:
-                self.state.set_failure_context(target_id, failure_context)
-                return PhaseResult(success=False, bounce_target=target_id)
+                return PhaseResult(success=False, bounce_target=target_id, failure_context=failure_context)
             return PhaseResult(success=False)
 
         passed, reason, agent_target = parse_verdict(result.output)
@@ -285,8 +287,7 @@ class Engine:
 
         target_id = self._resolve_bounce_target(phase, phases, phase_idx, agent_target)
         if target_id:
-            self.state.set_failure_context(target_id, failure_context)
-            return PhaseResult(success=False, bounce_target=target_id)
+            return PhaseResult(success=False, bounce_target=target_id, failure_context=failure_context)
         return PhaseResult(success=False)
 
     def _run_workflow(self, phase: Phase) -> PhaseResult:
@@ -300,8 +301,7 @@ class Engine:
             )
             self.display.step_fail(phase.id, failure_context)
             bounce_target = phase.bounce_target or phase.id
-            self.state.set_failure_context(bounce_target, failure_context)
-            return PhaseResult(success=False, bounce_target=bounce_target)
+            return PhaseResult(success=False, bounce_target=bounce_target, failure_context=failure_context)
 
         failure_context = self.state.get_failure_context(phase.id)
         ps = self.state.phases.get(phase.id)
@@ -326,8 +326,7 @@ class Engine:
             failure_context = f"Sub-workflow planning failed: {plan_result.error}"
             self.display.step_fail(phase.id, failure_context[:500])
             bounce_target = phase.bounce_target or phase.id
-            self.state.set_failure_context(bounce_target, failure_context)
-            return PhaseResult(success=False, bounce_target=bounce_target)
+            return PhaseResult(success=False, bounce_target=bounce_target, failure_context=failure_context)
 
         # Step 2: Load and execute the sub-workflow
         self.display.step_start(f"workflow-exec: {phase.id}")
@@ -355,9 +354,8 @@ class Engine:
             failure_context = f"Sub-workflow execution failed for phase '{phase.id}'"
             self.display.step_fail(phase.id, failure_context)
             bounce_target = phase.bounce_target or phase.id
-            self.state.set_failure_context(bounce_target, failure_context)
             # Preserve temp dir for debugging
-            return PhaseResult(success=False, bounce_target=bounce_target)
+            return PhaseResult(success=False, bounce_target=bounce_target, failure_context=failure_context)
 
         # Success — clean up temp dir
         self.display.step_pass(phase.id)
@@ -406,7 +404,9 @@ class Engine:
                     self.state.mark_completed(pid)
                 if result.bounce_target:
                     # Any bounce aborts the group
-                    return PhaseResult(success=False, bounce_target=result.bounce_target)
+                    return PhaseResult(
+                        success=False, bounce_target=result.bounce_target, failure_context=result.failure_context
+                    )
 
         if all(r.success for r in results.values()):
             return PhaseResult(success=True)
