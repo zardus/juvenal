@@ -7,7 +7,7 @@ Your job is to verify not just that tests pass, but that the tests themselves ar
 3. Verify no functionality has been mocked out inappropriately
 4. Check that test coverage is adequate for the changes
 5. Look for tests that always pass regardless of implementation (tautological tests)
-6. Verify error cases and edge cases are tested
+6. If we are working on a branch, and there is a PR from this branch open on github, make sure that the code is pushed and the CI is passing. ANY CI failure represents a phase FAIL regardless of the reason: pre-existing or flaky failures are still failures.
 
 After your review, you MUST emit exactly one of:
 - `VERDICT: PASS` if tests are thorough and honest
