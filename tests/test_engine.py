@@ -534,30 +534,42 @@ class TestPreserveContextOnBounce:
         assert len(backend.resume_calls) == 0
 
     def test_forward_after_bounce_starts_fresh(self, tmp_path):
-        """After a bounce+resume, proceeding forward starts fresh sessions."""
+        """a->b->c(bounces to a): (a) resumes, (b) and (c) re-run with fresh context.
+
+        Flow: a(run) -> b(run) -> c(run, FAIL) -> a(resume) -> b(run) -> c(run, PASS)
+        Verifies:
+        1. (a) resumes with previous context after bounce
+        2. (b) restarts with fresh context on forward re-run
+        3. (c) restarts with fresh context on forward re-run
+        """
         backend = MockBackend()
-        backend.add_response(exit_code=0, output="phase1 done", session_id="sess-a")  # phase1 implement
-        backend.add_response(exit_code=0, output="phase2 done", session_id="sess-b")  # phase2 implement
-        backend.add_response(exit_code=0, output="VERDICT: FAIL: nope")  # check fails -> bounce to phase1
-        backend.add_response(exit_code=0, output="phase1 fixed", session_id="sess-a2")  # phase1 resumed
-        backend.add_response(exit_code=0, output="phase2 redone", session_id="sess-b2")  # phase2 fresh (not resumed)
-        backend.add_response(exit_code=0, output="VERDICT: PASS")  # check passes
+        # Round 1
+        backend.add_response(exit_code=0, output="a done", session_id="sess-a")  # a: run_agent
+        backend.add_response(exit_code=0, output="b done", session_id="sess-b")  # b: run_agent
+        backend.add_response(exit_code=0, output="VERDICT: FAIL: nope", session_id="sess-c")  # c: run_agent, fails
+        # Round 2 (after bounce to a)
+        backend.add_response(exit_code=0, output="a fixed", session_id="sess-a2")  # a: resume_agent
+        backend.add_response(exit_code=0, output="b redone", session_id="sess-b2")  # b: run_agent (fresh)
+        backend.add_response(exit_code=0, output="VERDICT: PASS", session_id="sess-c2")  # c: run_agent (fresh)
         workflow = Workflow(
             name="test",
             phases=[
-                Phase(id="phase1", type="implement", prompt="Do phase 1."),
-                Phase(id="phase2", type="implement", prompt="Do phase 2."),
-                Phase(id="review", type="check", role="tester", bounce_target="phase1"),
+                Phase(id="a", type="implement", prompt="Do a."),
+                Phase(id="b", type="implement", prompt="Do b."),
+                Phase(id="c", type="check", role="tester", bounce_target="a"),
             ],
             max_bounces=3,
         )
         engine = self._make_engine(workflow, backend, tmp_path, preserve_context_on_bounce=True)
         assert engine.run() == 0
 
-        # phase1 resumed (bounce target), phase2 fresh (forward progression)
+        # Point 1: (a) was resumed exactly once with the right session
         assert len(backend.resume_calls) == 1
         assert backend.resume_calls[0][0] == "sess-a"
-        # run_agent calls: phase1(1) + phase2(1) + check(1) + phase2(2) + check(2) = 5
+        assert "failed verification" in backend.resume_calls[0][1]
+
+        # Points 2 & 3: (b) and (c) were always run_agent (fresh), never resumed
+        # run_agent calls: a(1) + b(1) + c(1) + b(2) + c(2) = 5
         assert len(backend.calls) == 5
 
     def test_bounce_without_session_id_falls_back_to_fresh(self, tmp_path):
