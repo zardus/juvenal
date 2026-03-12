@@ -287,6 +287,17 @@ class Engine:
 
         prompt = phase.render_check_prompt()
 
+        # Inject the parent implement phase's directions so the checker knows what to verify
+        parent_prompt = self._get_parent_prompt(phase, phases, phase_idx)
+        if parent_prompt:
+            prompt = (
+                f"## Implementation Task Given to the Implementer\n\n"
+                f"{parent_prompt}\n\n"
+                f"---\n\n"
+                f"## Your Checker Instructions\n\n"
+                f"{prompt}"
+            )
+
         # Inject baseline SHA so the checker can see ALL changes, not just the latest commit
         baseline_sha = self._get_baseline_sha(phase, phases, phase_idx)
         if baseline_sha:
@@ -509,6 +520,15 @@ class Engine:
                 return result.stdout.strip()
         except (subprocess.TimeoutExpired, FileNotFoundError):
             pass
+        return None
+
+    def _get_parent_prompt(self, phase: Phase, phases: list[Phase], phase_idx: int) -> str | None:
+        """Get the prompt from the parent implement phase for a check/script phase."""
+        target_id = self._resolve_bounce_target(phase, phases, phase_idx)
+        if target_id:
+            for p in phases:
+                if p.id == target_id and p.type == "implement":
+                    return p.prompt or None
         return None
 
     def _get_baseline_sha(self, phase: Phase, phases: list[Phase], phase_idx: int) -> str | None:
