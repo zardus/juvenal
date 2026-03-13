@@ -31,27 +31,41 @@ name: "my-workflow"
 backend: claude  # or "codex"
 working_dir: "."
 max_bounces: 999  # global bounce limit
+backoff: 2.0      # exponential backoff between bounces (seconds)
+max_backoff: 60.0 # cap on backoff delay
+notify:
+  - https://example.com/webhook  # webhook on completion/failure
+
+include:
+  - shared-phases.yaml  # merge phases from other workflows
 
 phases:
   - id: setup
     prompt: "Set up the project scaffolding."
+    timeout: 300  # seconds
+    env:
+      NODE_ENV: development
     checkers:
-      - type: script
-        run: "pytest tests/ -x"
-      - type: agent
-        role: tester
+      - run: "pytest tests/ -x"  # script checker (exit 0 = pass)
+      - tester                    # built-in role shorthand
+      - role: senior-engineer     # role as dict
+      - prompt: "Review the code for security issues."  # inline prompt
 
   - id: implement
     prompt_file: phases/implement/prompt.md
     bounce_target: setup  # on failure, bounce back to setup
     checkers:
-      - type: script
-        run: "make test"
-      - type: agent
-        role: senior-engineer
-      - type: composite
-        run: "pytest tests/ --tb=long"
-        prompt: "Review test output:\n{script_output}"
+      - run: "make test"
+      - role: senior-engineer
+
+parallel_groups:
+  # Lanes: concurrent mini-pipelines with per-lane bounce loops
+  - lanes:
+      - [feature-a, check-a]   # lane 1
+      - [feature-b, check-b]   # lane 2
+
+  # Legacy flat: run implement phases concurrently (no per-phase checking)
+  - phases: [independent-x, independent-y]
 ```
 
 ### 2. Directory convention
@@ -61,34 +75,54 @@ my-workflow/
   phases/
     01-setup/
       prompt.md
-      check-build.sh
     02-implement/
       prompt.md
-      check-tests.sh     # script checker
-      check-quality.md   # agent checker
 ```
 
 ### 3. Bare .md files
 
+A single `.md` file becomes a single implement phase:
+
+```bash
+juvenal run task.md
 ```
-phases/
-  01-setup.md       # gets default tester checker
-  02-implement.md
+
+## Phase Types
+
+| Type | Description |
+|------|-------------|
+| `implement` | Agent executes a prompt to build/modify code (default) |
+| `check` | Separate agent verifies work, emits `VERDICT: PASS` or `VERDICT: FAIL: reason` |
+| `script` | Shell command; exit 0 = pass, nonzero = fail |
+| `workflow` | Dynamic sub-workflow: plans and executes a sub-pipeline from the prompt |
+
+### Workflow Phases
+
+```yaml
+- id: dynamic-feature
+  type: workflow
+  prompt: "Build a REST API with authentication and tests."
+  max_depth: 2  # recursion depth limit (default: 3)
 ```
 
-## Checker Types
+## Inline Checkers Shorthand
 
-- **script** (`type: script`): Shell command, exit 0 = PASS
-- **agent** (`type: agent`): AI agent that must emit `VERDICT: PASS` or `VERDICT: FAIL: reason`
-- **composite** (`type: composite`): Script runs first, output fed to agent via `{script_output}`
+Checkers are defined inline on implement phases. Each entry can be:
 
-## Built-in Roles
+- **Bare string** — built-in role shorthand: `tester`, `architect`, `pm`, `senior-tester`, `senior-engineer`
+- **`run: CMD`** — script checker (exit 0 = pass)
+- **`role: NAME`** — agent checker with built-in role
+- **`prompt: TEXT`** — agent checker with inline prompt
+- **`prompt_file: PATH`** — agent checker with prompt from file
 
-Agent checkers can use built-in roles: `tester`, `architect`, `pm`, `senior-tester`, `senior-engineer`
+Checkers can also carry `timeout` and `env`.
 
-## Agent-Guided Bounce Targets
+## Bounce Targets
 
-Check phases can specify multiple valid bounce targets via `bounce_targets` (a list). The checker agent picks which target to bounce to by emitting `VERDICT: FAIL(target-id): reason`. If the agent picks an invalid target or omits one, the first target in the list is used as fallback.
+- **`bounce_target`** (singular, fixed): always bounces to this phase on failure
+- **`bounce_targets`** (list, agent-guided): checker picks which phase to bounce to via `VERDICT: FAIL(target-id): reason`. Falls back to first in the list.
+
+These are mutually exclusive.
 
 ```yaml
 - id: review
@@ -98,11 +132,70 @@ Check phases can specify multiple valid bounce targets via `bounce_targets` (a l
     - write-paper          # or here
 ```
 
-Note: `bounce_target` (singular, fixed) and `bounce_targets` (list, agent-guided) are mutually exclusive.
+## Parallel Groups
+
+### Lanes (new)
+
+Each lane is a mini-pipeline (implement + check) that runs its own internal bounce loop. All lanes run concurrently with a shared global bounce budget.
+
+```yaml
+parallel_groups:
+  - lanes:
+      - [feature-a, check-a]
+      - [feature-b, check-b]
+      - [feature-c, check-c]
+```
+
+### Legacy flat format
+
+Run implement phases concurrently with no per-phase checking. A single failure aborts the group.
+
+```yaml
+parallel_groups:
+  - phases: [a, b, c]
+```
+
+## Workflow Includes
+
+Compose workflows from reusable pieces:
+
+```yaml
+# main.yaml
+include:
+  - shared/setup.yaml
+  - shared/linting.yaml
+phases:
+  - id: feature
+    prompt: "Build the feature."
+```
+
+Included phases, parallel groups, and other settings are merged. Circular includes are detected.
+
+## CLI Commands
+
+```bash
+juvenal run <workflow> [--resume] [--rewind N] [--rewind-to PHASE_ID] [--phase X]
+                       [--max-bounces N] [--backend claude|codex] [--dry-run]
+                       [--backoff SECONDS] [--notify URL] [--working-dir DIR]
+                       [--state-file PATH] [--checker SPEC] [--implementer ROLE]
+                       [--preserve-context-on-bounce]
+juvenal plan "goal" [-o output.yaml] [--backend claude|codex]
+juvenal do "goal" [--backend claude|codex] [--max-bounces N]
+juvenal status [--state-file path]
+juvenal init [directory] [--template name]
+juvenal validate <workflow>
+```
+
+### Key flags
+
+- **`--checker SPEC`**: Inject a checker on every implement phase. SPEC is a role name (`tester`), `run:CMD`, or `prompt:TEXT`. Repeatable.
+- **`--implementer ROLE`**: Prepend an implementer role prompt to every implement phase (e.g., `software-engineer`).
+- **`--preserve-context-on-bounce`**: Resume the agent's session on bounce instead of starting fresh — preserves conversation context.
+- **`--backoff SECONDS`**: Exponential backoff between bounces (base delay, doubles each bounce, capped at `--max-backoff` or workflow's `max_backoff`).
+- **`--notify URL`**: Webhook URL for JSON notifications on completion/failure. Repeatable.
+- **`--dry-run`**: Print execution plan, validation, and phase summary without running.
 
 ## Canned Workflows
-
-Juvenal ships with built-in workflows that can be run directly:
 
 ### `research-paper` — Write a research paper
 
@@ -126,24 +219,14 @@ juvenal run $(python -c "from pathlib import Path; print(Path(__import__('juvena
 | 5b | `run-tests` | — | script |
 | 6 | `implement-experiments` | Graduate Researcher | implement |
 | 7 | `run-experiments` | Graduate Researcher | implement |
-| 8 | `results-review` | Postdoc | check → `design-experiments` |
+| 8 | `results-review` | Postdoc | check -> `design-experiments` |
 | 9 | `design-paper` | Professor | implement |
 | 10 | `write-paper` | Graduate Researcher | implement |
-| 11 | `professor-review` | Professor | check → `[design-experiments, write-paper]` |
-| 12 | `reviewer-a-review` | Reviewer A (positive) | check → `[design-experiments, write-paper]` |
-| 13 | `reviewer-b-review` | Reviewer B (skeptical) | check → `[design-experiments, write-paper]` |
+| 11 | `professor-review` | Professor | check -> `[design-experiments, write-paper]` |
+| 12 | `reviewer-a-review` | Reviewer A (positive) | check -> `[design-experiments, write-paper]` |
+| 13 | `reviewer-b-review` | Reviewer B (skeptical) | check -> `[design-experiments, write-paper]` |
 
 **Artifacts produced:** `PLAN.md`, `DESIGN.md`, `IMPLEMENTATION.md`, `RESULTS.md`, `OUTLINE.md`, `PAPER.md`, `reviews/`
-
-## CLI Commands
-
-```bash
-juvenal run workflow.yaml [--resume] [--backend claude|codex]
-juvenal plan "goal description" [-o output.yaml]
-juvenal do "goal description"
-juvenal status
-juvenal init [directory]
-```
 
 ## Your Task
 

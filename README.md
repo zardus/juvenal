@@ -91,15 +91,22 @@ juvenal do "add authentication to the Flask app"
 name: "my-workflow"
 backend: claude
 max_bounces: 999
+backoff: 2.0        # exponential backoff between bounces (seconds)
+max_backoff: 60.0   # cap on backoff delay
+notify:
+  - https://example.com/webhook
 
 phases:
   - id: implement
     prompt: "Implement the feature."
+    timeout: 300
+    env:
+      NODE_ENV: production
     checkers:
-      - type: script
-        run: "pytest tests/ -x"
-      - type: agent
-        role: tester
+      - run: "pytest tests/ -x"       # script checker
+      - tester                          # built-in role shorthand
+      - role: senior-engineer           # role as dict
+      - prompt: "Check for security."   # inline prompt
 ```
 
 ### Directory Convention
@@ -109,28 +116,62 @@ my-workflow/
   phases/
     01-setup/
       prompt.md            # implementation prompt
-      check-build.sh       # script checker (exit 0 = pass)
-      check-quality.md     # agent checker
     02-implement/
       prompt.md
-      check-tests.sh       # paired with .md = composite
-      check-tests.md       # gets {script_output} injected
 ```
 
 ### Bare Markdown
 
-```
-phases/
-  01-setup.md              # single phase, default tester checker
+```bash
+juvenal run task.md  # single implement phase from a .md file
 ```
 
-## Checker Types
+## Phase Types
 
 | Type | Description |
 |------|-------------|
+| `implement` | Agent executes a prompt to build/modify code (default) |
+| `check` | Separate agent verifies work, emits `VERDICT: PASS` or `VERDICT: FAIL: reason` |
 | `script` | Shell command; exit 0 = PASS, nonzero = FAIL |
-| `agent` | AI agent that emits `VERDICT: PASS` or `VERDICT: FAIL: reason` |
-| `composite` | Script runs first, output fed to agent via `{script_output}` |
+| `workflow` | Dynamic sub-workflow: plans and executes a sub-pipeline from the prompt |
+
+### Workflow Phases
+
+A `workflow` phase dynamically generates and executes a sub-pipeline. Useful for open-ended tasks where the exact phases aren't known ahead of time:
+
+```yaml
+- id: dynamic-feature
+  type: workflow
+  prompt: "Build a REST API with authentication and tests."
+  max_depth: 2  # recursion depth limit (default: 3)
+```
+
+## Inline Checkers
+
+Checkers are defined inline on implement phases. Each entry can be:
+
+- **Bare string** — built-in role shorthand
+- **`run: CMD`** — script checker (exit 0 = pass)
+- **`role: NAME`** — agent checker with built-in role
+- **`prompt: TEXT`** — agent checker with inline prompt
+- **`prompt_file: PATH`** — agent checker with prompt from file
+
+Checkers can also carry `timeout` and `env`.
+
+```yaml
+- id: implement
+  prompt: "Build the feature."
+  checkers:
+    - run: "pytest tests/ -x"
+    - tester
+    - role: senior-engineer
+    - prompt: "Check for security vulnerabilities."
+    - prompt_file: checkers/review.md
+    - run: "npm run lint"
+      timeout: 60
+      env:
+        CI: "true"
+```
 
 ## Built-in Roles
 
@@ -142,19 +183,129 @@ Agent checkers can use built-in verification personas:
 - `senior-tester` — checks test integrity, looks for cheating
 - `senior-engineer` — reviews code quality, completeness, security
 
+Implementer roles (via `--implementer`):
+
+- `software-engineer` — structured implementation approach
+
+## Bounce Targets
+
+On verification failure, the pipeline bounces back to re-implement. Two modes:
+
+- **`bounce_target`** (fixed): always bounces to this phase
+- **`bounce_targets`** (agent-guided): checker picks which phase via `VERDICT: FAIL(target-id): reason`
+
+```yaml
+- id: review
+  type: check
+  bounce_targets:
+    - design-experiments   # agent can bounce here
+    - write-paper          # or here
+```
+
+These are mutually exclusive. If neither is set, bounces to the most recent implement phase.
+
+## Parallel Groups
+
+### Lanes
+
+Each lane is a mini-pipeline (e.g., implement + check) with its own internal bounce loop. All lanes run concurrently and share the global bounce budget. The group completes when every lane passes.
+
+```yaml
+parallel_groups:
+  - lanes:
+      - [feature-a, check-a]
+      - [feature-b, check-b]
+      - [feature-c, check-c]
+```
+
+Lane constraints:
+- Bounce targets must stay within their lane
+- No `workflow`-type phases in lanes
+- No phase in multiple lanes
+
+### Legacy Flat Format
+
+Run implement phases concurrently with no per-phase checking. A single failure aborts the group.
+
+```yaml
+parallel_groups:
+  - phases: [independent-a, independent-b]
+```
+
+## Workflow Includes
+
+Compose workflows from reusable pieces. Included phases and parallel groups are merged in order before the current workflow's phases:
+
+```yaml
+include:
+  - shared/setup.yaml
+  - shared/linting.yaml
+phases:
+  - id: feature
+    prompt: "Build the feature."
+```
+
+Nested includes are supported. Circular includes are detected.
+
+## Exponential Backoff
+
+Add a delay between bounces to avoid hammering APIs:
+
+```yaml
+backoff: 2.0       # base delay in seconds (doubles each bounce)
+max_backoff: 60.0  # cap
+```
+
+Or via CLI: `--backoff 2.0`
+
+## Notifications
+
+Get webhook notifications on pipeline completion or failure:
+
+```yaml
+notify:
+  - https://hooks.slack.com/services/T.../B.../xxx
+```
+
+Or via CLI: `--notify URL` (repeatable). The webhook receives a JSON payload with workflow name, status, bounces, duration, token usage, and per-phase summaries.
+
+## Context Preservation
+
+By default, each bounce starts a fresh agent session. With `--preserve-context-on-bounce`, the agent's session is resumed instead, so it retains the full conversation context from the previous attempt. The failure details are sent as a follow-up message rather than re-rendering the full prompt.
+
+## Token Tracking
+
+Juvenal tracks input and output token usage per phase. Token counts are shown in the run summary and included in webhook notifications. Token data is persisted in the state file for resume scenarios.
+
 ## CLI
 
 ```
 juvenal run <workflow> [--resume] [--rewind N] [--rewind-to PHASE_ID] [--phase X]
                        [--max-bounces N] [--backend claude|codex] [--dry-run]
-                       [--backoff SECONDS] [--notify WEBHOOK_URL]
-                       [--working-dir DIR] [--state-file PATH]
+                       [--backoff SECONDS] [--notify URL] [--working-dir DIR]
+                       [--state-file PATH] [--checker SPEC] [--implementer ROLE]
+                       [--preserve-context-on-bounce]
 juvenal plan "goal" [-o output.yaml] [--backend claude|codex]
 juvenal do "goal" [--backend claude|codex] [--max-bounces N]
 juvenal status [--state-file path]
 juvenal init [directory] [--template name]
 juvenal validate <workflow>
 ```
+
+### Key Flags
+
+| Flag | Description |
+|------|-------------|
+| `--resume` | Resume from last saved state |
+| `--rewind N` | Rewind N phases back from the resume point |
+| `--rewind-to ID` | Rewind to a specific phase by ID |
+| `--phase ID` | Start from a specific phase |
+| `--dry-run` | Print execution plan without running |
+| `--checker SPEC` | Inject checker on every implement phase (role, `run:CMD`, `prompt:TEXT`). Repeatable. |
+| `--implementer ROLE` | Prepend implementer role prompt to every implement phase |
+| `--preserve-context-on-bounce` | Resume agent session on bounce (preserves conversation context) |
+| `--backoff SECONDS` | Exponential backoff base delay between bounces |
+| `--notify URL` | Webhook URL for completion/failure notifications. Repeatable. |
 
 ### Resume & Rewind
 
@@ -170,6 +321,21 @@ juvenal run workflow.yaml --rewind-to setup
 ```
 
 `--rewind` and `--rewind-to` implicitly load existing state (no need for `--resume`) and invalidate from the target phase onward so everything from that point gets re-executed.
+
+### Checker Injection
+
+Inject checkers at the CLI without modifying the workflow file:
+
+```bash
+# Add a tester role checker to every implement phase
+juvenal run workflow.yaml --checker tester
+
+# Add a script checker
+juvenal run workflow.yaml --checker "run:pytest tests/ -x"
+
+# Add both
+juvenal run workflow.yaml --checker tester --checker "run:make lint"
+```
 
 ## License
 
