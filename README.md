@@ -1,6 +1,6 @@
 # Juvenal
 
-> *Quis custodiet ipsos agentes?* — Who guards the agents?
+> *Quis agit ipsos agentes?* — Who acts upon the agents?
 
 <p align="center">
   <img src="juvenal.png" alt="Juvenal" width="200">
