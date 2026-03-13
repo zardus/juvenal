@@ -22,15 +22,30 @@ phases:
 
   - id: design-review
     type: check
+    bounce_target: phase-split
     prompt_file: plan-phases/06-design-review.md
 
   - id: feasibility-review
     type: check
+    bounce_target: phase-split
     prompt_file: plan-phases/07-feasibility-review.md
 
+  - id: validation-design
+    prompt_file: plan-phases/08-validation-design.md
+
+  - id: validation-review
+    type: check
+    bounce_target: validation-design
+    prompt_file: plan-phases/09-validation-review.md
+
   - id: write-workflow
-    prompt_file: plan-phases/08-write-workflow.md
+    prompt_file: plan-phases/10-write-workflow.md
 
   - id: yaml-validate
     type: script
     run: "python -c \"import yaml, sys; d=yaml.safe_load(open('workflow.yaml')); assert isinstance(d,dict) and 'phases' in d, 'missing phases key'\""
+
+  - id: workflow-validation-review
+    type: check
+    bounce_target: write-workflow
+    prompt_file: plan-phases/11-workflow-validation-review.md
