@@ -1553,6 +1553,259 @@ class TestLaneGroups:
         assert exit_code == 0
 
 
+class TestResumeWithParallelPhases:
+    """Tests for --resume interaction with parallel groups and lanes."""
+
+    def test_resume_snaps_to_flat_parallel_group_start(self, tmp_path):
+        """When resume index lands in middle of a flat parallel group, snap to first phase."""
+        backend = MockBackend()
+        # After snap, the whole group re-runs: a, b, c all succeed
+        backend.add_response(exit_code=0, output="done a")
+        backend.add_response(exit_code=0, output="done b")
+        backend.add_response(exit_code=0, output="done c")
+        # Then the post-group script passes
+        workflow = Workflow(
+            name="test",
+            phases=[
+                Phase(id="a", type="implement", prompt="A."),
+                Phase(id="b", type="implement", prompt="B."),
+                Phase(id="c", type="implement", prompt="C."),
+                Phase(id="final", type="script", run="true"),
+            ],
+            parallel_groups=[ParallelGroup(phases=["a", "b", "c"])],
+            max_bounces=3,
+        )
+        # Pre-populate state: "a" completed, "b" pending — resume would land on "b"
+        from juvenal.state import PipelineState
+
+        state_file = str(tmp_path / "state.json")
+        state = PipelineState(state_file=Path(state_file))
+        state.mark_completed("a")
+        state.save()
+
+        engine = Engine(workflow, resume=True, state_file=state_file, plain=True)
+        engine.backend = backend
+        # Should have snapped start_idx to "a" (index 0), not "b" (index 1)
+        assert engine._start_idx == 0
+
+    def test_resume_flat_parallel_skips_completed_phases(self, tmp_path):
+        """On resume, completed phases within a flat parallel group are not re-run."""
+        backend = MockBackend()
+        # Only "b" and "c" should run (a is already completed)
+        backend.add_response(exit_code=0, output="done b")
+        backend.add_response(exit_code=0, output="done c")
+        workflow = Workflow(
+            name="test",
+            phases=[
+                Phase(id="a", type="implement", prompt="A."),
+                Phase(id="b", type="implement", prompt="B."),
+                Phase(id="c", type="implement", prompt="C."),
+            ],
+            parallel_groups=[ParallelGroup(phases=["a", "b", "c"])],
+            max_bounces=3,
+        )
+        from juvenal.state import PipelineState
+
+        state_file = str(tmp_path / "state.json")
+        state = PipelineState(state_file=Path(state_file))
+        state.mark_completed("a")
+        state.save()
+
+        engine = Engine(workflow, resume=True, state_file=state_file, plain=True)
+        engine.backend = backend
+        with patch.object(engine, "_get_git_head", return_value=None):
+            exit_code = engine.run()
+        assert exit_code == 0
+        # Only 2 calls (b and c), not 3
+        assert len(backend.calls) == 2
+
+    def test_resume_all_parallel_completed_skips_group(self, tmp_path):
+        """If all phases in a flat parallel group are completed, skip the entire group."""
+        backend = MockBackend()
+        # No backend calls expected for the parallel group — only the post-group script
+        workflow = Workflow(
+            name="test",
+            phases=[
+                Phase(id="a", type="implement", prompt="A."),
+                Phase(id="b", type="implement", prompt="B."),
+                Phase(id="post", type="script", run="true"),
+            ],
+            parallel_groups=[ParallelGroup(phases=["a", "b"])],
+            max_bounces=3,
+        )
+        from juvenal.state import PipelineState
+
+        state_file = str(tmp_path / "state.json")
+        state = PipelineState(state_file=Path(state_file))
+        state.mark_completed("a")
+        state.mark_completed("b")
+        state.save()
+
+        engine = Engine(workflow, resume=True, state_file=state_file, plain=True)
+        engine.backend = backend
+        exit_code = engine.run()
+        assert exit_code == 0
+        assert len(backend.calls) == 0
+
+    def test_resume_snaps_to_lane_group_start(self, tmp_path):
+        """When resume lands inside a lane group, snap to first phase of first lane."""
+        backend = MockBackend()
+        # Lane A (a, check_a) and Lane B (b, check_b) — all succeed
+        backend.add_response(exit_code=0, output="done a")
+        backend.add_response(exit_code=0, output="VERDICT: PASS")
+        backend.add_response(exit_code=0, output="done b")
+        backend.add_response(exit_code=0, output="VERDICT: PASS")
+        workflow = Workflow(
+            name="test",
+            phases=[
+                Phase(id="a", type="implement", prompt="A."),
+                Phase(id="check_a", type="check", role="tester", bounce_target="a"),
+                Phase(id="b", type="implement", prompt="B."),
+                Phase(id="check_b", type="check", role="tester", bounce_target="b"),
+            ],
+            parallel_groups=[ParallelGroup(lanes=[["a", "check_a"], ["b", "check_b"]])],
+            max_bounces=5,
+        )
+        from juvenal.state import PipelineState
+
+        state_file = str(tmp_path / "state.json")
+        state = PipelineState(state_file=Path(state_file))
+        state.mark_completed("a")
+        state.mark_completed("check_a")
+        # Lane B incomplete — resume would land on "b" (index 2)
+        state.save()
+
+        engine = Engine(workflow, resume=True, state_file=state_file, plain=True)
+        engine.backend = backend
+        # Should snap to "a" (index 0)
+        assert engine._start_idx == 0
+
+    def test_resume_lane_group_skips_completed_lane(self, tmp_path):
+        """On resume, fully-completed lanes are not re-run."""
+        backend = MockBackend()
+        # Only lane B should run
+        backend.add_response(exit_code=0, output="done b")
+        backend.add_response(exit_code=0, output="VERDICT: PASS")
+        workflow = Workflow(
+            name="test",
+            phases=[
+                Phase(id="a", type="implement", prompt="A."),
+                Phase(id="check_a", type="check", role="tester", bounce_target="a"),
+                Phase(id="b", type="implement", prompt="B."),
+                Phase(id="check_b", type="check", role="tester", bounce_target="b"),
+            ],
+            parallel_groups=[ParallelGroup(lanes=[["a", "check_a"], ["b", "check_b"]])],
+            max_bounces=5,
+        )
+        from juvenal.state import PipelineState
+
+        state_file = str(tmp_path / "state.json")
+        state = PipelineState(state_file=Path(state_file))
+        state.mark_completed("a")
+        state.mark_completed("check_a")
+        state.save()
+
+        engine = Engine(workflow, resume=True, state_file=state_file, plain=True)
+        engine.backend = backend
+        with patch.object(engine, "_get_git_head", return_value=None):
+            exit_code = engine.run()
+        assert exit_code == 0
+        # Only 2 calls (b implement + check_b), not 4
+        assert len(backend.calls) == 2
+
+    def test_resume_lane_skips_completed_phases_within_lane(self, tmp_path):
+        """Within a lane, already-completed phases are skipped on resume."""
+        backend = MockBackend()
+        # Lane A: check_a should run (a already completed)
+        backend.add_response(exit_code=0, output="VERDICT: PASS")
+        # Lane B: both b and check_b should run
+        backend.add_response(exit_code=0, output="done b")
+        backend.add_response(exit_code=0, output="VERDICT: PASS")
+        workflow = Workflow(
+            name="test",
+            phases=[
+                Phase(id="a", type="implement", prompt="A."),
+                Phase(id="check_a", type="check", role="tester", bounce_target="a"),
+                Phase(id="b", type="implement", prompt="B."),
+                Phase(id="check_b", type="check", role="tester", bounce_target="b"),
+            ],
+            parallel_groups=[ParallelGroup(lanes=[["a", "check_a"], ["b", "check_b"]])],
+            max_bounces=5,
+        )
+        from juvenal.state import PipelineState
+
+        state_file = str(tmp_path / "state.json")
+        state = PipelineState(state_file=Path(state_file))
+        state.mark_completed("a")
+        # check_a and lane B not completed
+        state.save()
+
+        engine = Engine(workflow, resume=True, state_file=state_file, plain=True)
+        engine.backend = backend
+        with patch.object(engine, "_get_git_head", return_value=None):
+            exit_code = engine.run()
+        assert exit_code == 0
+        # 3 calls: check_a + b + check_b (not a)
+        assert len(backend.calls) == 3
+
+    def test_align_state_phases_fixes_dict_order(self, tmp_path):
+        """State phases dict is reordered to match workflow phase order."""
+        from juvenal.state import PipelineState
+
+        state_file = str(tmp_path / "state.json")
+        # Create state with phases in wrong order (simulating parallel thread race)
+        state = PipelineState(state_file=Path(state_file))
+        state._ensure_phase("c")
+        state._ensure_phase("a")
+        state._ensure_phase("b")
+        state.save()
+
+        workflow = Workflow(
+            name="test",
+            phases=[
+                Phase(id="a", type="implement", prompt="A."),
+                Phase(id="b", type="implement", prompt="B."),
+                Phase(id="c", type="implement", prompt="C."),
+            ],
+            max_bounces=3,
+        )
+        engine = Engine(workflow, resume=True, state_file=state_file, plain=True)
+        # After _align_state_phases, order should be a, b, c
+        assert list(engine.state.phases.keys()) == ["a", "b", "c"]
+
+    def test_invalidate_from_respects_workflow_order_after_align(self, tmp_path):
+        """invalidate_from works correctly after _align_state_phases fixes ordering."""
+        from juvenal.state import PipelineState
+
+        state_file = str(tmp_path / "state.json")
+        # Create state with phases in wrong order
+        state = PipelineState(state_file=Path(state_file))
+        state._ensure_phase("c")
+        state.mark_completed("c")
+        state._ensure_phase("a")
+        state.mark_completed("a")
+        state._ensure_phase("b")
+        state.mark_completed("b")
+        state.save()
+
+        workflow = Workflow(
+            name="test",
+            phases=[
+                Phase(id="a", type="implement", prompt="A."),
+                Phase(id="b", type="implement", prompt="B."),
+                Phase(id="c", type="implement", prompt="C."),
+            ],
+            parallel_groups=[ParallelGroup(phases=["a", "b", "c"])],
+            max_bounces=3,
+        )
+        engine = Engine(workflow, resume=True, state_file=state_file, plain=True)
+        # Now invalidate from "b" — should invalidate b and c, but not a
+        engine.state.invalidate_from("b")
+        assert engine.state.phases["a"].status == "completed"
+        assert engine.state.phases["b"].status == "pending"
+        assert engine.state.phases["c"].status == "pending"
+
+
 class TestBounceCounter:
     def test_try_increment_within_budget(self):
         bc = BounceCounter(max_bounces=3)

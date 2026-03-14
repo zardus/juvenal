@@ -15,7 +15,7 @@ from juvenal.backends import create_backend
 from juvenal.checkers import NO_VERDICT_REASON, parse_verdict, run_script
 from juvenal.display import Display
 from juvenal.notifications import build_notification_payload, send_webhook
-from juvenal.state import PipelineState
+from juvenal.state import PhaseState, PipelineState
 from juvenal.workflow import ParallelGroup, Phase, Workflow
 
 
@@ -106,6 +106,10 @@ class Engine:
         needs_state = resume or rewind is not None or rewind_to is not None
         self.state = PipelineState.load(sf) if needs_state else PipelineState(state_file=Path(sf))
 
+        # Ensure state phases are ordered to match workflow (fixes invalidate_from
+        # when parallel execution creates entries in non-deterministic order)
+        self._align_state_phases()
+
         # Determine starting phase index
         if rewind_to is not None:
             self._start_idx = self._find_phase_index(rewind_to)
@@ -120,6 +124,9 @@ class Engine:
             self._start_idx = self.state.get_resume_phase_index(self.workflow.phases)
         else:
             self._start_idx = 0
+
+        # If start lands inside a parallel group, snap to group's first phase
+        self._start_idx = self._snap_to_group_start(self._start_idx)
 
     def run(self) -> int:
         """Execute the pipeline. Returns 0 on success, 1 on failure."""
@@ -158,7 +165,7 @@ class Engine:
                                     result.bounce_target, result.failure_context, attempt=target_attempt
                                 )
                             self._bounce_targets.add(result.bounce_target)
-                            phase_idx = self._find_phase_index(result.bounce_target)
+                            phase_idx = self._snap_to_group_start(self._find_phase_index(result.bounce_target))
                             continue
                         if not result.success:
                             raise PipelineExhausted(phase.id)
@@ -193,7 +200,7 @@ class Engine:
                             result.bounce_target, result.failure_context, attempt=target_attempt
                         )
                     self._bounce_targets.add(result.bounce_target)
-                    phase_idx = self._find_phase_index(result.bounce_target)
+                    phase_idx = self._snap_to_group_start(self._find_phase_index(result.bounce_target))
                 else:
                     raise PipelineExhausted(phase.id)
 
@@ -505,12 +512,18 @@ class Engine:
         """Run a legacy flat group of implement phases in parallel."""
         phase_ids = pg.phases
         phases_map = {p.id: p for p in self.workflow.phases}
+
+        # Skip already-completed phases (e.g., on resume after partial completion)
+        incomplete_ids = [pid for pid in phase_ids if not self._is_completed(pid)]
+        if not incomplete_ids:
+            return PhaseResult(success=True)
+
         results: dict[str, PhaseResult] = {}
 
         self.display.set_parallel_mode(True)
         try:
-            with ThreadPoolExecutor(max_workers=len(phase_ids)) as pool:
-                futures = {pool.submit(self._run_implement, phases_map[pid]): pid for pid in phase_ids}
+            with ThreadPoolExecutor(max_workers=len(incomplete_ids)) as pool:
+                futures = {pool.submit(self._run_implement, phases_map[pid]): pid for pid in incomplete_ids}
                 for future in as_completed(futures):
                     pid = futures[future]
                     result = future.result()
@@ -535,12 +548,20 @@ class Engine:
         Returns (result, bounces_consumed). Lanes share a global bounce budget.
         """
         bounce_counter = BounceCounter(self.workflow.max_bounces - bounces_so_far)
+
+        # Filter to lanes that have at least one incomplete phase
+        incomplete_lanes = [lane for lane in pg.lanes if any(not self._is_completed(pid) for pid in lane)]
+        if not incomplete_lanes:
+            return PhaseResult(success=True), 0
+
         self.display.set_parallel_mode(True)
         results: dict[int, PhaseResult] = {}
 
         try:
-            with ThreadPoolExecutor(max_workers=len(pg.lanes)) as pool:
-                futures = {pool.submit(self._run_lane, lane, bounce_counter): i for i, lane in enumerate(pg.lanes)}
+            with ThreadPoolExecutor(max_workers=len(incomplete_lanes)) as pool:
+                futures = {
+                    pool.submit(self._run_lane, lane, bounce_counter): i for i, lane in enumerate(incomplete_lanes)
+                }
                 for future in as_completed(futures):
                     lane_idx = futures[future]
                     results[lane_idx] = future.result()
@@ -558,6 +579,10 @@ class Engine:
         lane_phases = [phases_map[pid] for pid in lane_phase_ids]
         lane_scope = set(lane_phase_ids)
         phase_idx = 0
+
+        # Skip already-completed phases at the start (e.g., on resume)
+        while phase_idx < len(lane_phases) and self._is_completed(lane_phases[phase_idx].id):
+            phase_idx += 1
 
         while phase_idx < len(lane_phases):
             phase = lane_phases[phase_idx]
@@ -601,6 +626,38 @@ class Engine:
             if phase_id in group.all_phase_ids():
                 return group
         return None
+
+    def _is_completed(self, phase_id: str) -> bool:
+        """Check if a phase is already completed in state."""
+        ps = self.state.phases.get(phase_id)
+        return ps is not None and ps.status == "completed"
+
+    def _snap_to_group_start(self, phase_idx: int) -> int:
+        """If phase_idx points inside a parallel group, snap to the group's first phase."""
+        if phase_idx >= len(self.workflow.phases):
+            return phase_idx
+        phase_id = self.workflow.phases[phase_idx].id
+        for group in self.workflow.parallel_groups:
+            if phase_id in group.all_phase_ids() and phase_id != group.first_phase_id():
+                return self._find_phase_index(group.first_phase_id())
+        return phase_idx
+
+    def _align_state_phases(self) -> None:
+        """Ensure state phases exist for all workflow phases in workflow order.
+
+        Fixes invalidate_from() when parallel execution creates dict entries
+        in non-deterministic order.
+        """
+        ordered: dict[str, PhaseState] = {}
+        for phase in self.workflow.phases:
+            if phase.id in self.state.phases:
+                ordered[phase.id] = self.state.phases[phase.id]
+            else:
+                ordered[phase.id] = PhaseState(phase_id=phase.id)
+        for pid, ps in self.state.phases.items():
+            if pid not in ordered:
+                ordered[pid] = ps
+        self.state.phases = ordered
 
     def _find_phase_index(self, phase_id: str) -> int:
         """Find the index of a phase by ID."""
