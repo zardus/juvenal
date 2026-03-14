@@ -305,9 +305,9 @@ juvenal run <workflow> [--resume] [--rewind N] [--rewind-to PHASE_ID] [--phase X
                        [--max-bounces N] [--backend claude|codex] [--dry-run]
                        [--backoff SECONDS] [--notify URL] [--working-dir DIR]
                        [--state-file PATH] [--checker SPEC] [--implementer ROLE]
-                       [--clear-context-on-bounce] [-D VAR=VAL]
+                       [--clear-context-on-bounce] [-D VAR=VAL] [--serialize]
 juvenal plan "goal" [-o output.yaml] [--backend claude|codex]
-juvenal do "goal" [--backend claude|codex] [--max-bounces N]
+juvenal do "goal" [--backend claude|codex] [--max-bounces N] [-D VAR=VAL] [--serialize]
 juvenal status [--state-file path]
 juvenal init [directory] [--template name]
 juvenal validate <workflow>
@@ -328,6 +328,7 @@ juvenal validate <workflow>
 | `-D VAR=VAL` | Set template variable for `{{VAR}}` substitution. Repeatable. |
 | `--backoff SECONDS` | Exponential backoff base delay between bounces |
 | `--notify URL` | Webhook URL for completion/failure notifications. Repeatable. |
+| `--serialize` | Disable all parallelization (run everything sequentially) |
 
 ### Resume & Rewind
 

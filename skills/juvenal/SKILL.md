@@ -110,16 +110,28 @@ juvenal run task.md
 | `implement` | Agent executes a prompt to build/modify code (default) |
 | `check` | Separate agent verifies work, emits `VERDICT: PASS` or `VERDICT: FAIL: reason` |
 | `script` | Shell command; exit 0 = pass, nonzero = fail |
-| `workflow` | Dynamic sub-workflow: plans and executes a sub-pipeline from the prompt |
+| `workflow` | Sub-workflow: dynamic (from prompt) or static (from file/dir) |
 
 ### Workflow Phases
 
 ```yaml
+# Dynamic: LLM plans the sub-workflow from the prompt
 - id: dynamic-feature
   type: workflow
   prompt: "Build a REST API with authentication and tests."
   max_depth: 2  # recursion depth limit (default: 3)
+
+# Static: execute an existing workflow YAML or directory
+- id: auth-module
+  type: workflow
+  workflow_file: auth/workflow.yaml
+
+- id: frontend
+  type: workflow
+  workflow_dir: frontend/
 ```
+
+Static sub-workflows skip the LLM planning step. Paths resolve relative to the declaring YAML file. Parent workflow `vars` propagate to sub-workflows. `workflow_file` and `workflow_dir` are mutually exclusive with each other.
 
 ## Inline Checkers Shorthand
 
@@ -211,6 +223,7 @@ juvenal run workflow.yaml -D ENV=prod -D PROJECT=api
 - YAML `vars:` sets defaults; CLI `-D` overrides them
 - Included workflows' vars merge (included = base, including = override)
 - Unrecognized `{{VAR}}` passes through unchanged (safe for prompts containing literal `{{`)
+- Multi-value: `-D T=a -D T=b` duplicates phases using `{{T}}` into parallel lanes (with checkers grouped)
 - `--dry-run` shows active variables
 
 ## CLI Commands
@@ -220,9 +233,9 @@ juvenal run <workflow> [--resume] [--rewind N] [--rewind-to PHASE_ID] [--phase X
                        [--max-bounces N] [--backend claude|codex] [--dry-run]
                        [--backoff SECONDS] [--notify URL] [--working-dir DIR]
                        [--state-file PATH] [--checker SPEC] [--implementer ROLE]
-                       [--clear-context-on-bounce] [-D VAR=VAL]
+                       [--clear-context-on-bounce] [-D VAR=VAL] [--serialize]
 juvenal plan "goal" [-o output.yaml] [--backend claude|codex]
-juvenal do "goal" [--backend claude|codex] [--max-bounces N] [-D VAR=VAL]
+juvenal do "goal" [--backend claude|codex] [--max-bounces N] [-D VAR=VAL] [--serialize]
 juvenal status [--state-file path]
 juvenal init [directory] [--template name]
 juvenal validate <workflow>
@@ -233,7 +246,8 @@ juvenal validate <workflow>
 - **`--checker SPEC`**: Inject a checker on every implement phase. SPEC is a role name (`tester`), `run:CMD`, or `prompt:TEXT`. Repeatable.
 - **`--implementer ROLE`**: Prepend an implementer role prompt to every implement phase (e.g., `software-engineer`).
 - **`--clear-context-on-bounce`**: Start a fresh agent session on bounce instead of resuming (default: resume session, preserving conversation context).
-- **`-D VAR=VAL`**: Set a template variable. Use `{{VAR}}` in prompts/scripts. Repeatable. Overrides `vars:` defaults in YAML.
+- **`-D VAR=VAL`**: Set a template variable. Use `{{VAR}}` in prompts/scripts. Repeatable. Overrides `vars:` defaults in YAML. Multiple values for the same key (`-D T=a -D T=b`) duplicate phases into parallel lanes.
+- **`--serialize`**: Disable all parallelization (run parallel groups and lanes sequentially).
 - **`--backoff SECONDS`**: Exponential backoff between bounces (base delay, doubles each bounce, capped at `--max-backoff` or workflow's `max_backoff`).
 - **`--notify URL`**: Webhook URL for JSON notifications on completion/failure. Repeatable.
 - **`--dry-run`**: Print execution plan, validation, and phase summary without running.

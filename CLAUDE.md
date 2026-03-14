@@ -37,7 +37,7 @@ The system uses a **non-agentic, deterministic execution loop**. All control flo
 | `state.py` | Atomic JSON state persistence (`PipelineState`). Thread-safe (RLock). Writes to `.tmp`, fsyncs, then atomic renames. Supports resume, rewind, and scoped invalidation (for lane bounces). |
 | `checkers.py` | Verdict parsing (`VERDICT: PASS` / `VERDICT: FAIL: reason`) and script execution with timeouts. |
 | `display.py` | Rich TUI with rolling 15-line buffer. Thread-safe (Lock). Falls back to plain text with `--plain` or parallel mode. |
-| `cli.py` | CLI entry point. Commands: `run`, `plan`, `do`, `status`, `init`, `validate`. Run flags: `--resume`, `--rewind N`, `--rewind-to PHASE_ID`, `--phase`, `--backoff`, `--notify`, `-D VAR=VAL`. `status` exits 0 if pipeline fully completed, 1 otherwise. |
+| `cli.py` | CLI entry point. Commands: `run`, `plan`, `do`, `status`, `init`, `validate`. Run flags: `--resume`, `--rewind N`, `--rewind-to PHASE_ID`, `--phase`, `--backoff`, `--notify`, `-D VAR=VAL`, `--serialize`. `status` exits 0 if pipeline fully completed, 1 otherwise. |
 | `notifications.py` | Webhook notification support (`build_notification_payload`, `send_webhook`). |
 
 ### Execution Flow
@@ -54,6 +54,7 @@ The system uses a **non-agentic, deterministic execution loop**. All control flo
 - **implement** — agent executes a prompt to build/modify code
 - **check** — separate agent verifies work, emits `VERDICT: PASS` or `VERDICT: FAIL: reason`
 - **script** — shell command; exit 0 = pass, nonzero = fail (bounces back to phase's `bounce_target` or most recent implement phase)
+- **workflow** — sub-workflow: dynamic (LLM plans from `prompt`) or static (`workflow_file` / `workflow_dir`). Recursion depth capped by `max_depth`. Parent vars propagate to sub-workflows.
 
 ### Template Variables
 
@@ -63,6 +64,8 @@ Prompts and script `run` commands support `{{VAR}}` placeholders. Variables are 
 - **Includes** — included workflow vars are base defaults; including workflow overrides
 
 Unrecognized `{{VAR}}` placeholders pass through unchanged. Applied at render time via `apply_vars()` in `workflow.py`.
+
+Multi-value `-D VAR=VAL1 -D VAR=VAL2` duplicates phases referencing `{{VAR}}` into parallel lanes (cartesian product for multiple vars). `expand_multi_vars()` in `workflow.py` handles this.
 
 ## Code Conventions
 
