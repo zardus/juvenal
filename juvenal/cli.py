@@ -224,13 +224,13 @@ def cmd_validate(args: argparse.Namespace) -> int:
     return 0
 
 
-def main(argv: list[str] | None = None) -> int:
+def main(argv: list[str] | None = None) -> None:
     parser = build_parser()
     args = parser.parse_args(argv)
 
     if not args.command:
         parser.print_help()
-        return 1
+        sys.exit(1)
 
     handlers = {
         "run": cmd_run,
@@ -240,7 +240,7 @@ def main(argv: list[str] | None = None) -> int:
         "init": cmd_init,
         "validate": cmd_validate,
     }
-    return handlers[args.command](args)
+    sys.exit(handlers[args.command](args))
 
 
 if __name__ == "__main__":
