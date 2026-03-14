@@ -192,10 +192,32 @@ def _load_yaml_with_includes(path: Path, seen: set[str]) -> Workflow:
         included_parallel_groups.extend(included_wf.parallel_groups)
         included_vars.update(included_wf.vars)
 
+    _VALID_PHASE_KEYS = {
+        "id",
+        "type",
+        "prompt",
+        "prompt_file",
+        "run",
+        "role",
+        "bounce_target",
+        "bounce_targets",
+        "timeout",
+        "env",
+        "max_depth",
+        "checks",
+        "workflow_file",
+        "workflow_dir",
+    }
+
     phases = list(included_phases)
     for i, phase_data in enumerate(data.get("phases", [])):
         if "id" not in phase_data:
             raise ValueError(f"Phase {i} in {path}: missing required 'id' field")
+        unknown = set(phase_data.keys()) - _VALID_PHASE_KEYS
+        if unknown:
+            import warnings
+
+            warnings.warn(f"Phase '{phase_data['id']}': unknown keys {unknown} (typo?)", stacklevel=2)
         prompt = phase_data.get("prompt", "")
         if not prompt and phase_data.get("prompt_file"):
             prompt_path = path.parent / phase_data["prompt_file"]
@@ -230,8 +252,8 @@ def _load_yaml_with_includes(path: Path, seen: set[str]) -> Workflow:
         )
         phases.append(phase)
 
-        if "checkers" in phase_data:
-            phases.extend(_expand_checkers(phase.id, phase_data["checkers"], path.parent))
+        if "checks" in phase_data:
+            phases.extend(_expand_checkers(phase.id, phase_data["checks"], path.parent))
 
     parallel_groups = list(included_parallel_groups)
     for pg in data.get("parallel_groups", []):

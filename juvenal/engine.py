@@ -897,11 +897,13 @@ class Engine:
 
         if self.workflow.parallel_groups:
             print("Parallel groups:")
-            for group in self.workflow.parallel_groups:
+            for gi, group in enumerate(self.workflow.parallel_groups):
                 if group.is_lane_group():
-                    print(f"  lanes: {group.lanes}")
+                    print(f"  Group {gi + 1} ({len(group.lanes)} lanes):")
+                    for li, lane in enumerate(group.lanes):
+                        print(f"    Lane {li + 1}: {' → '.join(lane)}")
                 else:
-                    print(f"  {group.phases}")
+                    print(f"  Group {gi + 1} (flat): {', '.join(group.phases)}")
         return 1 if has_errors else 0
 
 

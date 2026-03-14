@@ -352,7 +352,7 @@ name: test
 phases:
   - id: build
     prompt: "Build it."
-    checkers:
+    checks:
       - role: tester
 """
         yaml_path = tmp_path / "workflow.yaml"
@@ -370,7 +370,7 @@ name: test
 phases:
   - id: build
     prompt: "Build it."
-    checkers:
+    checks:
       - prompt: "Verify REST endpoints work."
 """
         yaml_path = tmp_path / "workflow.yaml"
@@ -388,7 +388,7 @@ name: test
 phases:
   - id: build
     prompt: "Build it."
-    checkers:
+    checks:
       - run: "pytest tests/ -x"
 """
         yaml_path = tmp_path / "workflow.yaml"
@@ -406,7 +406,7 @@ name: test
 phases:
   - id: build
     prompt: "Build it."
-    checkers:
+    checks:
       - tester
 """
         yaml_path = tmp_path / "workflow.yaml"
@@ -424,7 +424,7 @@ name: test
 phases:
   - id: build-feature
     prompt: "Build the thing."
-    checkers:
+    checks:
       - role: tester
       - prompt: "Verify REST endpoints."
       - run: "pytest tests/ -x"
@@ -450,7 +450,7 @@ name: test
 phases:
   - id: build
     prompt: "Build it."
-    checkers:
+    checks:
       - role: tester
       - run: "make test"
       - prompt: "Check it."
@@ -468,7 +468,7 @@ name: test
 phases:
   - id: build
     prompt: "Build it."
-    checkers:
+    checks:
       - role: tester
         timeout: 120
         env:
@@ -493,7 +493,7 @@ name: test
 phases:
   - id: build
     prompt: "Build it."
-    checkers:
+    checks:
       - nonexistent-role
 """
         yaml_path = tmp_path / "workflow.yaml"
@@ -508,7 +508,7 @@ name: test
 phases:
   - id: build
     prompt: "Build it."
-    checkers:
+    checks:
       - role: bogus
 """
         yaml_path = tmp_path / "workflow.yaml"
@@ -523,7 +523,7 @@ name: test
 phases:
   - id: build
     prompt: "Build it."
-    checkers:
+    checks:
       - foo: bar
 """
         yaml_path = tmp_path / "workflow.yaml"
@@ -539,7 +539,7 @@ name: test
 phases:
   - id: build
     prompt: "Build it."
-    checkers:
+    checks:
       - prompt_file: check.md
 """
         yaml_path = tmp_path / "workflow.yaml"

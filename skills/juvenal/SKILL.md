@@ -18,7 +18,7 @@ You are helping the user create and manage Juvenal workflows. Juvenal orchestrat
 
 Juvenal is a framework where a non-agentic Python script orchestrates AI coding agents (Claude or Codex) through verified phases. Each phase has:
 1. An **implementation prompt** — tells the agent what to build
-2. One or more **checkers** — verify the work (scripts, agent reviewers, or both)
+2. One or more **checks** — verify the work (scripts, agent reviewers, or both)
 
 The key insight: the implementing agent and the checking agent are separate, so the implementer can't cheat by weakening tests.
 
@@ -48,7 +48,7 @@ phases:
     timeout: 300  # seconds
     env:
       NODE_ENV: development
-    checkers:
+    checks:
       - run: "pytest tests/ -x"  # script checker (exit 0 = pass)
       - tester                    # built-in role shorthand
       - role: senior-engineer     # role as dict
@@ -57,7 +57,7 @@ phases:
   - id: implement
     prompt_file: phases/implement/prompt.md
     bounce_target: setup  # on failure, bounce back to setup
-    checkers:
+    checks:
       - run: "make test"
       - role: senior-engineer
 
@@ -133,9 +133,9 @@ juvenal run task.md
 
 Static sub-workflows skip the LLM planning step. Paths resolve relative to the declaring YAML file. Parent workflow `vars` propagate to sub-workflows. `workflow_file` and `workflow_dir` are mutually exclusive with each other.
 
-## Inline Checkers Shorthand
+## Inline Checks
 
-Checkers are defined inline on implement phases. Each entry can be:
+Checks are defined inline on implement phases. Each entry can be:
 
 - **Bare string** — built-in role shorthand: `tester`, `architect`, `pm`, `senior-tester`, `senior-engineer`
 - **`run: CMD`** — script checker (exit 0 = pass)
@@ -143,7 +143,7 @@ Checkers are defined inline on implement phases. Each entry can be:
 - **`prompt: TEXT`** — agent checker with inline prompt
 - **`prompt_file: PATH`** — agent checker with prompt from file
 
-Checkers can also carry `timeout` and `env`.
+Checks can also carry `timeout` and `env`.
 
 ## Bounce Targets
 
@@ -211,7 +211,7 @@ vars:
 phases:
   - id: deploy
     prompt: "Deploy {{PROJECT}} to {{ENV}}."
-    checkers:
+    checks:
       - run: "curl -f https://{{ENV}}.example.com/health"
 ```
 
@@ -223,7 +223,7 @@ juvenal run workflow.yaml -D ENV=prod -D PROJECT=api
 - YAML `vars:` sets defaults; CLI `-D` overrides them
 - Included workflows' vars merge (included = base, including = override)
 - Unrecognized `{{VAR}}` passes through unchanged (safe for prompts containing literal `{{`)
-- Multi-value: `-D T=a -D T=b` duplicates phases using `{{T}}` into parallel lanes (with checkers grouped)
+- Multi-value: `-D T=a -D T=b` duplicates phases using `{{T}}` into parallel lanes (with checks grouped)
 - `--dry-run` shows active variables
 
 ## CLI Commands
@@ -294,4 +294,4 @@ When the user invokes `/juvenal`, help them by:
 3. If they ask about canned workflows (e.g. "research paper"), explain the workflow and help them set it up
 4. If they need help, explain the workflow format
 
-Always create workflows that are specific, testable, and have meaningful checkers.
+Always create workflows that are specific, testable, and have meaningful checks.

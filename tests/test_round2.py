@@ -283,18 +283,17 @@ class TestExponentialBackoff:
                 Phase(id="setup-check", type="script", run="false"),
             ],
             max_bounces=2,
-            backoff=0.01,  # Very small for testing
-            max_backoff=0.1,
+            backoff=1.0,
+            max_backoff=10.0,
         )
         engine = Engine(workflow, state_file=str(tmp_path / "state.json"), plain=True)
         engine.backend = backend
 
         with patch("juvenal.engine.time.sleep") as mock_sleep:
             engine.run()
-            # Should have called sleep at least once for the bounce
-            assert mock_sleep.call_count >= 1
-            # First bounce: delay = 0.01 * 2^0 = 0.01
-            assert mock_sleep.call_args_list[0][0][0] == pytest.approx(0.01, abs=0.001)
+            delays = [call[0][0] for call in mock_sleep.call_args_list if call[0][0] >= 0.5]
+            assert len(delays) >= 1
+            assert delays[0] == pytest.approx(1.0)
 
     def test_backoff_exponential_growth(self, tmp_path):
         """Backoff delay grows exponentially: base * 2^(n-1)."""
@@ -323,7 +322,8 @@ class TestExponentialBackoff:
 
         with patch("juvenal.engine.time.sleep") as mock_sleep:
             engine.run()
-            delays = [call[0][0] for call in mock_sleep.call_args_list]
+            # Filter for backoff-sized sleeps (>= 0.5s), ignoring tiny spinner sleeps
+            delays = [call[0][0] for call in mock_sleep.call_args_list if call[0][0] >= 0.5]
             # bounce 1: 1.0 * 2^0 = 1.0
             # bounce 2: 1.0 * 2^1 = 2.0
             # bounce 3: 1.0 * 2^2 = 4.0
@@ -720,10 +720,10 @@ class TestEnhancedDryRun:
         engine.run()
         captured = capsys.readouterr()
         assert "Parallel groups:" in captured.out
-        assert "['a', 'b']" in captured.out
+        assert "Group 1 (flat): a, b" in captured.out
 
     def test_dry_run_shows_lane_groups(self, tmp_path, capsys):
-        """Dry-run shows lane groups with 'lanes:' prefix."""
+        """Dry-run shows lane groups with lanes."""
         workflow = Workflow(
             name="test",
             phases=[
@@ -738,7 +738,8 @@ class TestEnhancedDryRun:
         engine.run()
         captured = capsys.readouterr()
         assert "Parallel groups:" in captured.out
-        assert "lanes:" in captured.out
+        assert "Lane 1: a" in captured.out
+        assert "Lane 2: b" in captured.out
 
 
 class TestLaneGroupYAML:
