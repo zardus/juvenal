@@ -38,6 +38,9 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Resume agent session when bouncing back (preserves conversation context)",
     )
+    run_p.add_argument(
+        "-D", action="append", default=[], metavar="VAR=VAL", dest="defines", help="Set template variable"
+    )
 
     # plan
     plan_p = sub.add_parser("plan", help="Generate a workflow from a goal description")
@@ -59,6 +62,9 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Resume agent session when bouncing back (preserves conversation context)",
     )
+    do_p.add_argument(
+        "-D", action="append", default=[], metavar="VAR=VAL", dest="defines", help="Set template variable"
+    )
 
     # status
     status_p = sub.add_parser("status", help="Show workflow progress")
@@ -76,11 +82,25 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _parse_defines(defines: list[str]) -> dict[str, str]:
+    """Parse -D VAR=VAL arguments into a dict."""
+    result: dict[str, str] = {}
+    for d in defines:
+        if "=" not in d:
+            print(f"Error: invalid -D value {d!r}: must be VAR=VAL")
+            sys.exit(1)
+        key, val = d.split("=", 1)
+        result[key] = val
+    return result
+
+
 def cmd_run(args: argparse.Namespace) -> int:
     from juvenal.engine import Engine
     from juvenal.workflow import inject_checkers, inject_implementer, load_workflow, validate_workflow
 
     workflow = load_workflow(args.workflow)
+    if args.defines:
+        workflow.vars.update(_parse_defines(args.defines))
     if args.implementer:
         workflow = inject_implementer(workflow, args.implementer)
     if args.checker:
@@ -177,6 +197,8 @@ def cmd_do(args: argparse.Namespace) -> int:
         plan_workflow(args.goal, f.name, args.backend, plain=args.plain)
         workflow = load_workflow(f.name)
 
+    if args.defines:
+        workflow.vars.update(_parse_defines(args.defines))
     if args.implementer:
         workflow = inject_implementer(workflow, args.implementer)
     if args.checker:

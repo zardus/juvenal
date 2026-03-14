@@ -2,11 +2,24 @@
 
 from __future__ import annotations
 
+import re
 import shutil
 from dataclasses import dataclass, field
 from pathlib import Path
 
 import yaml
+
+_VAR_RE = re.compile(r"\{\{(\w+)\}\}")
+
+
+def apply_vars(text: str, vars: dict[str, str]) -> str:
+    """Replace {{VAR}} placeholders with values from vars dict.
+
+    Unrecognized variables pass through unchanged.
+    """
+    if not vars:
+        return text
+    return _VAR_RE.sub(lambda m: vars.get(m.group(1), m.group(0)), text)
 
 
 @dataclass
@@ -31,9 +44,11 @@ class Phase:
     env: dict[str, str] = field(default_factory=dict)  # environment variables for the phase
     max_depth: int | None = None  # recursion depth limit for workflow phases
 
-    def render_prompt(self, failure_context: str = "") -> str:
+    def render_prompt(self, failure_context: str = "", vars: dict[str, str] | None = None) -> str:
         """Render the implementation prompt, injecting failure context on retry."""
         text = self.prompt
+        if vars:
+            text = apply_vars(text, vars)
         if failure_context:
             text += (
                 "\n\nIMPORTANT: A previous attempt failed verification.\n"
@@ -42,10 +57,13 @@ class Phase:
             )
         return text
 
-    def render_check_prompt(self) -> str:
+    def render_check_prompt(self, vars: dict[str, str] | None = None) -> str:
         """Render the checker prompt for check phases."""
         if self.prompt:
-            return self.prompt
+            text = self.prompt
+            if vars:
+                text = apply_vars(text, vars)
+            return text
         if self.role:
             return _load_role_prompt(self.role)
         return ""
@@ -99,6 +117,7 @@ class Workflow:
     backoff: float = 0.0  # base backoff delay in seconds between bounces (0 = no backoff)
     max_backoff: float = 60.0  # maximum backoff delay cap in seconds
     notify: list[str] = field(default_factory=list)  # webhook URLs for completion/failure notifications
+    vars: dict[str, str] = field(default_factory=dict)  # template variables for {{VAR}} substitution
 
 
 def load_workflow(path: str | Path) -> Workflow:
@@ -160,6 +179,7 @@ def _load_yaml_with_includes(path: Path, seen: set[str]) -> Workflow:
     # Resolve includes first — insert included phases before this workflow's phases
     included_phases: list[Phase] = []
     included_parallel_groups: list[ParallelGroup] = []
+    included_vars: dict[str, str] = {}
     for include_path_str in data.get("include", []):
         include_path = path.parent / include_path_str
         if not include_path.exists():
@@ -167,6 +187,7 @@ def _load_yaml_with_includes(path: Path, seen: set[str]) -> Workflow:
         included_wf = _load_yaml_with_includes(include_path, seen)
         included_phases.extend(included_wf.phases)
         included_parallel_groups.extend(included_wf.parallel_groups)
+        included_vars.update(included_wf.vars)
 
     phases = list(included_phases)
     for phase_data in data.get("phases", []):
@@ -202,6 +223,10 @@ def _load_yaml_with_includes(path: Path, seen: set[str]) -> Workflow:
         else:
             parallel_groups.append(ParallelGroup(phases=pg.get("phases", [])))
 
+    # Merge vars: included defaults, then this workflow's vars override
+    merged_vars = dict(included_vars)
+    merged_vars.update(data.get("vars", {}))
+
     return Workflow(
         name=data.get("name", path.stem),
         phases=phases,
@@ -212,6 +237,7 @@ def _load_yaml_with_includes(path: Path, seen: set[str]) -> Workflow:
         backoff=float(data.get("backoff", 0)),
         max_backoff=float(data.get("max_backoff", 60)),
         notify=data.get("notify", []),
+        vars=merged_vars,
     )
 
 
@@ -272,6 +298,7 @@ def _load_directory(root: Path, phases_dir: Path) -> Workflow:
         working_dir=overrides.get("working_dir", "."),
         max_bounces=overrides.get("max_bounces", overrides.get("max_retries", 999)),
         parallel_groups=parallel_groups + override_groups,
+        vars=overrides.get("vars", {}),
     )
 
 
@@ -622,6 +649,7 @@ def inject_checkers(workflow: Workflow, checker_specs: list[str]) -> Workflow:
         backoff=workflow.backoff,
         max_backoff=workflow.max_backoff,
         notify=list(workflow.notify),
+        vars=dict(workflow.vars),
     )
 
 
@@ -671,6 +699,7 @@ def inject_implementer(workflow: Workflow, role: str) -> Workflow:
         backoff=workflow.backoff,
         max_backoff=workflow.max_backoff,
         notify=list(workflow.notify),
+        vars=dict(workflow.vars),
     )
 
 

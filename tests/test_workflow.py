@@ -2,7 +2,15 @@
 
 import pytest
 
-from juvenal.workflow import Phase, Workflow, inject_checkers, inject_implementer, load_workflow, parse_checker_string
+from juvenal.workflow import (
+    Phase,
+    Workflow,
+    apply_vars,
+    inject_checkers,
+    inject_implementer,
+    load_workflow,
+    parse_checker_string,
+)
 
 
 class TestYAMLLoading:
@@ -946,3 +954,124 @@ class TestDirectoryParallelLanes:
         pg = wf.parallel_groups[0]
         # Two check files sorted alphabetically
         assert pg.lanes == [["a", "a~check-1", "a~check-2"]]
+
+
+class TestTemplateVars:
+    def test_apply_vars_basic(self):
+        assert apply_vars("Hello {{NAME}}", {"NAME": "world"}) == "Hello world"
+
+    def test_apply_vars_multiple(self):
+        result = apply_vars("{{A}} and {{B}}", {"A": "foo", "B": "bar"})
+        assert result == "foo and bar"
+
+    def test_apply_vars_unrecognized_passthrough(self):
+        assert apply_vars("Hello {{UNKNOWN}}", {"NAME": "world"}) == "Hello {{UNKNOWN}}"
+
+    def test_apply_vars_empty_dict(self):
+        assert apply_vars("Hello {{NAME}}", {}) == "Hello {{NAME}}"
+
+    def test_apply_vars_no_placeholders(self):
+        assert apply_vars("no vars here", {"NAME": "world"}) == "no vars here"
+
+    def test_render_prompt_with_vars(self):
+        phase = Phase(id="build", prompt="Build {{PROJECT}} in {{LANG}}.")
+        result = phase.render_prompt(vars={"PROJECT": "myapp", "LANG": "Python"})
+        assert result == "Build myapp in Python."
+
+    def test_render_prompt_vars_with_failure_context(self):
+        phase = Phase(id="build", prompt="Build {{PROJECT}}.")
+        result = phase.render_prompt(failure_context="tests failed", vars={"PROJECT": "myapp"})
+        assert "Build myapp." in result
+        assert "tests failed" in result
+
+    def test_render_check_prompt_with_vars(self):
+        phase = Phase(id="check", type="check", prompt="Verify {{COMPONENT}}.")
+        result = phase.render_check_prompt(vars={"COMPONENT": "auth"})
+        assert result == "Verify auth."
+
+    def test_render_prompt_none_vars(self):
+        phase = Phase(id="build", prompt="Build {{PROJECT}}.")
+        result = phase.render_prompt(vars=None)
+        assert result == "Build {{PROJECT}}."
+
+    def test_yaml_loads_vars(self, tmp_path):
+        yaml_content = """\
+name: test
+vars:
+  ENV: staging
+  REGION: us-east-1
+phases:
+  - id: deploy
+    prompt: "Deploy to {{ENV}} in {{REGION}}."
+"""
+        (tmp_path / "workflow.yaml").write_text(yaml_content)
+        wf = load_workflow(tmp_path / "workflow.yaml")
+        assert wf.vars == {"ENV": "staging", "REGION": "us-east-1"}
+
+    def test_yaml_vars_default_empty(self, tmp_path):
+        yaml_content = """\
+name: test
+phases:
+  - id: build
+    prompt: "Build it."
+"""
+        (tmp_path / "workflow.yaml").write_text(yaml_content)
+        wf = load_workflow(tmp_path / "workflow.yaml")
+        assert wf.vars == {}
+
+    def test_inject_checkers_preserves_vars(self):
+        wf = Workflow(
+            name="test",
+            phases=[Phase(id="build", type="implement", prompt="Build it.")],
+            vars={"ENV": "prod"},
+        )
+        result = inject_checkers(wf, ["tester"])
+        assert result.vars == {"ENV": "prod"}
+
+    def test_inject_implementer_preserves_vars(self):
+        wf = Workflow(
+            name="test",
+            phases=[Phase(id="build", type="implement", prompt="Build it.")],
+            vars={"ENV": "prod"},
+        )
+        result = inject_implementer(wf, "software-engineer")
+        assert result.vars == {"ENV": "prod"}
+
+    def test_yaml_includes_merge_vars(self, tmp_path):
+        """Included workflow vars are defaults; including workflow overrides."""
+        (tmp_path / "base.yaml").write_text("""\
+name: base
+vars:
+  A: from-base
+  B: from-base
+phases:
+  - id: base-phase
+    prompt: "Base."
+""")
+        (tmp_path / "main.yaml").write_text("""\
+name: main
+include:
+  - base.yaml
+vars:
+  B: overridden
+  C: from-main
+phases:
+  - id: main-phase
+    prompt: "Main."
+""")
+        wf = load_workflow(tmp_path / "main.yaml")
+        assert wf.vars == {"A": "from-base", "B": "overridden", "C": "from-main"}
+
+    def test_directory_convention_loads_vars(self, tmp_path):
+        """Directory convention picks up vars from workflow.yaml overrides."""
+        phases_dir = tmp_path / "phases"
+        phases_dir.mkdir()
+        p1 = phases_dir / "01-build"
+        p1.mkdir()
+        (p1 / "prompt.md").write_text("Build {{PROJECT}}.")
+        (tmp_path / "workflow.yaml").write_text("""\
+vars:
+  PROJECT: myapp
+""")
+        wf = load_workflow(tmp_path)
+        assert wf.vars == {"PROJECT": "myapp"}

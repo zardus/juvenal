@@ -187,6 +187,31 @@ class TestArgumentParsing:
         args = parser.parse_args(["do", "build a thing", "--preserve-context-on-bounce"])
         assert args.preserve_context_on_bounce is True
 
+    def test_run_defines_single(self):
+        parser = build_parser()
+        args = parser.parse_args(["run", "workflow.yaml", "-D", "ENV=prod"])
+        assert args.defines == ["ENV=prod"]
+
+    def test_run_defines_multiple(self):
+        parser = build_parser()
+        args = parser.parse_args(["run", "workflow.yaml", "-D", "ENV=prod", "-D", "REGION=us-east-1"])
+        assert args.defines == ["ENV=prod", "REGION=us-east-1"]
+
+    def test_run_defines_default_empty(self):
+        parser = build_parser()
+        args = parser.parse_args(["run", "workflow.yaml"])
+        assert args.defines == []
+
+    def test_run_defines_with_equals_in_value(self):
+        parser = build_parser()
+        args = parser.parse_args(["run", "workflow.yaml", "-D", "CMD=a=b=c"])
+        assert args.defines == ["CMD=a=b=c"]
+
+    def test_do_defines(self):
+        parser = build_parser()
+        args = parser.parse_args(["do", "build a thing", "-D", "ENV=prod"])
+        assert args.defines == ["ENV=prod"]
+
     def test_no_command(self):
         parser = build_parser()
         args = parser.parse_args([])

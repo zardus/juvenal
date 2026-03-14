@@ -35,6 +35,9 @@ backoff: 2.0      # exponential backoff between bounces (seconds)
 max_backoff: 60.0 # cap on backoff delay
 notify:
   - https://example.com/webhook  # webhook on completion/failure
+vars:                             # template variable defaults
+  ENV: staging
+  TEST_DIR: tests/
 
 include:
   - shared-phases.yaml  # merge phases from other workflows
@@ -191,9 +194,9 @@ juvenal run <workflow> [--resume] [--rewind N] [--rewind-to PHASE_ID] [--phase X
                        [--max-bounces N] [--backend claude|codex] [--dry-run]
                        [--backoff SECONDS] [--notify URL] [--working-dir DIR]
                        [--state-file PATH] [--checker SPEC] [--implementer ROLE]
-                       [--preserve-context-on-bounce]
+                       [--preserve-context-on-bounce] [-D VAR=VAL]
 juvenal plan "goal" [-o output.yaml] [--backend claude|codex]
-juvenal do "goal" [--backend claude|codex] [--max-bounces N]
+juvenal do "goal" [--backend claude|codex] [--max-bounces N] [-D VAR=VAL]
 juvenal status [--state-file path]
 juvenal init [directory] [--template name]
 juvenal validate <workflow>
@@ -204,6 +207,7 @@ juvenal validate <workflow>
 - **`--checker SPEC`**: Inject a checker on every implement phase. SPEC is a role name (`tester`), `run:CMD`, or `prompt:TEXT`. Repeatable.
 - **`--implementer ROLE`**: Prepend an implementer role prompt to every implement phase (e.g., `software-engineer`).
 - **`--preserve-context-on-bounce`**: Resume the agent's session on bounce instead of starting fresh — preserves conversation context.
+- **`-D VAR=VAL`**: Set a template variable. Use `{{VAR}}` in prompts/scripts. Repeatable. Overrides `vars:` defaults in YAML.
 - **`--backoff SECONDS`**: Exponential backoff between bounces (base delay, doubles each bounce, capped at `--max-backoff` or workflow's `max_backoff`).
 - **`--notify URL`**: Webhook URL for JSON notifications on completion/failure. Repeatable.
 - **`--dry-run`**: Print execution plan, validation, and phase summary without running.

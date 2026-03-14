@@ -1819,3 +1819,81 @@ class TestBounceCounter:
         bc = BounceCounter(max_bounces=0)
         assert not bc.try_increment()
         assert bc.count == 0
+
+
+class TestTemplateVarsEngine:
+    def test_vars_substituted_in_implement_prompt(self, mock_backend, tmp_path):
+        """Vars are substituted in implement phase prompts sent to the backend."""
+        mock_backend.add_response(exit_code=0, output="done")
+        workflow = Workflow(
+            name="test",
+            phases=[Phase(id="build", type="implement", prompt="Deploy to {{ENV}} in {{REGION}}.")],
+            vars={"ENV": "prod", "REGION": "us-west-2"},
+        )
+        engine = Engine(workflow, state_file=str(tmp_path / "state.json"), plain=True)
+        engine.backend = mock_backend
+        engine.run()
+        assert "Deploy to prod in us-west-2." in mock_backend.calls[0]
+
+    def test_vars_substituted_in_check_prompt(self, mock_backend, tmp_path):
+        """Vars are substituted in check phase prompts."""
+        mock_backend.add_response(exit_code=0, output="done")
+        mock_backend.add_response(exit_code=0, output="VERDICT: PASS")
+        workflow = Workflow(
+            name="test",
+            phases=[
+                Phase(id="build", type="implement", prompt="Build {{APP}}."),
+                Phase(id="review", type="check", prompt="Verify {{APP}} works.", bounce_target="build"),
+            ],
+            vars={"APP": "myservice"},
+        )
+        engine = Engine(workflow, state_file=str(tmp_path / "state.json"), plain=True)
+        engine.backend = mock_backend
+        engine.run()
+        # Check phase prompt should contain the substituted var
+        assert "Verify myservice works." in mock_backend.calls[1]
+
+    def test_vars_substituted_in_script_run(self, mock_backend, tmp_path):
+        """Vars are substituted in script phase run commands."""
+        mock_backend.add_response(exit_code=0, output="done")
+        workflow = Workflow(
+            name="test",
+            phases=[
+                Phase(id="build", type="implement", prompt="Build it."),
+                Phase(id="test", type="script", run="pytest {{TEST_DIR}} -x", bounce_target="build"),
+            ],
+            vars={"TEST_DIR": "tests/unit"},
+        )
+        engine = Engine(workflow, state_file=str(tmp_path / "state.json"), plain=True)
+        engine.backend = mock_backend
+        with patch("juvenal.engine.run_script") as mock_run:
+            mock_run.return_value = type("R", (), {"exit_code": 0, "output": "ok"})()
+            engine.run()
+            mock_run.assert_called_once()
+            assert mock_run.call_args[0][0] == "pytest tests/unit -x"
+
+    def test_vars_unrecognized_passthrough(self, mock_backend, tmp_path):
+        """Unrecognized {{VAR}} placeholders pass through unchanged."""
+        mock_backend.add_response(exit_code=0, output="done")
+        workflow = Workflow(
+            name="test",
+            phases=[Phase(id="build", type="implement", prompt="Use {{KNOWN}} and {{UNKNOWN}}.")],
+            vars={"KNOWN": "value"},
+        )
+        engine = Engine(workflow, state_file=str(tmp_path / "state.json"), plain=True)
+        engine.backend = mock_backend
+        engine.run()
+        assert "Use value and {{UNKNOWN}}." in mock_backend.calls[0]
+
+    def test_vars_in_dry_run(self, mock_backend, tmp_path, capsys):
+        """Dry run shows variables."""
+        workflow = Workflow(
+            name="test",
+            phases=[Phase(id="build", type="implement", prompt="Build {{APP}}.")],
+            vars={"APP": "myservice"},
+        )
+        engine = Engine(workflow, dry_run=True, state_file=str(tmp_path / "state.json"), plain=True)
+        engine.run()
+        captured = capsys.readouterr()
+        assert "APP" in captured.out
+        assert "myservice" in captured.out

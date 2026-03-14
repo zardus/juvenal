@@ -16,7 +16,7 @@ from juvenal.checkers import NO_VERDICT_REASON, parse_verdict, run_script
 from juvenal.display import Display
 from juvenal.notifications import build_notification_payload, send_webhook
 from juvenal.state import PhaseState, PipelineState
-from juvenal.workflow import ParallelGroup, Phase, Workflow
+from juvenal.workflow import ParallelGroup, Phase, Workflow, apply_vars
 
 
 @dataclass
@@ -257,7 +257,7 @@ class Engine:
                 env=phase.env or None,
             )
         else:
-            prompt = phase.render_prompt(failure_context=failure_context)
+            prompt = phase.render_prompt(failure_context=failure_context, vars=self.workflow.vars)
             result = self.backend.run_agent(
                 prompt,
                 working_dir=self.workflow.working_dir,
@@ -294,7 +294,8 @@ class Engine:
         self.display.step_start(f"script: {phase.id}")
 
         timeout = phase.timeout or 600
-        result = run_script(phase.run, self.workflow.working_dir, timeout=timeout, env=phase.env or None)
+        run_cmd = apply_vars(phase.run, self.workflow.vars) if self.workflow.vars else phase.run
+        result = run_script(run_cmd, self.workflow.working_dir, timeout=timeout, env=phase.env or None)
         self.state.log_step(phase.id, attempt, "script", result.output, input=phase.run)
 
         if result.exit_code == 0:
@@ -326,11 +327,13 @@ class Engine:
         self.display.phase_start(phase.id, attempt)
         self.display.step_start(f"check: {phase.id}")
 
-        prompt = phase.render_check_prompt()
+        prompt = phase.render_check_prompt(vars=self.workflow.vars)
 
         # Inject the parent implement phase's directions so the checker knows what to verify
         parent_prompt = self._get_parent_prompt(phase, phases, phase_idx)
         if parent_prompt:
+            if self.workflow.vars:
+                parent_prompt = apply_vars(parent_prompt, self.workflow.vars)
             prompt = (
                 f"## Implementation Task Given to the Implementer\n\n"
                 f"{parent_prompt}\n\n"
@@ -430,7 +433,7 @@ class Engine:
 
         # Step 1: Plan the sub-workflow
         self.display.step_start(f"workflow-plan: {phase.id}")
-        prompt = phase.render_prompt(failure_context=failure_context)
+        prompt = phase.render_prompt(failure_context=failure_context, vars=self.workflow.vars)
         plan_result = _plan_workflow_internal(
             goal=prompt,
             backend_instance=self.backend,
@@ -754,6 +757,8 @@ class Engine:
             print(f"Backoff: {self.workflow.backoff}s base, {self.workflow.max_backoff}s max")
         if self.workflow.notify:
             print(f"Notifications: {len(self.workflow.notify)} webhook(s)")
+        if self.workflow.vars:
+            print(f"Variables: {self.workflow.vars}")
         print()
 
         # Validation
