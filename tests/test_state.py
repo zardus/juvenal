@@ -255,3 +255,66 @@ class TestLoadEmpty:
     def test_load_none(self):
         state = PipelineState.load(None)
         assert state.state_file == Path(".juvenal-state.json")
+
+
+class TestLogStep:
+    def test_log_step_appends(self, tmp_path):
+        state = PipelineState(state_file=tmp_path / "state.json")
+        state.log_step("build", 1, "implement", "output text", input="prompt text")
+        ps = state.phases["build"]
+        assert len(ps.logs) == 1
+        assert ps.logs[0]["step"] == "implement"
+        assert ps.logs[0]["output"] == "output text"
+        assert ps.logs[0]["input"] == "prompt text"
+        assert ps.logs[0]["attempt"] == 1
+
+    def test_log_step_multiple(self, tmp_path):
+        state = PipelineState(state_file=tmp_path / "state.json")
+        state.log_step("build", 1, "implement", "out1")
+        state.log_step("build", 1, "check", "out2")
+        assert len(state.phases["build"].logs) == 2
+
+    def test_log_step_persists(self, tmp_path):
+        state_file = tmp_path / "state.json"
+        state = PipelineState(state_file=state_file)
+        state.log_step("build", 1, "implement", "output", transcript="full transcript")
+        loaded = PipelineState.load(state_file)
+        assert len(loaded.phases["build"].logs) == 1
+        assert loaded.phases["build"].logs[0]["transcript"] == "full transcript"
+
+    def test_log_step_omits_empty_input(self, tmp_path):
+        state = PipelineState(state_file=tmp_path / "state.json")
+        state.log_step("build", 1, "implement", "output")
+        assert "input" not in state.phases["build"].logs[0]
+
+
+class TestTokenAccumulation:
+    def test_add_tokens(self, tmp_path):
+        state = PipelineState(state_file=tmp_path / "state.json")
+        state.add_tokens("build", 100, 50)
+        state.add_tokens("build", 200, 100)
+        assert state.phases["build"].input_tokens == 300
+        assert state.phases["build"].output_tokens == 150
+
+    def test_total_tokens(self, tmp_path):
+        state = PipelineState(state_file=tmp_path / "state.json")
+        state.add_tokens("a", 100, 50)
+        state.add_tokens("b", 200, 100)
+        inp, out = state.total_tokens()
+        assert inp == 300
+        assert out == 150
+
+    def test_total_tokens_empty(self, tmp_path):
+        state = PipelineState(state_file=tmp_path / "state.json")
+        assert state.total_tokens() == (0, 0)
+
+
+class TestCorruptedState:
+    def test_load_malformed_json(self, tmp_path):
+        """Malformed JSON state file raises an error."""
+        state_file = tmp_path / "state.json"
+        state_file.write_text("{broken")
+        import pytest
+
+        with pytest.raises(json.JSONDecodeError):
+            PipelineState.load(state_file)

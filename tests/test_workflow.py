@@ -12,6 +12,7 @@ from juvenal.workflow import (
     inject_implementer,
     load_workflow,
     parse_checker_string,
+    scaffold_workflow,
 )
 
 
@@ -1283,3 +1284,106 @@ class TestExpandMultiVars:
         assert result.max_bounces == 5
         assert result.backoff == 2.0
         assert result.vars == {"EXISTING": "val"}
+
+
+class TestScaffoldWorkflow:
+    def test_scaffold_creates_files(self, tmp_path):
+        target = str(tmp_path / "my-workflow")
+        scaffold_workflow(target)
+        from pathlib import Path
+
+        t = Path(target)
+        assert t.exists()
+        assert (t / "workflow.yaml").exists()
+        assert (t / "phases" / "01-implement" / "prompt.md").exists()
+
+    def test_scaffold_nonexistent_template_raises(self, tmp_path):
+        with pytest.raises(FileNotFoundError, match="Template not found"):
+            scaffold_workflow(str(tmp_path / "out"), template="nonexistent")
+
+    def test_scaffold_creates_parent_dirs(self, tmp_path):
+        target = str(tmp_path / "deep" / "nested" / "workflow")
+        scaffold_workflow(target)
+        from pathlib import Path
+
+        assert Path(target).exists()
+
+
+class TestLoadRolePrompt:
+    def test_valid_role(self):
+        from juvenal.workflow import _load_role_prompt
+
+        prompt = _load_role_prompt("tester")
+        assert len(prompt) > 0
+        assert "VERDICT" in prompt
+
+    def test_invalid_role_raises(self):
+        from juvenal.workflow import _load_role_prompt
+
+        with pytest.raises(FileNotFoundError, match="Built-in role prompt not found"):
+            _load_role_prompt("nonexistent-role")
+
+
+class TestYAMLChecksKey:
+    def test_checks_key_loads_checkers(self, tmp_path):
+        """The 'checks:' YAML key creates check phases."""
+        yaml_content = """\
+name: test
+phases:
+  - id: build
+    prompt: "Build it."
+    checks:
+      - role: tester
+"""
+        (tmp_path / "workflow.yaml").write_text(yaml_content)
+        wf = load_workflow(tmp_path / "workflow.yaml")
+        assert len(wf.phases) == 2
+        assert wf.phases[1].id == "build~check-1"
+        assert wf.phases[1].type == "check"
+        assert wf.phases[1].role == "tester"
+
+    def test_checks_with_inline_prompt(self, tmp_path):
+        yaml_content = """\
+name: test
+phases:
+  - id: build
+    prompt: "Build it."
+    checks:
+      - prompt: "Verify the build."
+"""
+        (tmp_path / "workflow.yaml").write_text(yaml_content)
+        wf = load_workflow(tmp_path / "workflow.yaml")
+        assert wf.phases[1].prompt == "Verify the build."
+
+    def test_checks_with_run(self, tmp_path):
+        yaml_content = """\
+name: test
+phases:
+  - id: build
+    prompt: "Build it."
+    checks:
+      - run: "pytest -x"
+"""
+        (tmp_path / "workflow.yaml").write_text(yaml_content)
+        wf = load_workflow(tmp_path / "workflow.yaml")
+        assert wf.phases[1].type == "script"
+        assert wf.phases[1].run == "pytest -x"
+
+
+class TestUnknownKeyWarning:
+    def test_unknown_key_warns(self, tmp_path):
+        yaml_content = """\
+name: test
+phases:
+  - id: build
+    prompt: "Build it."
+    typo_key: "oops"
+"""
+        (tmp_path / "workflow.yaml").write_text(yaml_content)
+        import warnings
+
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            load_workflow(tmp_path / "workflow.yaml")
+            assert len(w) == 1
+            assert "typo_key" in str(w[0].message)
