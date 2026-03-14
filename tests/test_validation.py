@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+import argparse
+
+import pytest
+
 from juvenal.cli import build_parser, cmd_validate
 from juvenal.workflow import ParallelGroup, Phase, Workflow, validate_workflow
 
@@ -549,3 +553,53 @@ phases:
         assert result == 1
         captured = capsys.readouterr()
         assert "error" in captured.out
+
+    def test_validate_missing_id_clean_error(self, tmp_path, capsys):
+        """Missing phase ID prints a clean error, no stack trace."""
+        yaml_content = """\
+name: test
+phases:
+  - prompt: "no id here"
+"""
+        yaml_path = tmp_path / "bad.yaml"
+        yaml_path.write_text(yaml_content)
+        with pytest.raises(SystemExit) as exc_info:
+            cmd_validate(
+                argparse.Namespace(
+                    workflow=str(yaml_path),
+                    plain=True,
+                    defines=[],
+                    checker=[],
+                    implementer=None,
+                    backend="codex",
+                    max_bounces=999,
+                    working_dir=None,
+                    backoff=None,
+                    notify=[],
+                )
+            )
+        assert exc_info.value.code == 1
+        captured = capsys.readouterr()
+        assert "missing required 'id' field" in captured.out
+        assert "Traceback" not in captured.out
+
+    def test_validate_nonexistent_file_clean_error(self, capsys):
+        """Nonexistent workflow file prints a clean error."""
+        with pytest.raises(SystemExit) as exc_info:
+            cmd_validate(
+                argparse.Namespace(
+                    workflow="/nonexistent/workflow.yaml",
+                    plain=True,
+                    defines=[],
+                    checker=[],
+                    implementer=None,
+                    backend="codex",
+                    max_bounces=999,
+                    working_dir=None,
+                    backoff=None,
+                    notify=[],
+                )
+            )
+        assert exc_info.value.code == 1
+        captured = capsys.readouterr()
+        assert "Error:" in captured.out

@@ -17,7 +17,6 @@ class TestArgumentParsing:
         assert args.backend == "codex"
         assert args.max_bounces == 999
         assert not args.resume
-        assert not args.dry_run
 
     def test_run_all_flags(self):
         parser = build_parser()
@@ -32,7 +31,6 @@ class TestArgumentParsing:
                 "5",
                 "--backend",
                 "codex",
-                "--dry-run",
                 "--working-dir",
                 "/tmp",
                 "--state-file",
@@ -43,7 +41,6 @@ class TestArgumentParsing:
         assert args.phase == "implement"
         assert args.max_bounces == 5
         assert args.backend == "codex"
-        assert args.dry_run
         assert args.working_dir == "/tmp"
         assert args.state_file == "custom-state.json"
 

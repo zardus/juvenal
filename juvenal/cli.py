@@ -24,7 +24,6 @@ def build_parser() -> argparse.ArgumentParser:
     run_p.add_argument("--phase", help="Start from a specific phase")
     run_p.add_argument("--max-bounces", type=int, default=999, help="Max bounces across all phases (default: 999)")
     run_p.add_argument("--backend", choices=["claude", "codex"], default="codex", help="AI backend to use")
-    run_p.add_argument("--dry-run", action="store_true", help="Show what would be done without executing")
     run_p.add_argument("--working-dir", help="Working directory for the agent")
     run_p.add_argument("--state-file", help="Path to state file (default: .juvenal-state.json)")
     run_p.add_argument(
@@ -126,11 +125,22 @@ def _apply_defines(workflow, all_vars: dict[str, list[str]]):
     return workflow
 
 
+def _load_workflow_or_exit(path: str):
+    """Load a workflow, printing a clean error and exiting on failure."""
+    from juvenal.workflow import load_workflow
+
+    try:
+        return load_workflow(path)
+    except (ValueError, FileNotFoundError) as e:
+        print(f"Error: {e}")
+        sys.exit(1)
+
+
 def cmd_run(args: argparse.Namespace) -> int:
     from juvenal.engine import Engine
-    from juvenal.workflow import inject_checkers, inject_implementer, load_workflow, validate_workflow
+    from juvenal.workflow import inject_checkers, inject_implementer, validate_workflow
 
-    workflow = load_workflow(args.workflow)
+    workflow = _load_workflow_or_exit(args.workflow)
     if args.defines:
         workflow = _apply_defines(workflow, _parse_defines(args.defines))
     if args.implementer:
@@ -161,7 +171,6 @@ def cmd_run(args: argparse.Namespace) -> int:
         rewind=args.rewind,
         rewind_to=args.rewind_to,
         start_phase=args.phase,
-        dry_run=args.dry_run,
         state_file=state_file,
         plain=args.plain,
         clear_context_on_bounce=args.clear_context_on_bounce,
@@ -224,11 +233,11 @@ def cmd_do(args: argparse.Namespace) -> int:
     import tempfile
 
     from juvenal.engine import Engine, plan_workflow
-    from juvenal.workflow import inject_checkers, inject_implementer, load_workflow
+    from juvenal.workflow import inject_checkers, inject_implementer
 
     with tempfile.NamedTemporaryFile(suffix=".yaml", delete=False, mode="w") as f:
         plan_workflow(args.goal, f.name, args.backend, plain=args.plain)
-        workflow = load_workflow(f.name)
+        workflow = _load_workflow_or_exit(f.name)
 
     if args.defines:
         workflow = _apply_defines(workflow, _parse_defines(args.defines))
@@ -269,9 +278,9 @@ def cmd_init(args: argparse.Namespace) -> int:
 
 def cmd_validate(args: argparse.Namespace) -> int:
     from juvenal.engine import Engine
-    from juvenal.workflow import inject_checkers, inject_implementer, load_workflow
+    from juvenal.workflow import inject_checkers, inject_implementer
 
-    workflow = load_workflow(args.workflow)
+    workflow = _load_workflow_or_exit(args.workflow)
     if args.defines:
         workflow = _apply_defines(workflow, _parse_defines(args.defines))
     if args.implementer:
