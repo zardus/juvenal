@@ -184,6 +184,12 @@ class ClaudeBackend(Backend):
                     termios.tcsetattr(sys.stdin, termios.TCSADRAIN, saved_termios)
                 except termios.error:
                     pass
+            # Reclaim foreground process group so Ctrl-C reaches us
+            try:
+                if sys.stdin.isatty():
+                    os.tcsetpgrp(sys.stdin.fileno(), os.getpgrp())
+            except OSError:
+                pass
 
         return InteractiveResult(session_id=session_id, exit_code=proc.returncode)
 
