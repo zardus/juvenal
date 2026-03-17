@@ -188,12 +188,7 @@ def cmd_run(args: argparse.Namespace) -> int:
 def cmd_plan(args: argparse.Namespace) -> int:
     from juvenal.engine import plan_workflow
 
-    interactive = args.interactive
-    backend = args.backend
-    if interactive and backend != "claude":
-        print(f"Warning: --interactive requires claude backend, overriding --backend={backend}")
-        backend = "claude"
-    plan_workflow(args.goal, args.output, backend, plain=args.plain, interactive=interactive)
+    plan_workflow(args.goal, args.output, args.backend, plain=args.plain, interactive=args.interactive)
     if args.implementer:
         _inject_implementer_into_yaml(args.output, args.implementer)
     if args.checker:
@@ -246,14 +241,8 @@ def cmd_do(args: argparse.Namespace) -> int:
     from juvenal.engine import Engine, plan_workflow
     from juvenal.workflow import inject_checkers, inject_implementer
 
-    interactive = args.interactive
-    backend = args.backend
-    if interactive and backend != "claude":
-        print(f"Warning: --interactive requires claude backend, overriding --backend={backend}")
-        backend = "claude"
-
     with tempfile.NamedTemporaryFile(suffix=".yaml", delete=False, mode="w") as f:
-        plan_workflow(args.goal, f.name, backend, plain=args.plain, interactive=interactive)
+        plan_workflow(args.goal, f.name, args.backend, plain=args.plain, interactive=args.interactive)
         workflow = _load_workflow_or_exit(f.name)
 
     if args.defines:

@@ -367,8 +367,8 @@ class TestStatusExitCodeSubprocess:
         args = parser.parse_args(["do", "build a web app", "-i"])
         assert args.interactive is True
 
-    def test_plan_interactive_overrides_backend_to_claude(self, capsys, monkeypatch):
-        """--interactive with non-claude backend prints warning and overrides."""
+    def test_plan_interactive_preserves_backend(self, monkeypatch):
+        """--interactive does not override the backend — only interactive phases use Claude."""
         import juvenal.engine
 
         called_with = {}
@@ -384,28 +384,8 @@ class TestStatusExitCodeSubprocess:
         args.plain = False
         cmd_plan(args)
 
-        captured = capsys.readouterr()
-        assert "Warning" in captured.out
-        assert "claude" in captured.out
-        assert called_with["backend"] == "claude"
+        assert called_with["backend"] == "codex"
         assert called_with["interactive"] is True
-
-    def test_plan_interactive_claude_no_warning(self, capsys, monkeypatch):
-        """--interactive with claude backend does not print a warning."""
-        import juvenal.engine
-
-        def mock_plan_workflow(goal, output, backend, plain=False, interactive=False):
-            pass
-
-        monkeypatch.setattr(juvenal.engine, "plan_workflow", mock_plan_workflow)
-
-        parser = build_parser()
-        args = parser.parse_args(["plan", "build something", "--interactive", "--backend", "claude"])
-        args.plain = False
-        cmd_plan(args)
-
-        captured = capsys.readouterr()
-        assert "Warning" not in captured.out
 
     def test_status_subprocess_exit_1_on_failure(self, tmp_path):
         """Failed pipeline exits 1 as a real process."""

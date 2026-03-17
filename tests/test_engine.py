@@ -2234,6 +2234,29 @@ class TestInteractiveMode:
         assert len(backend.interactive_calls) == 0
         assert len(backend.calls) == 2  # normal run_agent for both
 
+    def test_interactive_uses_original_backend_for_non_interactive_phases(self, tmp_path):
+        """Non-interactive phases use the configured backend, not Claude."""
+        backend = MockBackend()
+        backend.add_response(exit_code=0, output="done")  # implement (non-interactive)
+        backend.add_interactive_response(exit_code=0)  # interactive phase
+        backend.add_response(exit_code=0, output="VERDICT: PASS")  # checker
+
+        workflow = Workflow(
+            name="test",
+            phases=[
+                Phase(id="setup", type="implement", prompt="Setup."),
+                Phase(id="refine", type="implement", prompt="Refine.", interactive=True),
+                Phase(id="review", type="check", prompt="Review.\nVERDICT: PASS or FAIL", bounce_target="refine"),
+            ],
+            max_bounces=3,
+        )
+        engine = self._make_engine(workflow, backend, tmp_path, interactive=True, plain=True)
+        assert engine.run() == 0
+        # setup + review used run_agent (the mock backend)
+        assert len(backend.calls) == 2
+        # refine used run_interactive (the mock backend)
+        assert len(backend.interactive_calls) == 1
+
     def test_interactive_crash_bounces(self, tmp_path):
         """Interactive session with nonzero exit bounces back."""
         backend = MockBackend()

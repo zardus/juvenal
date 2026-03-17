@@ -256,7 +256,16 @@ class Engine:
             )
             prompt = preamble + prompt
             self.display.pause()
-            result = self.backend.run_interactive(prompt, working_dir=self.workflow.working_dir, env=phase.env or None)
+            try:
+                result = self.backend.run_interactive(
+                    prompt, working_dir=self.workflow.working_dir, env=phase.env or None
+                )
+            except NotImplementedError:
+                from juvenal.backends import ClaudeBackend
+
+                result = ClaudeBackend().run_interactive(
+                    prompt, working_dir=self.workflow.working_dir, env=phase.env or None
+                )
             self.display.resume()
             self.state.log_step(phase.id, attempt, "interactive", "", input=prompt)
             if result.session_id:
