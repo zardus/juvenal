@@ -146,6 +146,8 @@ class ClaudeBackend(Backend):
         working_dir: str,
         env: dict[str, str] | None = None,
     ) -> InteractiveResult:
+        import sys
+
         session_id = str(uuid.uuid4())
         cmd = [
             "claude",
@@ -159,6 +161,16 @@ class ClaudeBackend(Backend):
         if env:
             proc_env.update(env)
 
+        # Save terminal state before the interactive TUI takes over
+        saved_termios = None
+        try:
+            import termios
+
+            if sys.stdin.isatty():
+                saved_termios = termios.tcgetattr(sys.stdin)
+        except (ImportError, termios.error):
+            pass
+
         proc = subprocess.Popen(cmd, cwd=working_dir, env=proc_env)
         self._active_procs.append(proc)
         try:
@@ -166,6 +178,12 @@ class ClaudeBackend(Backend):
         finally:
             if proc in self._active_procs:
                 self._active_procs.remove(proc)
+            # Restore terminal state so Ctrl-C and normal input work again
+            if saved_termios is not None:
+                try:
+                    termios.tcsetattr(sys.stdin, termios.TCSADRAIN, saved_termios)
+                except termios.error:
+                    pass
 
         return InteractiveResult(session_id=session_id, exit_code=proc.returncode)
 
