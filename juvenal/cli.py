@@ -58,6 +58,7 @@ def build_parser() -> argparse.ArgumentParser:
         "-i", "--interactive", action="store_true", help="Interactive mode: chat with the agent during plan refinement"
     )
     plan_p.add_argument("--resume", action="store_true", help="Resume a previously interrupted plan")
+    plan_p.add_argument("--plain", action="store_true", help="Plain text output (no Rich TUI)")
 
     # do
     do_p = sub.add_parser("do", help="Plan + immediately run a workflow")
