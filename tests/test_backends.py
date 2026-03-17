@@ -5,6 +5,7 @@ import pytest
 from juvenal.backends import (
     ClaudeBackend,
     CodexBackend,
+    InteractiveResult,
     _extract_claude_tokens,
     _extract_codex_tokens,
     _parse_json_event,
@@ -162,6 +163,24 @@ class TestExtractCodexTokens:
 
     def test_non_turn_event(self):
         assert _extract_codex_tokens({"type": "item.completed"}) == (0, 0)
+
+
+class TestInteractiveResult:
+    def test_dataclass_fields(self):
+        result = InteractiveResult(session_id="abc-123", exit_code=0)
+        assert result.session_id == "abc-123"
+        assert result.exit_code == 0
+
+    def test_nonzero_exit(self):
+        result = InteractiveResult(session_id="def-456", exit_code=1)
+        assert result.exit_code == 1
+
+
+class TestRunInteractive:
+    def test_codex_raises_not_implemented(self):
+        backend = CodexBackend()
+        with pytest.raises(NotImplementedError, match="codex.*does not support interactive"):
+            backend.run_interactive("prompt", "/tmp")
 
 
 class TestKillActive:

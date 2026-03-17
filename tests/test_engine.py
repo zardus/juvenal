@@ -6,7 +6,7 @@ from unittest.mock import patch
 import pytest
 
 from juvenal.checkers import parse_verdict
-from juvenal.engine import BounceCounter, Engine, _extract_yaml
+from juvenal.engine import BounceCounter, Engine, _extract_yaml, _plan_workflow_internal
 from juvenal.workflow import ParallelGroup, Phase, Workflow, inject_checkers, inject_implementer
 from tests.conftest import MockBackend
 
@@ -2252,3 +2252,164 @@ class TestInteractiveMode:
         engine = self._make_engine(workflow, backend, tmp_path, interactive=True, plain=True)
         assert engine.run() == 0
         assert len(backend.interactive_calls) == 2
+
+    def test_interactive_calls_display_pause_resume(self, tmp_path):
+        """Interactive mode calls display.pause() and display.resume()."""
+        backend = MockBackend()
+        backend.add_interactive_response(exit_code=0)
+
+        workflow = Workflow(
+            name="test",
+            phases=[Phase(id="refine", type="implement", prompt="Refine.", interactive=True)],
+            max_bounces=3,
+        )
+        engine = self._make_engine(workflow, backend, tmp_path, interactive=True, plain=True)
+
+        # Track pause/resume calls
+        pause_calls = []
+        resume_calls = []
+        original_pause = engine.display.pause
+        original_resume = engine.display.resume
+
+        def mock_pause():
+            pause_calls.append(True)
+            original_pause()
+
+        def mock_resume():
+            resume_calls.append(True)
+            original_resume()
+
+        engine.display.pause = mock_pause
+        engine.display.resume = mock_resume
+
+        assert engine.run() == 0
+        assert len(pause_calls) == 1
+        assert len(resume_calls) == 1
+
+    def test_interactive_tracks_session_id(self, tmp_path):
+        """Interactive session stores session_id for future reference."""
+        backend = MockBackend()
+        backend.add_interactive_response(exit_code=0, session_id="tracked-sess")
+
+        workflow = Workflow(
+            name="test",
+            phases=[Phase(id="refine", type="implement", prompt="Refine.", interactive=True)],
+            max_bounces=3,
+        )
+        engine = self._make_engine(workflow, backend, tmp_path, interactive=True, plain=True)
+        assert engine.run() == 0
+        assert engine._session_ids["refine"] == "tracked-sess"
+
+    def test_interactive_bounce_from_checker_relaunches_interactive(self, tmp_path):
+        """When checker FAILs, interactive phase is re-run interactively."""
+        backend = MockBackend()
+        backend.add_interactive_response(exit_code=0, session_id="sess-1")  # first interactive
+        backend.add_response(exit_code=0, output="VERDICT: FAIL: needs work")  # checker fails
+        backend.add_interactive_response(exit_code=0, session_id="sess-2")  # re-run interactive
+        backend.add_response(exit_code=0, output="VERDICT: PASS")  # checker passes
+
+        workflow = Workflow(
+            name="test",
+            phases=[
+                Phase(id="refine", type="implement", prompt="Refine.", interactive=True),
+                Phase(id="review", type="check", prompt="Review.\nVERDICT: PASS or FAIL", bounce_target="refine"),
+            ],
+            max_bounces=5,
+        )
+        engine = self._make_engine(workflow, backend, tmp_path, interactive=True, plain=True)
+        assert engine.run() == 0
+        assert len(backend.interactive_calls) == 2
+        assert len(backend.calls) == 2  # two checker calls
+
+    def test_interactive_logs_step(self, tmp_path):
+        """Interactive session logs a step with type 'interactive'."""
+        backend = MockBackend()
+        backend.add_interactive_response(exit_code=0)
+
+        workflow = Workflow(
+            name="test",
+            phases=[Phase(id="refine", type="implement", prompt="Refine.", interactive=True)],
+            max_bounces=3,
+        )
+        engine = self._make_engine(workflow, backend, tmp_path, interactive=True, plain=True)
+        assert engine.run() == 0
+        ps = engine.state.phases["refine"]
+        assert any(entry.get("step") == "interactive" for entry in ps.logs)
+
+
+class TestPlanWorkflowInternal:
+    def test_project_dir_creates_plan_directory(self, tmp_path):
+        """When project_dir is set, .plan/ is created there with goal.md."""
+        backend = MockBackend()
+        # Plan pipeline will fail immediately since mock doesn't produce artifacts,
+        # but we can verify .plan/ directory creation
+        _plan_workflow_internal(
+            goal="test goal",
+            backend_instance=backend,
+            plain=True,
+            project_dir=str(tmp_path),
+        )
+        plan_dir = tmp_path / ".plan"
+        assert plan_dir.exists()
+        assert (plan_dir / "goal.md").exists()
+        assert (plan_dir / "goal.md").read_text() == "test goal"
+
+    def test_temp_dir_used_without_project_dir(self):
+        """When project_dir is None, a temp dir is used."""
+        backend = MockBackend()
+        result = _plan_workflow_internal(
+            goal="test goal",
+            backend_instance=backend,
+            plain=True,
+        )
+        # temp_dir should be set when no project_dir
+        assert result.temp_dir is not None
+        # Clean up
+        import shutil
+
+        if result.temp_dir:
+            shutil.rmtree(result.temp_dir, ignore_errors=True)
+
+    def test_clear_context_on_bounce_is_set(self, tmp_path):
+        """Plan engine uses clear_context_on_bounce=True."""
+        backend = MockBackend()
+        engines_created = []
+        original_init = Engine.__init__
+
+        def tracking_init(self, *args, **kwargs):
+            original_init(self, *args, **kwargs)
+            engines_created.append(self)
+
+        with patch.object(Engine, "__init__", tracking_init):
+            _plan_workflow_internal(
+                goal="test goal",
+                backend_instance=backend,
+                plain=True,
+                project_dir=str(tmp_path),
+            )
+
+        assert len(engines_created) >= 1
+        # The plan engine should not preserve context on bounce
+        assert engines_created[0].preserve_context_on_bounce is False
+
+    def test_interactive_flag_passed_to_engine(self, tmp_path):
+        """Interactive flag is passed through to the engine."""
+        backend = MockBackend()
+        engines_created = []
+        original_init = Engine.__init__
+
+        def tracking_init(self, *args, **kwargs):
+            original_init(self, *args, **kwargs)
+            engines_created.append(self)
+
+        with patch.object(Engine, "__init__", tracking_init):
+            _plan_workflow_internal(
+                goal="test goal",
+                backend_instance=backend,
+                plain=True,
+                project_dir=str(tmp_path),
+                interactive=True,
+            )
+
+        assert len(engines_created) >= 1
+        assert engines_created[0].interactive is True
