@@ -1,6 +1,6 @@
 name: plan
 backend: claude
-max_bounces: 10
+max_bounces: 999
 
 phases:
   - id: plan-draft
