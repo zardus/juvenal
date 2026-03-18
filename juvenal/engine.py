@@ -1034,6 +1034,7 @@ def _plan_workflow_internal(
     try:
         plan_yaml = Path(__file__).parent / "workflows" / "plan.yaml"
         workflow = load_workflow(plan_yaml)
+        workflow.vars["GOAL"] = goal
         workflow.working_dir = work_dir
 
         state_path = str(plan_dir / ".juvenal-state.json")

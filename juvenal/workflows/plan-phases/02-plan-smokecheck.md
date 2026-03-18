@@ -1,6 +1,10 @@
 You are a Software Architect performing a smoke check on an implementation plan.
 
-Read the goal from `.plan/goal.md` and the plan from `.plan/plan.md`.
+Read the plan from `.plan/plan.md`.
+
+The goal is:
+
+> {{GOAL}}
 
 Verify that the plan addresses ALL requirements stated in the goal:
 1. Every requirement in the goal has a corresponding implementation step

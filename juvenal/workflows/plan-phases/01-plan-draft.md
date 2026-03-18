@@ -2,7 +2,9 @@ You are a Software Architect. Your task is to produce an initial implementation 
 
 ## Step 1: Read the goal
 
-Read `.plan/goal.md` to understand what needs to be built.
+The goal is:
+
+> {{GOAL}}
 
 ## Step 2: Explore the codebase
 

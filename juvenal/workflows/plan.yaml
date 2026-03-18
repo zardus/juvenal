@@ -2,6 +2,9 @@ name: plan
 backend: claude
 max_bounces: 999
 
+vars:
+  GOAL: ""
+
 phases:
   - id: plan-draft
     prompt_file: plan-phases/01-plan-draft.md

@@ -2,7 +2,11 @@ You are a Senior Engineer refining an implementation plan.
 
 ## Step 1: Read context
 
-Read `.plan/goal.md` and `.plan/plan.md`. Also explore the codebase to verify the plan's assumptions.
+Read `.plan/plan.md`. Also explore the codebase to verify the plan's assumptions.
+
+The goal is:
+
+> {{GOAL}}
 
 If `.plan/findings.md` exists, read it — it contains findings from a previous review that must be addressed.
 
