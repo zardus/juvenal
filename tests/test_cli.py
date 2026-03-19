@@ -152,12 +152,21 @@ class TestArgumentParsing:
     def test_run_implementer(self):
         parser = build_parser()
         args = parser.parse_args(["run", "workflow.yaml", "--implementer", "software-engineer"])
-        assert args.implementer == "software-engineer"
+        assert args.implementer == ["software-engineer"]
 
-    def test_run_implementer_default_none(self):
+    def test_run_implementer_multiple(self):
+        parser = build_parser()
+        args = parser.parse_args([
+            "run", "--implementer", 'software-engineer:"do X"',
+            "--implementer", 'software-engineer:"do Y"',
+        ])
+        assert args.implementer == ['software-engineer:"do X"', 'software-engineer:"do Y"']
+        assert args.workflow is None
+
+    def test_run_implementer_default_empty(self):
         parser = build_parser()
         args = parser.parse_args(["run", "workflow.yaml"])
-        assert args.implementer is None
+        assert args.implementer == []
 
     def test_plan_implementer(self):
         parser = build_parser()

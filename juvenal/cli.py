@@ -31,7 +31,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     run_p.add_argument("--notify", action="append", default=[], help="Webhook URL for completion/failure notifications")
     run_p.add_argument("--checker", action="append", default=[], help="Inject checker on every implement phase")
-    run_p.add_argument("--implementer", help="Prepend implementer role prompt to every implement phase")
+    run_p.add_argument(
+        "--implementer",
+        action="append",
+        default=[],
+        help='Implementer role, or role:"prompt" to add an inline implement phase',
+    )
     run_p.add_argument(
         "--clear-context-on-bounce",
         action="store_true",
@@ -159,23 +164,41 @@ def cmd_run(args: argparse.Namespace) -> int:
     from juvenal.engine import Engine
     from juvenal.workflow import Phase, Workflow, inject_checkers, inject_implementer, validate_workflow
 
-    inline_prompt = None
-    implementer_role = args.implementer
-    if args.implementer:
-        implementer_role, inline_prompt = _parse_implementer(args.implementer)
+    # Parse --implementer flags into role-only vs inline phases
+    inline_phases: list[Phase] = []
+    role_only: str | None = None
+    for spec in args.implementer:
+        role, prompt = _parse_implementer(spec)
+        if prompt is not None:
+            inline_phases.append(Phase(id=f"implement-{len(inline_phases)}", prompt=prompt))
+            if role:
+                # Apply role preamble to just this phase
+                mini = Workflow(name="tmp", phases=[inline_phases[-1]])
+                mini = inject_implementer(mini, role)
+                inline_phases[-1] = mini.phases[0]
+        else:
+            role_only = role
 
-    if inline_prompt is not None:
-        # Synthetic single-phase workflow from inline prompt
+    # Build workflow: inline phases + workflow path phases
+    if args.workflow:
+        file_workflow = _load_workflow_or_exit(args.workflow)
+        if role_only:
+            file_workflow = inject_implementer(file_workflow, role_only)
+        all_phases = inline_phases + file_workflow.phases
         workflow = Workflow(
-            name="inline",
-            phases=[Phase(id="implement", prompt=inline_prompt)],
+            name=file_workflow.name,
+            phases=all_phases,
+            backend=file_workflow.backend,
+            working_dir=file_workflow.working_dir,
+            max_bounces=file_workflow.max_bounces,
+            parallel_groups=file_workflow.parallel_groups,
+            backoff=file_workflow.backoff,
+            max_backoff=file_workflow.max_backoff,
+            notify=list(file_workflow.notify),
+            vars=dict(file_workflow.vars),
         )
-        if implementer_role:
-            workflow = inject_implementer(workflow, implementer_role)
-    elif args.workflow:
-        workflow = _load_workflow_or_exit(args.workflow)
-        if implementer_role:
-            workflow = inject_implementer(workflow, implementer_role)
+    elif inline_phases:
+        workflow = Workflow(name="inline", phases=inline_phases)
     else:
         print("Error: workflow path is required (or use --implementer role:\"prompt\")")
         return 1
