@@ -17,7 +17,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     # run
     run_p = sub.add_parser("run", help="Execute a workflow")
-    run_p.add_argument("workflow", help="Path to workflow YAML, directory, or bare .md file")
+    run_p.add_argument("workflow", nargs="?", help="Path to workflow YAML, directory, or bare .md file")
     run_p.add_argument("--resume", action="store_true", help="Resume from last saved state")
     run_p.add_argument("--rewind", type=int, metavar="N", help="Rewind N phases back from the resume point")
     run_p.add_argument("--rewind-to", metavar="PHASE_ID", help="Rewind to a specific phase by ID")
@@ -144,15 +144,44 @@ def _load_workflow_or_exit(path: str):
         sys.exit(1)
 
 
+def _parse_implementer(spec: str) -> tuple[str, str | None]:
+    """Parse --implementer value into (role, inline_prompt | None).
+
+    Accepts either 'role' or 'role:prompt text'.
+    """
+    if ":" in spec:
+        role, prompt = spec.split(":", 1)
+        return role, prompt
+    return spec, None
+
+
 def cmd_run(args: argparse.Namespace) -> int:
     from juvenal.engine import Engine
-    from juvenal.workflow import inject_checkers, inject_implementer, validate_workflow
+    from juvenal.workflow import Phase, Workflow, inject_checkers, inject_implementer, validate_workflow
 
-    workflow = _load_workflow_or_exit(args.workflow)
+    inline_prompt = None
+    implementer_role = args.implementer
+    if args.implementer:
+        implementer_role, inline_prompt = _parse_implementer(args.implementer)
+
+    if inline_prompt is not None:
+        # Synthetic single-phase workflow from inline prompt
+        workflow = Workflow(
+            name="inline",
+            phases=[Phase(id="implement", prompt=inline_prompt)],
+        )
+        if implementer_role:
+            workflow = inject_implementer(workflow, implementer_role)
+    elif args.workflow:
+        workflow = _load_workflow_or_exit(args.workflow)
+        if implementer_role:
+            workflow = inject_implementer(workflow, implementer_role)
+    else:
+        print("Error: workflow path is required (or use --implementer role:\"prompt\")")
+        return 1
+
     if args.defines:
         workflow = _apply_defines(workflow, _parse_defines(args.defines))
-    if args.implementer:
-        workflow = inject_implementer(workflow, args.implementer)
     if args.checker:
         workflow = inject_checkers(workflow, args.checker)
     errors = validate_workflow(workflow)
