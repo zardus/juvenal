@@ -156,10 +156,15 @@ class TestArgumentParsing:
 
     def test_run_implementer_multiple(self):
         parser = build_parser()
-        args = parser.parse_args([
-            "run", "--implementer", 'software-engineer:"do X"',
-            "--implementer", 'software-engineer:"do Y"',
-        ])
+        args = parser.parse_args(
+            [
+                "run",
+                "--implementer",
+                'software-engineer:"do X"',
+                "--implementer",
+                'software-engineer:"do Y"',
+            ]
+        )
         assert args.implementer == ['software-engineer:"do X"', 'software-engineer:"do Y"']
         assert args.workflow is None
 

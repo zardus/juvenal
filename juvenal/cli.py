@@ -200,7 +200,7 @@ def cmd_run(args: argparse.Namespace) -> int:
     elif inline_phases:
         workflow = Workflow(name="inline", phases=inline_phases)
     else:
-        print("Error: workflow path is required (or use --implementer role:\"prompt\")")
+        print('Error: workflow path is required (or use --implementer role:"prompt")')
         return 1
 
     if args.defines:
