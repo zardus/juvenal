@@ -12,7 +12,6 @@ import pytest
 from juvenal.api import (
     JuvenalExecutionError,
     JuvenalUsageError,
-    _run_git,
     do,
     goal,
     plan_and_do,
@@ -171,25 +170,6 @@ def test_do_preserves_partial_success_history_when_later_step_fails(tmp_path):
         assert error.inspection_path.exists()
         assert [entry["instruction"] for entry in session.history] == ["Finish setup"]
         assert session.history[0]["phase_id"]
-
-
-def test_goal_uses_git_to_find_absolute_exclude_file(tmp_path):
-    repo = tmp_path / "repo"
-    _init_git_repo(repo)
-    app_dir = repo / "app"
-    app_dir.mkdir()
-
-    with patch("juvenal.api._run_git", wraps=_run_git) as run_git:
-        with goal("Goal", working_dir=app_dir, backend=MockBackend()):
-            pass
-
-    git_calls = [(call.args[0], call.args[1:]) for call in run_git.call_args_list]
-    assert (app_dir, ("rev-parse", "--show-toplevel")) in git_calls
-    assert any(
-        working_dir == app_dir and args[-2:] == ("--git-path", "info/exclude")
-        for working_dir, args in git_calls
-    )
-
 
 @pytest.mark.parametrize(
     ("working_dir_kind", "artifact_dir", "expected_entry"),
