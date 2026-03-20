@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import subprocess
 from pathlib import Path
 from unittest.mock import patch
@@ -318,14 +319,20 @@ def test_plan_and_do_planning_failure_reports_planner_state_path(tmp_path):
     backend = MockBackend()
 
     with goal("Ship the API", working_dir=tmp_path, backend=backend) as session:
-        with patch(
-            "juvenal.api._plan_workflow_internal",
-            return_value=PlanResult(success=False, error="planner failed badly"),
-        ):
+        def fake_run(self):
+            self.state.set_attempt("planner", 1)
+            self.state.mark_failed("planner")
+            return 1
+
+        with patch("juvenal.engine.Engine.run", autospec=True, side_effect=fake_run):
             with pytest.raises(JuvenalExecutionError) as exc_info:
                 plan_and_do("Break the work into phases.")
 
         error = exc_info.value
         assert error.run_id == "run-001"
         assert error.inspection_path == (tmp_path / ".plan" / ".juvenal-state.json").resolve()
+        assert error.inspection_path.exists()
+        state = json.loads(error.inspection_path.read_text())
+        assert state["phases"]["planner"]["attempt"] == 1
+        assert state["phases"]["planner"]["status"] == "failed"
         assert session.history == []
