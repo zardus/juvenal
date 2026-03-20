@@ -171,6 +171,37 @@ def test_do_preserves_partial_success_history_when_later_step_fails(tmp_path):
         assert [entry["instruction"] for entry in session.history] == ["Finish setup"]
         assert session.history[0]["phase_id"]
 
+
+def test_goal_resolves_exclude_file_via_git_in_linked_worktree(tmp_path):
+    repo = tmp_path / "repo"
+    _init_git_repo(repo)
+    subprocess.run(["git", "config", "user.email", "juvenal@example.com"], cwd=repo, check=True)
+    subprocess.run(["git", "config", "user.name", "Juvenal Tests"], cwd=repo, check=True)
+    (repo / "README.md").write_text("seed\n")
+    subprocess.run(["git", "add", "README.md"], cwd=repo, check=True)
+    subprocess.run(["git", "commit", "-m", "init"], cwd=repo, check=True)
+
+    worktree_dir = tmp_path / "linked-worktree"
+    subprocess.run(["git", "worktree", "add", str(worktree_dir)], cwd=repo, check=True)
+    exclude_file = Path(
+        subprocess.run(
+            ["git", "-C", str(worktree_dir), "rev-parse", "--path-format=absolute", "--git-path", "info/exclude"],
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+    )
+
+    before = exclude_file.read_text() if exclude_file.exists() else ""
+    before_lines = before.splitlines()
+
+    with goal("Goal", working_dir=worktree_dir, backend=MockBackend()):
+        pass
+
+    assert (worktree_dir / ".git").is_file()
+    assert exclude_file.read_text().splitlines() == before_lines + ["/.juvenal-api/"]
+
+
 @pytest.mark.parametrize(
     ("working_dir_kind", "artifact_dir", "expected_entry"),
     [
