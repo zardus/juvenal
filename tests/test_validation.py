@@ -91,6 +91,15 @@ class TestValidateWorkflow:
         )
         assert validate_workflow(wf) == []
 
+    def test_check_with_security_engineer_role_is_valid(self):
+        wf = Workflow(
+            name="test",
+            phases=[
+                Phase(id="review", type="check", role="security-engineer"),
+            ],
+        )
+        assert validate_workflow(wf) == []
+
     def test_script_missing_run(self):
         wf = Workflow(
             name="test",
@@ -110,6 +119,16 @@ class TestValidateWorkflow:
         )
         errors = validate_workflow(wf)
         assert any("unknown role" in e for e in errors)
+
+    def test_unknown_role_still_fails_after_security_engineer_added(self):
+        wf = Workflow(
+            name="test",
+            phases=[
+                Phase(id="review", type="check", role="security-reviewer"),
+            ],
+        )
+        errors = validate_workflow(wf)
+        assert any("unknown role" in e and "security-reviewer" in e for e in errors)
 
     def test_parallel_group_invalid_phase(self):
         wf = Workflow(

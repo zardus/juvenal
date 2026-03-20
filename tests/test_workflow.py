@@ -1,5 +1,7 @@
 """Unit tests for workflow loading."""
 
+from pathlib import Path
+
 import pytest
 
 from juvenal.workflow import (
@@ -679,6 +681,9 @@ class TestParseCheckerString:
     def test_role(self):
         assert parse_checker_string("tester") == "tester"
 
+    def test_role_security_engineer(self):
+        assert parse_checker_string("security-engineer") == "security-engineer"
+
     def test_role_senior(self):
         assert parse_checker_string("senior-tester") == "senior-tester"
 
@@ -714,6 +719,18 @@ class TestInjectCheckers:
         assert result.phases[1].id == "build~check-1"
         assert result.phases[1].type == "check"
         assert result.phases[1].role == "tester"
+        assert result.phases[1].bounce_target == "build"
+
+    def test_single_implement_security_engineer_checker(self):
+        wf = Workflow(
+            name="test",
+            phases=[Phase(id="build", type="implement", prompt="Build it.")],
+        )
+        result = inject_checkers(wf, ["security-engineer"])
+        assert len(result.phases) == 2
+        assert result.phases[1].id == "build~check-1"
+        assert result.phases[1].type == "check"
+        assert result.phases[1].role == "security-engineer"
         assert result.phases[1].bounce_target == "build"
 
     def test_single_implement_script_checker(self):
@@ -1290,7 +1307,6 @@ class TestScaffoldWorkflow:
     def test_scaffold_creates_files(self, tmp_path):
         target = str(tmp_path / "my-workflow")
         scaffold_workflow(target)
-        from pathlib import Path
 
         t = Path(target)
         assert t.exists()
@@ -1304,7 +1320,6 @@ class TestScaffoldWorkflow:
     def test_scaffold_creates_parent_dirs(self, tmp_path):
         target = str(tmp_path / "deep" / "nested" / "workflow")
         scaffold_workflow(target)
-        from pathlib import Path
 
         assert Path(target).exists()
 
@@ -1316,6 +1331,15 @@ class TestLoadRolePrompt:
         prompt = _load_role_prompt("tester")
         assert len(prompt) > 0
         assert "VERDICT" in prompt
+
+    def test_security_engineer_role(self):
+        from juvenal.workflow import _load_role_prompt
+
+        prompt = _load_role_prompt("security-engineer")
+        assert "Security Engineer REVIEWING" in prompt
+        assert "Input handling and trust boundaries" in prompt
+        assert "SSRF" in prompt
+        assert "Software Tester REVIEWING" not in prompt
 
     def test_invalid_role_raises(self):
         from juvenal.workflow import _load_role_prompt
