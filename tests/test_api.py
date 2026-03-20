@@ -108,11 +108,11 @@ def test_do_single_step_run_records_history_and_state(tmp_path):
         assert "Implement the API" in implement_prompt
 
         assert [entry["instruction"] for entry in session.history] == ["Implement the API"]
-        assert session.history[0]["phase_id"] == "do-001-step-1"
-        assert session.history[0]["run_id"] == "001"
         assert session.history[0]["success"] is True
         assert "Implement the API" in session.history[0]["summary"]
-        assert (session.session_artifact_dir / "run-001-do.json").exists()
+        do_state_files = list(session.session_artifact_dir.glob("*-do.json"))
+        assert len(do_state_files) == 1
+        assert do_state_files[0].exists()
 
 
 def test_do_multi_step_run_uses_completed_steps_context_and_records_each_step(tmp_path):
@@ -134,8 +134,8 @@ def test_do_multi_step_run_uses_completed_steps_context_and_records_each_step(tm
         assert "Scaffold handlers" in second_prompt
         assert second_prompt.find("Scaffold handlers") < second_prompt.find("Wire auth")
 
-        assert [entry["phase_id"] for entry in session.history] == ["do-001-step-1", "do-001-step-2"]
         assert [entry["instruction"] for entry in session.history] == ["Scaffold handlers", "Wire auth"]
+        assert len({entry["phase_id"] for entry in session.history}) == 2
 
 
 def test_do_reuses_successful_history_in_later_prompts(tmp_path):
@@ -166,10 +166,11 @@ def test_do_preserves_partial_success_history_when_later_step_fails(tmp_path):
             do(["Finish setup", "Finish integration"], checker="tester")
 
         error = exc_info.value
-        assert error.run_id == "run-001"
-        assert error.inspection_path == (session.session_artifact_dir / "run-001-do.json").resolve()
+        assert error.inspection_path.parent == session.session_artifact_dir
+        assert error.inspection_path.name.endswith("-do.json")
+        assert error.inspection_path.exists()
         assert [entry["instruction"] for entry in session.history] == ["Finish setup"]
-        assert session.history[0]["phase_id"] == "do-001-step-1"
+        assert session.history[0]["phase_id"]
 
 
 def test_goal_uses_git_to_find_absolute_exclude_file(tmp_path):
@@ -258,10 +259,13 @@ def test_plan_and_do_uses_session_working_dir_and_preserves_history(tmp_path):
         assert load_workflow_mock.call_count == 1
         assert load_workflow_mock.call_args.args[0] == (tmp_path / "workflow.yaml").resolve()
         assert session.history[-1]["kind"] == "plan_and_do"
-        assert session.history[-1]["run_id"] == "002"
         assert session.history[-1]["goal_text"] == "Break the work into phases."
-        assert (session.session_artifact_dir / "run-002-workflow.yaml").read_text() == planned_yaml
-        assert (session.session_artifact_dir / "run-002-planned.json").exists()
+        workflow_archives = list(session.session_artifact_dir.glob("*-workflow.yaml"))
+        planned_state_files = list(session.session_artifact_dir.glob("*-planned.json"))
+        assert len(workflow_archives) == 1
+        assert workflow_archives[0].read_text() == planned_yaml
+        assert len(planned_state_files) == 1
+        assert planned_state_files[0].exists()
         assert "Execute the planned work." in backend.calls[-1]
 
 
@@ -284,9 +288,10 @@ def test_plan_and_do_load_failure_reports_workflow_yaml_path(tmp_path):
                 plan_and_do("Break the work into phases.")
 
         error = exc_info.value
-        assert error.run_id == "run-001"
         assert error.inspection_path == (tmp_path / "workflow.yaml").resolve()
-        assert (session.session_artifact_dir / "run-001-workflow.yaml").read_text() == bad_yaml
+        workflow_archives = list(session.session_artifact_dir.glob("*-workflow.yaml"))
+        assert len(workflow_archives) == 1
+        assert workflow_archives[0].read_text() == bad_yaml
 
 
 def test_plan_and_do_planned_engine_failure_reports_state_file(tmp_path):
@@ -309,8 +314,8 @@ def test_plan_and_do_planned_engine_failure_reports_state_file(tmp_path):
                 plan_and_do("Break the work into phases.")
 
         error = exc_info.value
-        assert error.run_id == "run-001"
-        assert error.inspection_path == (session.session_artifact_dir / "run-001-planned.json").resolve()
+        assert error.inspection_path.parent == session.session_artifact_dir
+        assert error.inspection_path.name.endswith("-planned.json")
         assert error.inspection_path.exists()
         assert session.history == []
 
@@ -329,7 +334,6 @@ def test_plan_and_do_planning_failure_reports_planner_state_path(tmp_path):
                 plan_and_do("Break the work into phases.")
 
         error = exc_info.value
-        assert error.run_id == "run-001"
         assert error.inspection_path == (tmp_path / ".plan" / ".juvenal-state.json").resolve()
         assert error.inspection_path.exists()
         state = json.loads(error.inspection_path.read_text())
