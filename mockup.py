@@ -1,7 +1,7 @@
 import subprocess
 import tempfile
 
-import juvenal
+import juvenal.api as juvenal
 
 LIBNAME = "libzstd"
 DISTRO = "ubuntu 24.04"
