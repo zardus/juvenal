@@ -83,6 +83,31 @@ juvenal plan "implement a REST API with tests" -o workflow.yaml
 juvenal do "add authentication to the Flask app"
 ```
 
+## Embedded Python API
+
+The supported embedded pattern is repo-scoped: choose or create the target repository first, finish git bootstrap before entering the goal context, and make an initial commit before starting if checker diff review needs a stable base.
+
+```python
+from pathlib import Path
+
+import juvenal
+
+repo = Path("/path/to/repo")
+
+with juvenal.goal("Ship the API", working_dir=repo):
+    juvenal.do("Prepare the repository")
+    juvenal.do(["Scaffold handlers", "Wire auth"], checker="pm")
+    juvenal.plan_and_do("Break the remaining work into phases and execute them.")
+```
+
+`working_dir` is the directory whose filesystem and git context the agents inspect. Planner artifacts are written under that directory, including `.plan/` and the planned `workflow.yaml`.
+
+`do([...])` runs sequentially. Later steps in the same `do()` call see the earlier instructions from that call, and later work in the session inherits summarized context from earlier successful steps.
+
+For checker kwargs, use `checker="pm"` for one checker and `checkers=["tester", "senior-tester"]` for several. `checkers="pm"` is invalid API usage because `checkers` must be a sequence of checker specs, not a bare string.
+
+By default, the embedded API creates `.plan/` and `.juvenal-api/session-###/` under `working_dir`. `artifact_dir=` overrides only the API artifact root, relative `artifact_dir` values resolve from `working_dir`, and Juvenal updates the repo's resolved exclude file when possible so those artifacts stay out of git status.
+
 ## Workflow Formats
 
 ### YAML
@@ -203,6 +228,7 @@ Agent checkers can use built-in verification personas:
 - `pm` — confirms requirements are met, no TODOs remain
 - `senior-tester` — checks test integrity, looks for cheating
 - `senior-engineer` — reviews code quality, completeness, security
+- `security-engineer` — reviews for vulnerabilities, unsafe defaults, and exposed secrets
 
 Implementer roles (via `--implementer`):
 
