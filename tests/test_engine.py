@@ -870,6 +870,7 @@ class TestWorkflowPhase:
 
         assert plan_mock.call_args.kwargs["interactive"] is True
         assert plan_mock.call_args.kwargs["serialize"] is True
+        assert plan_mock.call_args.kwargs["backend_instance"] is backend
         child = next(created for created in created_engines if created._depth == 1)
         assert child.backend is backend
         assert child.workflow.working_dir == str(project_dir)
