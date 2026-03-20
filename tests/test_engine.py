@@ -1,7 +1,7 @@
 """Unit tests for the execution engine with mocked backend."""
 
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 import pytest
 
@@ -2621,9 +2621,15 @@ class TestPlanWorkflowInternal:
 
     def test_backend_instance_is_passed_into_plan_engine(self, tmp_path):
         backend = MockBackend()
+        seen_backends = []
+        backend_factory = Mock(side_effect=AssertionError("factory should not be called"))
 
-        with patch("juvenal.engine.create_backend", side_effect=AssertionError("factory should not be called")):
-            with patch.object(Engine, "run", return_value=1):
+        def fake_run(self):
+            seen_backends.append(self.backend)
+            return 1
+
+        with patch("juvenal.engine.create_backend", backend_factory):
+            with patch.object(Engine, "run", autospec=True, side_effect=fake_run):
                 result = _plan_workflow_internal(
                     goal="test goal",
                     backend_instance=backend,
@@ -2632,3 +2638,5 @@ class TestPlanWorkflowInternal:
                 )
 
         assert result.success is False
+        assert backend_factory.call_count == 0
+        assert seen_backends == [backend]
