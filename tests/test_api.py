@@ -240,6 +240,7 @@ def test_plan_and_do_uses_session_working_dir_and_preserves_history(tmp_path):
     backend.add_response(exit_code=0, output="planned work complete")
     captured: dict[str, object] = {}
     planned_yaml = "name: planned\nphases:\n  - id: execute\n    prompt: 'Execute the planned work.'\n"
+    wrong_yaml = "name: wrong\nphases:\n  - id: wrong\n    prompt: 'Execute the wrong workflow.'\n"
 
     with goal("Ship the API", working_dir=tmp_path, backend=backend) as session:
         do("Prepare the repository")
@@ -249,9 +250,11 @@ def test_plan_and_do_uses_session_working_dir_and_preserves_history(tmp_path):
             captured.update(kwargs)
             workflow_path = Path(kwargs["project_dir"]) / "workflow.yaml"
             workflow_path.write_text(planned_yaml)
+            returned_path = Path(kwargs["project_dir"]) / ".plan" / "planner-returned.yaml"
+            returned_path.write_text(wrong_yaml)
             return PlanResult(
                 success=True,
-                workflow_yaml_path=str(workflow_path),
+                workflow_yaml_path=str(returned_path),
                 temp_dir=None,
                 input_tokens=11,
                 output_tokens=22,
@@ -268,6 +271,7 @@ def test_plan_and_do_uses_session_working_dir_and_preserves_history(tmp_path):
         assert prior_summary in captured["goal"]
         assert "Break the work into phases." in captured["goal"]
         assert load_workflow_mock.call_count == 1
+        assert Path(captured["project_dir"]) / ".plan" / "planner-returned.yaml" != (tmp_path / "workflow.yaml")
         assert load_workflow_mock.call_args.args[0] == (tmp_path / "workflow.yaml").resolve()
         assert session.history[-1]["kind"] == "plan_and_do"
         assert session.history[-1]["goal_text"] == "Break the work into phases."
@@ -278,6 +282,7 @@ def test_plan_and_do_uses_session_working_dir_and_preserves_history(tmp_path):
         assert len(planned_state_files) == 1
         assert planned_state_files[0].exists()
         assert "Execute the planned work." in backend.calls[-1]
+        assert "Execute the wrong workflow." not in backend.calls[-1]
 
 
 def test_plan_and_do_load_failure_reports_workflow_yaml_path(tmp_path):
