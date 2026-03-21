@@ -277,6 +277,32 @@ def test_validate_planned_workflow_rejects_checks_indirection(tmp_path):
     assert any("checks is not allowed" in error for error in errors)
 
 
+def test_validate_planned_workflow_rejects_checks_hidden_via_yaml_merge(tmp_path):
+    structure = deepcopy(_base_structure())
+    structure["phases"] = [structure["phases"][0]]
+    workflow_path = tmp_path / "workflow.yaml"
+    structure_path = tmp_path / "workflow-structure.yaml"
+    _write_yaml(structure_path, structure)
+    workflow_path.write_text(
+        """\
+name: planned
+backend: codex
+checker_defaults: &checker_defaults
+  checks:
+    - run: "pytest -q"
+phases:
+  - <<: *checker_defaults
+    id: prepare
+    prompt: "Commit work to git before yielding."
+""",
+        encoding="utf-8",
+    )
+
+    errors = validate_planned_workflow(structure_path, workflow_path)
+
+    assert any("checks is not allowed" in error for error in errors)
+
+
 def test_validate_planned_workflow_rejects_phase_level_prompt_file(tmp_path):
     structure = deepcopy(_base_structure())
     structure["phases"] = [structure["phases"][0]]

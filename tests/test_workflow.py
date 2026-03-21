@@ -1475,6 +1475,13 @@ class TestPlannerWorkflowAssets:
         workflow = load_workflow(repo_root / "juvenal" / "workflows" / "plan.yaml")
         phase_ids = [phase.id for phase in workflow.phases]
         write_index = phase_ids.index("write-workflow")
+        yaml_validate_index = phase_ids.index("yaml-validate")
+        planned_validate_index = phase_ids.index("planned-workflow-validate")
+        review_index = phase_ids.index("workflow-review")
+
+        assert yaml_validate_index == write_index + 1
+        assert planned_validate_index == yaml_validate_index + 1
+        assert review_index == planned_validate_index + 1
 
         assert phase_ids[write_index + 1 : write_index + 4] == [
             "yaml-validate",
