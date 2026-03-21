@@ -512,6 +512,8 @@ def _stage_id_for_run(stage_prefix: str, run_id: str) -> str:
 
 def _create_stage_record(session: GoalSession, *, stage_id: str, stage_record: dict[str, Any]) -> None:
     validated_stage_id = _validate_stage_id(stage_id)
+    if validated_stage_id in session.stages:
+        raise JuvenalUsageError(f"Stage {validated_stage_id!r} already exists")
     session.stages[validated_stage_id] = dict(stage_record)
     _save_session_manifest(session)
 

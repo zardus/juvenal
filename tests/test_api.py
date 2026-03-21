@@ -374,6 +374,21 @@ def test_staged_do_rejects_reusing_stage_id_with_different_inputs(tmp_path):
             do("Implement the API", stage_id="build-stage")
 
 
+def test_one_shot_do_rejects_collision_with_existing_user_stage_id(tmp_path):
+    backend = MockBackend()
+    backend.add_response(exit_code=0, output="prepared")
+
+    with goal("Ship the API", working_dir=tmp_path, backend=backend, session_name="example") as session:
+        do("Prepare the repository", stage_id="do-002")
+
+        with pytest.raises(JuvenalUsageError, match="Stage 'do-002' already exists"):
+            do("Implement the API")
+
+        assert len(backend.calls) == 1
+        assert session.stages["do-002"]["tasks"] == ["Prepare the repository"]
+        assert session.stages["do-002"]["status"] == "completed"
+
+
 def test_goal_resolves_exclude_file_via_git_in_linked_worktree(tmp_path):
     repo = tmp_path / "repo"
     _init_git_repo(repo)
