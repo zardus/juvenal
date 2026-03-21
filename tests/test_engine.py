@@ -2518,6 +2518,24 @@ class TestInteractiveMode:
 
 
 class TestPlanWorkflowInternal:
+    def test_plan_workflow_internal_resume_keeps_existing_goal_file(self, tmp_path):
+        backend = MockBackend()
+        plan_dir = tmp_path / ".plan"
+        plan_dir.mkdir()
+        goal_path = plan_dir / "goal.md"
+        goal_path.write_text("existing goal")
+
+        with patch.object(Engine, "run", return_value=1):
+            _plan_workflow_internal(
+                goal="new goal",
+                backend_instance=backend,
+                plain=True,
+                project_dir=str(tmp_path),
+                resume=True,
+            )
+
+        assert goal_path.read_text() == "existing goal"
+
     def test_project_dir_creates_plan_directory(self, tmp_path):
         """When project_dir is set, .plan/ is created there with goal.md."""
         backend = MockBackend()
