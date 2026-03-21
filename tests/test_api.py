@@ -10,6 +10,7 @@ from unittest.mock import patch
 import pytest
 import yaml
 
+import juvenal.api as api_module
 from juvenal.api import (
     JuvenalExecutionError,
     JuvenalUsageError,
@@ -986,6 +987,23 @@ def test_staged_plan_and_do_rejects_orphan_planner_state_without_owner(tmp_path)
             plan_and_do("Break the work into phases.", stage_id="plan-stage")
 
 
+def test_staged_plan_and_do_rejects_second_active_stage_while_owner_file_exists(tmp_path):
+    with goal("Ship the API", working_dir=tmp_path, backend=MockBackend(), session_name="example"):
+        with patch(
+            "juvenal.api._plan_workflow_internal",
+            return_value=PlanResult(success=False, error="planner failed", temp_dir=None),
+        ):
+            with pytest.raises(JuvenalExecutionError):
+                plan_and_do("Break the work into phases.", stage_id="plan-stage")
+
+        with patch("juvenal.api._plan_workflow_internal", side_effect=AssertionError("planner should not rerun")):
+            with pytest.raises(
+                JuvenalUsageError,
+                match="Workspace already has a staged juvenal.plan_and_do\\(\\) owner",
+            ):
+                plan_and_do("Break the work into smaller phases.", stage_id="second-plan-stage")
+
+
 def test_staged_plan_and_do_completed_stage_is_no_op_on_resume(tmp_path):
     def fake_plan(**kwargs):
         workflow_path = _write_planned_workflow(Path(kwargs["project_dir"]), "name: planned\nphases: []\n", phases=[])
@@ -1211,6 +1229,32 @@ def test_staged_plan_and_do_planner_complete_zero_phase_resume_completes_and_per
 
         assert session.stages["plan-stage"]["status"] == "completed"
         assert session.history[-1]["kind"] == "plan_and_do"
+        manifest = json.loads(session.manifest_path.read_text())
+        assert manifest["stages"]["plan-stage"]["status"] == "completed"
+        assert manifest["history"][-1]["kind"] == "plan_and_do"
+
+
+def test_staged_plan_and_do_completion_checkpoint_persists_status_and_history_together(tmp_path):
+    snapshots: list[tuple[str | None, int]] = []
+    real_save = api_module._save_session_manifest
+
+    def tracking_save(session):
+        stage_record = session.stages.get("plan-stage")
+        stage_status = stage_record.get("status") if isinstance(stage_record, dict) else None
+        snapshots.append((stage_status, len(session.history)))
+        return real_save(session)
+
+    def fake_plan(**kwargs):
+        workflow_path = _write_planned_workflow(Path(kwargs["project_dir"]), "name: planned\nphases: []\n", phases=[])
+        return PlanResult(success=True, workflow_yaml_path=str(workflow_path), temp_dir=None)
+
+    with goal("Ship the API", working_dir=tmp_path, backend=MockBackend(), session_name="example") as session:
+        with patch("juvenal.api._save_session_manifest", side_effect=tracking_save):
+            with patch("juvenal.api._plan_workflow_internal", side_effect=fake_plan):
+                plan_and_do("Break the work into phases.", stage_id="plan-stage")
+
+        assert ("completed", 0) not in snapshots
+        assert snapshots[-1] == ("completed", 1)
         manifest = json.loads(session.manifest_path.read_text())
         assert manifest["stages"]["plan-stage"]["status"] == "completed"
         assert manifest["history"][-1]["kind"] == "plan_and_do"

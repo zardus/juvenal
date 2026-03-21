@@ -123,6 +123,7 @@ with goal(
 
 - `plan_and_do(..., stage_id="name")` is the resumable planner form. It requires a named session.
 - The stage-less form `plan_and_do("goal")` remains non-resumable. It uses `working_dir/.plan` and `working_dir/workflow.yaml` as scratch planner workspace, so use it only in a clean planner workspace.
+- Only one staged `plan_and_do()` owner may exist per workspace at a time. Starting another staged planner while `.plan/staged-plan-owner.json` belongs to an in-progress stage fails immediately.
 - Staged and unstaged planner usage must not mix in one workspace.
 - Staged planner resume stores a stable `planning_goal`, so later session history does not rewrite the planner prompt for an existing stage.
 - Staged planner setup writes zero-attempt planner state immediately, plus a planner owner file at `.plan/staged-plan-owner.json`.
