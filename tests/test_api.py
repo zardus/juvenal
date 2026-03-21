@@ -608,6 +608,26 @@ def test_staged_plan_and_do_rejects_second_owner_from_persisted_manifest(tmp_pat
         assert set(session.stages) == {"plan-stage"}
 
 
+def test_staged_plan_and_do_rejects_second_owner_from_other_named_session_manifest(tmp_path):
+    with goal("Ship the API", working_dir=tmp_path, backend=MockBackend(), session_name="example") as session:
+        with patch(
+            "juvenal.api._plan_workflow_internal",
+            return_value=PlanResult(success=False, error="planner failed", temp_dir=None),
+        ):
+            with pytest.raises(JuvenalExecutionError):
+                plan_and_do("Break the work into phases.", stage_id="plan-stage")
+
+        Path(session.stages["plan-stage"]["planner_owner_path"]).unlink()
+        Path(session.stages["plan-stage"]["planner_state_path"]).unlink()
+
+    with goal("Ship the API", working_dir=tmp_path, backend=MockBackend(), session_name="second-session") as session:
+        with patch("juvenal.api._plan_workflow_internal", side_effect=AssertionError("planner should not rerun")):
+            with pytest.raises(JuvenalUsageError, match="owner in the manifest"):
+                plan_and_do("Break the work into phases.", stage_id="other-plan-stage")
+
+        assert session.stages == {}
+
+
 def test_staged_plan_and_do_resumes_after_planner_complete_without_replanning(tmp_path):
     first_backend = MockBackend()
     first_backend.add_response(exit_code=1, output="planned run crashed")

@@ -1352,24 +1352,41 @@ def _ensure_unstaged_plan_allowed(session: GoalSession) -> None:
             raise JuvenalUsageError("Cannot mix staged and unstaged juvenal.plan_and_do() in the same workspace")
 
 
+def _persisted_plan_stage_conflict(session: GoalSession) -> JuvenalUsageError | None:
+    for session_dir in sorted(session.artifact_root.iterdir()):
+        manifest_path = _session_manifest_path(session_dir)
+        if not manifest_path.exists():
+            continue
+
+        manifest = _load_session_manifest(manifest_path)
+        if Path(manifest["working_dir"]).resolve() != session.working_dir:
+            continue
+
+        for stage_record in manifest["stages"].values():
+            if stage_record.get("kind") != "plan-and-do":
+                continue
+
+            planner_owner = stage_record.get("planner_owner")
+            if isinstance(planner_owner, dict):
+                return JuvenalUsageError(
+                    "Workspace already has a staged juvenal.plan_and_do() owner in the manifest: "
+                    f"{planner_owner.get('session_name')!r} / {planner_owner.get('stage_id')!r}"
+                )
+
+            return JuvenalUsageError("Cannot mix staged and unstaged juvenal.plan_and_do() in the same workspace")
+
+    return None
+
+
 def _ensure_staged_plan_workspace_available(
     session: GoalSession,
     *,
     owner_path: Path,
     planner_state_path: Path,
 ) -> None:
-    for stage_record in session.stages.values():
-        if stage_record.get("kind") != "plan-and-do":
-            continue
-
-        planner_owner = stage_record.get("planner_owner")
-        if isinstance(planner_owner, dict):
-            raise JuvenalUsageError(
-                "Workspace already has a staged juvenal.plan_and_do() owner in the manifest: "
-                f"{planner_owner.get('session_name')!r} / {planner_owner.get('stage_id')!r}"
-            )
-
-        raise JuvenalUsageError("Cannot mix staged and unstaged juvenal.plan_and_do() in the same workspace")
+    manifest_conflict = _persisted_plan_stage_conflict(session)
+    if manifest_conflict is not None:
+        raise manifest_conflict
 
     if owner_path.exists():
         owner = _read_staged_plan_owner(owner_path)
