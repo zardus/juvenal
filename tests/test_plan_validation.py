@@ -277,6 +277,27 @@ def test_validate_planned_workflow_rejects_checks_indirection(tmp_path):
     assert any("checks is not allowed" in error for error in errors)
 
 
+def test_validate_planned_workflow_rejects_top_level_checks_key(tmp_path):
+    structure = deepcopy(_base_structure())
+    structure["phases"] = [structure["phases"][0]]
+    workflow = {
+        "name": "planned",
+        "backend": "codex",
+        "checks": [{"run": "pytest -q"}],
+        "phases": [
+            {
+                "id": "prepare",
+                "prompt": "Commit work to git before yielding.",
+            }
+        ],
+    }
+
+    structure_path, workflow_path = _write_case(tmp_path, structure, workflow)
+    errors = validate_planned_workflow(structure_path, workflow_path)
+
+    assert any("top-level checks is not allowed" in error for error in errors)
+
+
 def test_validate_planned_workflow_rejects_checks_hidden_via_yaml_merge(tmp_path):
     structure = deepcopy(_base_structure())
     structure["phases"] = [structure["phases"][0]]

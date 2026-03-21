@@ -88,6 +88,8 @@ def validate_planned_workflow(structure_path: Path, workflow_path: Path) -> list
 
     if yaml_source_mode == "inline-only" and "include" in workflow_raw:
         errors.append("top-level include is not allowed when yaml_source_mode is inline-only")
+    if verifier_encoding == "explicit-phases" and "checks" in workflow_raw:
+        errors.append("top-level checks is not allowed when verifier_encoding is explicit-phases")
 
     expected_count = len(structure_phases)
     actual_count = len(workflow_phases)
