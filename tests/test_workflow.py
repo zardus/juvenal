@@ -1503,9 +1503,7 @@ class TestPlannerWorkflowAssets:
     def test_cleanup_prompts_use_snapshot_instead_of_git_history(self):
         repo_root = Path(__file__).resolve().parents[1]
         cleanup_prompt = (repo_root / "juvenal" / "workflows" / "plan-phases" / "05-plan-cleanup.md").read_text()
-        review_prompt = (
-            repo_root / "juvenal" / "workflows" / "plan-phases" / "06-plan-cleanup-review.md"
-        ).read_text()
+        review_prompt = (repo_root / "juvenal" / "workflows" / "plan-phases" / "06-plan-cleanup-review.md").read_text()
 
         assert ".plan/plan-before-cleanup.md" in cleanup_prompt
         assert ".plan/plan-before-cleanup.md" in review_prompt
@@ -1516,9 +1514,7 @@ class TestPlannerWorkflowAssets:
     def test_workflow_writer_and_review_prompts_require_structure_contract(self):
         repo_root = Path(__file__).resolve().parents[1]
         writer_prompt = (repo_root / "juvenal" / "workflows" / "plan-phases" / "09-write-workflow.md").read_text()
-        review_prompt = (
-            repo_root / "juvenal" / "workflows" / "plan-phases" / "10-workflow-review.md"
-        ).read_text()
+        review_prompt = (repo_root / "juvenal" / "workflows" / "plan-phases" / "10-workflow-review.md").read_text()
 
         assert ".plan/workflow-structure.yaml" in writer_prompt
         assert ".plan/workflow-structure.yaml" in review_prompt

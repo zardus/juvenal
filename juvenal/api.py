@@ -678,9 +678,7 @@ def _build_do_prompt(
 
 def _normalize_plan_goal_text(goal_text: str) -> tuple[str, str]:
     if not isinstance(goal_text, str):
-        raise JuvenalUsageError(
-            f"juvenal.plan_and_do() goal_text must be a string, got {type(goal_text).__name__}"
-        )
+        raise JuvenalUsageError(f"juvenal.plan_and_do() goal_text must be a string, got {type(goal_text).__name__}")
 
     stripped_goal_text = goal_text.strip()
     if not stripped_goal_text:

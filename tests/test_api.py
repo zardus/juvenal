@@ -549,6 +549,7 @@ def test_plan_and_do_load_failure_reports_workflow_yaml_path(tmp_path):
     bad_yaml = "name: planned\nphases:\n  - just-a-string\n"
 
     with goal("Ship the API", working_dir=tmp_path, backend=backend) as session:
+
         def fake_plan(**kwargs):
             workflow_path = Path(kwargs["project_dir"]) / "workflow.yaml"
             workflow_path.write_text(bad_yaml)
@@ -575,6 +576,7 @@ def test_plan_and_do_planned_engine_failure_reports_state_file(tmp_path):
     planned_yaml = "name: planned\nphases:\n  - id: execute\n    prompt: 'Execute the planned work.'\n"
 
     with goal("Ship the API", working_dir=tmp_path, backend=backend, max_bounces=1) as session:
+
         def fake_plan(**kwargs):
             workflow_path = Path(kwargs["project_dir"]) / "workflow.yaml"
             workflow_path.write_text(planned_yaml)
@@ -599,6 +601,7 @@ def test_plan_and_do_planning_failure_reports_planner_state_path(tmp_path):
     backend = MockBackend()
 
     with goal("Ship the API", working_dir=tmp_path, backend=backend) as session:
+
         def fake_run(self):
             self.state.set_attempt("planner", 1)
             self.state.mark_failed("planner")
@@ -779,15 +782,11 @@ def test_planner_assets_manifest_includes_plan_validation_module():
 def test_staged_plan_and_do_rejects_file_relative_yaml_and_rewinds_planner_state(tmp_path):
     backend = MockBackend()
     bad_yaml = (
-        "name: planned\n"
-        "include:\n"
-        "  - shared.yaml\n"
-        "phases:\n"
-        "  - id: execute\n"
-        "    prompt: 'Execute the planned work.'\n"
+        "name: planned\ninclude:\n  - shared.yaml\nphases:\n  - id: execute\n    prompt: 'Execute the planned work.'\n"
     )
 
     with goal("Ship the API", working_dir=tmp_path, backend=backend, session_name="example") as session:
+
         def fake_plan(**kwargs):
             workflow_path = Path(kwargs["project_dir"]) / "workflow.yaml"
             workflow_path.write_text(bad_yaml)
@@ -803,9 +802,10 @@ def test_staged_plan_and_do_rejects_file_relative_yaml_and_rewinds_planner_state
         assert session.stages["plan-stage"]["status"] == "running"
         planner_state = json.loads(Path(session.stages["plan-stage"]["planner_state_path"]).read_text())
         assert planner_state["phases"]["write-workflow"]["status"] == "pending"
-        assert "top-level include is not allowed" in planner_state["phases"]["write-workflow"][
-            "failure_contexts"
-        ][-1]["context"]
+        assert (
+            "top-level include is not allowed"
+            in planner_state["phases"]["write-workflow"]["failure_contexts"][-1]["context"]
+        )
 
 
 def test_goal_named_session_reuses_manifest_with_custom_artifact_root_and_exact_manifest_path(tmp_path):
@@ -1256,9 +1256,7 @@ def test_staged_plan_and_do_completion_checkpoint_persists_status_and_history_to
 
         completed_indices = [index for index, (status, _history_kinds) in enumerate(snapshots) if status == "completed"]
         history_indices = [
-            index
-            for index, (_status, history_kinds) in enumerate(snapshots)
-            if history_kinds == ("plan_and_do",)
+            index for index, (_status, history_kinds) in enumerate(snapshots) if history_kinds == ("plan_and_do",)
         ]
 
         assert completed_indices == [len(snapshots) - 1]

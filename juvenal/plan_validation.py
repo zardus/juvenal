@@ -94,9 +94,7 @@ def validate_planned_workflow(structure_path: Path, workflow_path: Path) -> list
     expected_count = len(structure_phases)
     actual_count = len(workflow_phases)
     if actual_count != expected_count:
-        errors.append(
-            f"Workflow phase count {actual_count} does not match structure phase count {expected_count}"
-        )
+        errors.append(f"Workflow phase count {actual_count} does not match structure phase count {expected_count}")
 
     shared_count = min(expected_count, actual_count)
     for index in range(shared_count):

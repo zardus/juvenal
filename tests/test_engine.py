@@ -1263,6 +1263,7 @@ class TestPlanWorkflow:
         from juvenal.engine import plan_workflow
 
         monkeypatch.chdir(tmp_path)
+
         def fake_engine_init(self_engine, workflow, **kwargs):
             self_engine.workflow = workflow
             self_engine.backend = MagicMock()
