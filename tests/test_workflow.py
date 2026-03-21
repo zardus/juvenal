@@ -1509,6 +1509,8 @@ class TestPlannerWorkflowAssets:
 
         assert ".plan/plan-before-cleanup.md" in cleanup_prompt
         assert ".plan/plan-before-cleanup.md" in review_prompt
+        assert ".plan/plan.md" in review_prompt
+        assert "Compare the concrete snapshot file against the rewritten plan directly." in review_prompt
         assert "Do not use `git diff`, `git log`, or git history." in review_prompt
 
     def test_workflow_writer_and_review_prompts_require_structure_contract(self):
