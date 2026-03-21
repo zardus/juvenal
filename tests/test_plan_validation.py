@@ -72,6 +72,53 @@ def _base_workflow() -> dict:
     }
 
 
+def _smoke_structure() -> dict:
+    return {
+        "linear": True,
+        "yaml_source_mode": "inline-only",
+        "verifier_encoding": "explicit-phases",
+        "required_preexisting_paths": ["original/"],
+        "phases": [
+            {"id": "analyze-prepared-inputs", "type": "implement"},
+            {
+                "id": "analyze-prepared-inputs-test",
+                "type": "script",
+                "bounce_target": "analyze-prepared-inputs",
+            },
+            {
+                "id": "analyze-prepared-inputs-review",
+                "type": "check",
+                "bounce_target": "analyze-prepared-inputs",
+            },
+        ],
+    }
+
+
+def _smoke_workflow() -> dict:
+    return {
+        "name": "smoke",
+        "backend": "codex",
+        "phases": [
+            {
+                "id": "analyze-prepared-inputs",
+                "prompt": "Inspect the prepared inputs and commit any changes before yielding.",
+            },
+            {
+                "id": "analyze-prepared-inputs-test",
+                "type": "script",
+                "run": "true",
+                "bounce_target": "analyze-prepared-inputs",
+            },
+            {
+                "id": "analyze-prepared-inputs-review",
+                "type": "check",
+                "bounce_target": "analyze-prepared-inputs",
+                "prompt": "Role: Tester.\nRespond with VERDICT: PASS or VERDICT: FAIL: <reason>.",
+            },
+        ],
+    }
+
+
 def _write_yaml(path: Path, data: dict) -> None:
     path.write_text(yaml.safe_dump(data, sort_keys=False), encoding="utf-8")
 
@@ -91,7 +138,7 @@ def test_validate_planned_workflow_accepts_valid_linear_workflow(tmp_path):
 
 
 def test_plan_validation_module_entrypoint_accepts_valid_linear_workflow(tmp_path):
-    structure_path, workflow_path = _write_case(tmp_path, _base_structure(), _base_workflow())
+    structure_path, workflow_path = _write_case(tmp_path, _smoke_structure(), _smoke_workflow())
 
     result = subprocess.run(
         [sys.executable, "-m", "juvenal.plan_validation", str(structure_path), str(workflow_path)],

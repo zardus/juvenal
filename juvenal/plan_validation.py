@@ -29,6 +29,13 @@ def _phase_type(phase_data: dict[str, Any]) -> Any:
     return phase_data.get("type", "implement")
 
 
+def _validate_required_input_list(value: Any, label: str, errors: list[str]) -> bool:
+    if not isinstance(value, list) or any(not isinstance(item, str) for item in value):
+        errors.append(f"{label} must be a list of strings")
+        return False
+    return True
+
+
 def validate_planned_workflow(structure_path: Path, workflow_path: Path) -> list[str]:
     """Validate planner-produced workflow rules that generic workflow validation does not cover."""
 
@@ -67,6 +74,15 @@ def validate_planned_workflow(structure_path: Path, workflow_path: Path) -> list
     if verifier_encoding != "explicit-phases":
         errors.append("Structure file must set verifier_encoding: explicit-phases")
 
+    has_global_required_inputs = False
+    for key in ("required_preexisting_inputs", "required_preexisting_paths"):
+        if key in structure_raw:
+            has_global_required_inputs |= _validate_required_input_list(
+                structure_raw.get(key),
+                f"Structure field {key!r}",
+                errors,
+            )
+
     if linear is True and "parallel_groups" in workflow_raw:
         errors.append("parallel_groups is not allowed when linear: true")
 
@@ -94,7 +110,7 @@ def validate_planned_workflow(structure_path: Path, workflow_path: Path) -> list
             continue
 
         order = structure_phase.get("order")
-        if order != phase_number:
+        if "order" in structure_phase and order != phase_number:
             errors.append(f"Structure phase {phase_number} must set order: {phase_number}")
 
         structure_id = structure_phase.get("id")
@@ -119,11 +135,17 @@ def validate_planned_workflow(structure_path: Path, workflow_path: Path) -> list
                 f"{structure_type!r}"
             )
 
-        required_inputs = structure_phase.get("required_preexisting_inputs")
-        if not isinstance(required_inputs, list) or any(not isinstance(item, str) for item in required_inputs):
+        if "required_preexisting_inputs" in structure_phase:
+            _validate_required_input_list(
+                structure_phase.get("required_preexisting_inputs"),
+                f"Structure phase {structure_id or phase_number!r}: required_preexisting_inputs",
+                errors,
+            )
+        elif not has_global_required_inputs:
             errors.append(
-                "Structure phase "
-                f"{structure_id or phase_number!r}: required_preexisting_inputs must be a list of strings"
+                "Structure file must declare required preexisting inputs either via top-level "
+                "required_preexisting_inputs/required_preexisting_paths or per-phase "
+                "required_preexisting_inputs"
             )
 
         structure_bounce = structure_phase.get("bounce_target")
