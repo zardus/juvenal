@@ -1359,8 +1359,17 @@ def _ensure_staged_plan_workspace_available(
     planner_state_path: Path,
 ) -> None:
     for stage_record in session.stages.values():
-        if stage_record.get("kind") == "plan-and-do" and not isinstance(stage_record.get("planner_owner"), dict):
-            raise JuvenalUsageError("Cannot mix staged and unstaged juvenal.plan_and_do() in the same workspace")
+        if stage_record.get("kind") != "plan-and-do":
+            continue
+
+        planner_owner = stage_record.get("planner_owner")
+        if isinstance(planner_owner, dict):
+            raise JuvenalUsageError(
+                "Workspace already has a staged juvenal.plan_and_do() owner in the manifest: "
+                f"{planner_owner.get('session_name')!r} / {planner_owner.get('stage_id')!r}"
+            )
+
+        raise JuvenalUsageError("Cannot mix staged and unstaged juvenal.plan_and_do() in the same workspace")
 
     if owner_path.exists():
         owner = _read_staged_plan_owner(owner_path)
