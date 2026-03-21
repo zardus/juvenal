@@ -1347,9 +1347,28 @@ def _ensure_unstaged_plan_allowed(session: GoalSession) -> None:
     owner_path = _staged_plan_owner_path(session.working_dir)
     if owner_path.exists():
         raise JuvenalUsageError("Cannot mix staged and unstaged juvenal.plan_and_do() in the same workspace")
-    for stage_record in session.stages.values():
-        if stage_record.get("kind") == "plan-and-do" and isinstance(stage_record.get("planner_owner"), dict):
-            raise JuvenalUsageError("Cannot mix staged and unstaged juvenal.plan_and_do() in the same workspace")
+    if _persisted_staged_plan_owner(session) is not None:
+        raise JuvenalUsageError("Cannot mix staged and unstaged juvenal.plan_and_do() in the same workspace")
+
+
+def _persisted_staged_plan_owner(session: GoalSession) -> dict[str, Any] | None:
+    for session_dir in sorted(session.artifact_root.iterdir()):
+        manifest_path = _session_manifest_path(session_dir)
+        if not manifest_path.exists():
+            continue
+
+        manifest = _load_session_manifest(manifest_path)
+        if Path(manifest["working_dir"]).resolve() != session.working_dir:
+            continue
+
+        for stage_record in manifest["stages"].values():
+            if stage_record.get("kind") != "plan-and-do":
+                continue
+            planner_owner = stage_record.get("planner_owner")
+            if isinstance(planner_owner, dict):
+                return planner_owner
+
+    return None
 
 
 def _persisted_plan_stage_conflict(session: GoalSession) -> JuvenalUsageError | None:
