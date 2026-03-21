@@ -1235,13 +1235,14 @@ def test_staged_plan_and_do_planner_complete_zero_phase_resume_completes_and_per
 
 
 def test_staged_plan_and_do_completion_checkpoint_persists_status_and_history_together(tmp_path):
-    snapshots: list[tuple[str | None, int]] = []
+    snapshots: list[tuple[str | None, tuple[str, ...]]] = []
     real_save = api_module._save_session_manifest
 
     def tracking_save(session):
         stage_record = session.stages.get("plan-stage")
         stage_status = stage_record.get("status") if isinstance(stage_record, dict) else None
-        snapshots.append((stage_status, len(session.history)))
+        history_kinds = tuple(entry.get("kind", "") for entry in session.history)
+        snapshots.append((stage_status, history_kinds))
         return real_save(session)
 
     def fake_plan(**kwargs):
@@ -1253,8 +1254,17 @@ def test_staged_plan_and_do_completion_checkpoint_persists_status_and_history_to
             with patch("juvenal.api._plan_workflow_internal", side_effect=fake_plan):
                 plan_and_do("Break the work into phases.", stage_id="plan-stage")
 
-        assert ("completed", 0) not in snapshots
-        assert snapshots[-1] == ("completed", 1)
+        completed_indices = [index for index, (status, _history_kinds) in enumerate(snapshots) if status == "completed"]
+        history_indices = [
+            index
+            for index, (_status, history_kinds) in enumerate(snapshots)
+            if history_kinds == ("plan_and_do",)
+        ]
+
+        assert completed_indices == [len(snapshots) - 1]
+        assert history_indices == [len(snapshots) - 1]
+        assert snapshots[-2] == ("planner_complete", ())
+        assert snapshots[-1] == ("completed", ("plan_and_do",))
         manifest = json.loads(session.manifest_path.read_text())
         assert manifest["stages"]["plan-stage"]["status"] == "completed"
         assert manifest["history"][-1]["kind"] == "plan_and_do"
