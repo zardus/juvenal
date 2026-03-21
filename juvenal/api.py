@@ -820,6 +820,20 @@ def do(
         raise JuvenalUsageError(str(exc)) from exc
 
     run_id = _allocate_run_id(session)
+    state_file = session.session_artifact_dir / f"run-{run_id}-do.json"
+    stage_id = _stage_id_for_run("do", run_id)
+    _create_stage_record(
+        session,
+        stage_id=stage_id,
+        stage_record={
+            "kind": "do",
+            "run_id": run_id,
+            "status": "running",
+            "tasks": list(tasks),
+            "checker_specs": list(checker_specs),
+            "state_file": state_file.name,
+        },
+    )
     recent_history_summaries = _recent_history_summaries(session)
     step_instructions: list[tuple[str, str]] = []
     base_phases: list[Phase] = []
@@ -847,26 +861,13 @@ def do(
     try:
         workflow = inject_checkers(workflow, checker_specs)
     except Exception as exc:
+        _persist_session_checkpoint(session, stage_id=stage_id, stage_updates={"status": "failed"})
         raise JuvenalUsageError(str(exc)) from exc
 
     errors = validate_workflow(workflow)
     if errors:
+        _persist_session_checkpoint(session, stage_id=stage_id, stage_updates={"status": "failed"})
         raise JuvenalUsageError(f"Embedded do() workflow validation failed: {'; '.join(errors)}")
-
-    state_file = session.session_artifact_dir / f"run-{run_id}-do.json"
-    stage_id = _stage_id_for_run("do", run_id)
-    _create_stage_record(
-        session,
-        stage_id=stage_id,
-        stage_record={
-            "kind": "do",
-            "run_id": run_id,
-            "status": "running",
-            "tasks": list(tasks),
-            "checker_specs": list(checker_specs),
-            "state_file": state_file.name,
-        },
-    )
     engine = Engine(
         workflow,
         backend_instance=session.backend_instance,

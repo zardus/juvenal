@@ -263,6 +263,22 @@ def test_do_reuses_successful_history_in_later_prompts(tmp_path):
         assert [entry["instruction"] for entry in session.history] == ["Prepare the repository", "Implement the API"]
 
 
+def test_do_persists_run_id_checkpoint_when_workflow_validation_fails(tmp_path):
+    with goal("Ship the API", working_dir=tmp_path, backend=MockBackend(), session_name="example") as session:
+        with pytest.raises(JuvenalUsageError, match="template variable"):
+            do("Implement {{VAR}} support")
+
+        manifest = json.loads(session.manifest_path.read_text())
+        assert manifest["run_counter"] == 1
+        assert manifest["history"] == []
+        assert manifest["stages"]["do-001"]["status"] == "failed"
+
+    with goal("Ship the API", working_dir=tmp_path, backend=MockBackend(), session_name="example") as resumed:
+        assert resumed.run_counter == 1
+        assert resumed.history == []
+        assert resumed.stages["do-001"]["status"] == "failed"
+
+
 def test_do_preserves_partial_success_history_when_later_step_fails(tmp_path):
     backend = MockBackend()
     backend.add_response(exit_code=0, output="step 1 done")
