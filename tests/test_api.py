@@ -8,6 +8,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 import pytest
+import yaml
 
 from juvenal.api import (
     JuvenalExecutionError,
@@ -24,6 +25,27 @@ from tests.conftest import MockBackend
 def _init_git_repo(path: Path) -> None:
     path.mkdir()
     subprocess.run(["git", "init"], cwd=path, check=True, capture_output=True, text=True)
+
+
+def _write_planned_workflow_structure(base_dir: Path, phases: list[dict[str, object]] | None = None) -> None:
+    plan_dir = base_dir / ".plan"
+    plan_dir.mkdir(exist_ok=True)
+    payload = {
+        "linear": True,
+        "yaml_source_mode": "inline-only",
+        "verifier_encoding": "explicit-phases",
+        "phases": phases
+        or [
+            {
+                "order": 1,
+                "id": "execute",
+                "type": "implement",
+                "bounce_target": None,
+                "required_preexisting_inputs": [],
+            }
+        ],
+    }
+    (plan_dir / "workflow-structure.yaml").write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
 
 
 def test_goal_rejects_missing_working_dir(tmp_path):
@@ -660,6 +682,7 @@ def test_staged_plan_and_do_resumes_after_planner_complete_without_replanning(tm
         planning_calls.append(kwargs)
         workflow_path = Path(kwargs["project_dir"]) / "workflow.yaml"
         workflow_path.write_text(planned_yaml)
+        _write_planned_workflow_structure(Path(kwargs["project_dir"]))
         return PlanResult(success=True, workflow_yaml_path=str(workflow_path), temp_dir=None)
 
     with goal(
@@ -743,6 +766,7 @@ def test_staged_plan_and_do_rejects_file_relative_yaml_and_rewinds_planner_state
         def fake_plan(**kwargs):
             workflow_path = Path(kwargs["project_dir"]) / "workflow.yaml"
             workflow_path.write_text(bad_yaml)
+            _write_planned_workflow_structure(Path(kwargs["project_dir"]))
             return PlanResult(success=True, workflow_yaml_path=str(workflow_path), temp_dir=None)
 
         with patch("juvenal.api._plan_workflow_internal", side_effect=fake_plan):

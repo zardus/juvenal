@@ -19,6 +19,7 @@ import yaml
 
 from juvenal.backends import Backend, create_backend
 from juvenal.engine import Engine, _plan_workflow_internal
+from juvenal.plan_validation import validate_planned_workflow
 from juvenal.state import PipelineState
 from juvenal.workflow import Phase, Workflow, inject_checkers, load_workflow, parse_checker_string, validate_workflow
 
@@ -971,31 +972,6 @@ def _ensure_planner_assets_unchanged(run_id: str, path: Path) -> None:
         raise _raise_missing_stage_artifact(run_id, path, "Planner assets changed since the stage was created")
 
 
-def _validate_inline_only_planned_workflow(path: Path) -> list[str]:
-    raw = yaml.safe_load(path.read_text(encoding="utf-8"))
-    if not isinstance(raw, dict):
-        return ["workflow.yaml must be a YAML mapping"]
-    phases = raw.get("phases")
-    if not isinstance(phases, list):
-        return ["workflow.yaml must define phases as a list"]
-
-    errors: list[str] = []
-    if "include" in raw:
-        errors.append("top-level include is not allowed")
-
-    forbidden_phase_keys = ("prompt_file", "workflow_file", "workflow_dir", "checks")
-    for index, phase_data in enumerate(phases, start=1):
-        if not isinstance(phase_data, dict):
-            errors.append(f"phase {index} must be a YAML mapping")
-            continue
-        phase_label = phase_data.get("id", f"phase {index}")
-        for key in forbidden_phase_keys:
-            if key in phase_data:
-                errors.append(f"phase {phase_label!r} must not use {key}")
-
-    return errors
-
-
 def _rewind_planner_to_write_workflow(planner_state_path: Path, failure_context: str) -> None:
     planner_state = PipelineState.load(planner_state_path)
     planner_state.invalidate_from(_STAGED_PLAN_WRITE_WORKFLOW_PHASE_ID)
@@ -1469,13 +1445,15 @@ def _finalize_staged_planning(
     archive_path: Path,
     planned_state_path: Path,
 ) -> Workflow:
+    structure_path = planner_state_path.parent / "workflow-structure.yaml"
+
     try:
-        raw_errors = _validate_inline_only_planned_workflow(workflow_path)
+        raw_errors = validate_planned_workflow(structure_path, workflow_path)
     except Exception as exc:
         error = JuvenalExecutionError(
             f"Planned workflow load failed: {exc}",
             run_id=_run_label(run_id),
-            inspection_path=workflow_path,
+            inspection_path=structure_path if not structure_path.exists() else workflow_path,
         )
         _rewind_planner_to_write_workflow(planner_state_path, str(error))
         raise error from exc

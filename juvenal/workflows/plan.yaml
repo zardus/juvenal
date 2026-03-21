@@ -44,7 +44,13 @@ phases:
 
   - id: yaml-validate
     type: script
+    bounce_target: write-workflow
     run: "python -c \"import yaml, sys; d=yaml.safe_load(open('workflow.yaml')); assert isinstance(d,dict) and 'phases' in d, 'missing phases key'\""
+
+  - id: planned-workflow-validate
+    type: script
+    bounce_target: write-workflow
+    run: "python -m juvenal.plan_validation .plan/workflow-structure.yaml workflow.yaml"
 
   - id: workflow-review
     type: check
