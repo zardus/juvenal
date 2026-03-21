@@ -83,6 +83,32 @@ juvenal plan "implement a REST API with tests" -o workflow.yaml
 juvenal do "add authentication to the Flask app"
 ```
 
+## Embedded Python API
+
+The supported embedded pattern is repo-centric: choose an existing repository or create one first, finish the git bootstrap before entering the goal context, and make an initial commit if checker diff review matters. Then open the goal session against that repository and call `do()` and `plan_and_do()` inside it.
+
+```python
+from pathlib import Path
+
+import juvenal.api as juvenal
+
+repo = Path("/path/to/repo")
+
+with juvenal.goal("Ship the API", working_dir=repo):
+    juvenal.do("Prepare the repository")
+    juvenal.do(["Scaffold handlers", "Wire auth"], checker="pm")
+    juvenal.do(["Add tests", "Harden the result"], checkers=["tester", "senior-tester"])
+    juvenal.plan_and_do("Break the remaining work into validated phases.")
+```
+
+`working_dir` is the directory whose filesystem and git context the agents inspect. Planner artifacts are written under that directory, so `plan_and_do()` uses `working_dir/.plan/` and `working_dir/workflow.yaml`.
+
+`do([...])` is sequential, not parallel. Later steps in the same `do([...])` call inherit the earlier completed-step list, and later `do()` or `plan_and_do()` work inherits summarized context from earlier successful steps in the session.
+
+Checker kwargs are strict: use `checker="pm"` for one checker, `checkers=["tester", "senior-tester"]` for several, and do not pass a bare string to `checkers`. `checkers="pm"` is invalid API usage.
+
+By default, the embedded API writes `.plan/` and `.juvenal-api/session-###/` under the target `working_dir`. `artifact_dir=` overrides only the API artifact root, not `.plan/`; relative `artifact_dir` values are resolved from `working_dir`. When possible, the API also updates the repository's resolved exclude file so those generated artifacts stay ignored.
+
 ## Workflow Formats
 
 ### YAML
@@ -201,6 +227,7 @@ Agent checkers can use built-in verification personas:
 - `tester` — runs tests, checks for build errors
 - `architect` — validates design, checks for circular dependencies
 - `pm` — confirms requirements are met, no TODOs remain
+- `security-engineer` — checks security properties and security regressions
 - `senior-tester` — checks test integrity, looks for cheating
 - `senior-engineer` — reviews code quality, completeness, security
 
