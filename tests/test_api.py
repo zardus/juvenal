@@ -175,7 +175,13 @@ def test_goal_named_session_reuses_manifest_and_restores_state(tmp_path):
     second_backend = MockBackend()
     second_backend.add_response(exit_code=0, output="api implemented")
 
-    with goal("Ship the API", working_dir=tmp_path, backend=second_backend, plain=True, session_name="example") as session:
+    with goal(
+        "Ship the API",
+        working_dir=tmp_path,
+        backend=second_backend,
+        plain=True,
+        session_name="example",
+    ) as session:
         assert session.plain is True
         assert session.run_counter == 1
         assert [entry["instruction"] for entry in session.history] == ["Prepare the repository"]
@@ -188,7 +194,10 @@ def test_goal_named_session_reuses_manifest_and_restores_state(tmp_path):
 
         manifest = json.loads(session.manifest_path.read_text())
         assert manifest["run_counter"] == 2
-        assert [entry["instruction"] for entry in manifest["history"]] == ["Prepare the repository", "Implement the API"]
+        assert [entry["instruction"] for entry in manifest["history"]] == [
+            "Prepare the repository",
+            "Implement the API",
+        ]
         assert manifest["stages"]["do-002"]["status"] == "completed"
 
 
@@ -308,6 +317,61 @@ def test_do_preserves_partial_success_history_when_later_step_fails(tmp_path):
         assert error.inspection_path.exists()
         assert [entry["instruction"] for entry in session.history] == ["Finish setup"]
         assert session.history[0]["phase_id"]
+
+
+def test_staged_do_resumes_with_stored_prompt_snapshots_and_same_run_id(tmp_path):
+    first_backend = MockBackend()
+    first_backend.add_response(exit_code=0, output="step 1 done")
+    first_backend.add_response(exit_code=0, output="VERDICT: PASS")
+    first_backend.add_response(exit_code=1, output="step 2 crashed")
+
+    with goal(
+        "Ship the API",
+        working_dir=tmp_path,
+        backend=first_backend,
+        max_bounces=1,
+        session_name="example",
+    ) as session:
+        with pytest.raises(JuvenalExecutionError):
+            do(["Step one", "Step two"], checker="tester", stage_id="build-stage")
+
+        assert session.stages["build-stage"]["status"] == "running"
+        assert session.stages["build-stage"]["run_id"] == "001"
+        assert [entry["instruction"] for entry in session.history] == ["Step one"]
+
+    second_backend = MockBackend()
+    second_backend.add_response(exit_code=0, output="later done")
+    second_backend.add_response(exit_code=0, output="step 2 done")
+    second_backend.add_response(exit_code=0, output="VERDICT: PASS")
+
+    with goal(
+        "Ship the API",
+        working_dir=tmp_path,
+        backend=second_backend,
+        max_bounces=1,
+        session_name="example",
+    ) as session:
+        do("Later history")
+        later_summary = session.history[-1]["summary"]
+
+        do(["Step one", "Step two"], checker="tester", stage_id="build-stage")
+
+        assert session.stages["build-stage"]["status"] == "completed"
+        assert session.stages["build-stage"]["run_id"] == "001"
+        assert later_summary not in second_backend.calls[1]
+        assert "Step one" in second_backend.calls[1]
+        assert "Step two" in second_backend.calls[1]
+
+
+def test_staged_do_rejects_reusing_stage_id_with_different_inputs(tmp_path):
+    backend = MockBackend()
+    backend.add_response(exit_code=0, output="prepared")
+
+    with goal("Ship the API", working_dir=tmp_path, backend=backend, session_name="example"):
+        do("Prepare the repository", stage_id="build-stage")
+
+        with pytest.raises(JuvenalUsageError, match="different do\\(\\) inputs"):
+            do("Implement the API", stage_id="build-stage")
 
 
 def test_goal_resolves_exclude_file_via_git_in_linked_worktree(tmp_path):
@@ -499,3 +563,119 @@ def test_plan_and_do_planning_failure_reports_planner_state_path(tmp_path):
         assert state["phases"]["planner"]["attempt"] == 1
         assert state["phases"]["planner"]["status"] == "failed"
         assert session.history == []
+
+
+def test_staged_plan_and_do_requires_named_session(tmp_path):
+    with goal("Ship the API", working_dir=tmp_path, backend=MockBackend()):
+        with pytest.raises(JuvenalUsageError, match="named session"):
+            plan_and_do("Break the work into phases.", stage_id="plan-stage")
+
+
+def test_staged_plan_and_do_resumes_after_planner_complete_without_replanning(tmp_path):
+    first_backend = MockBackend()
+    first_backend.add_response(exit_code=1, output="planned run crashed")
+    planned_yaml = "name: planned\nphases:\n  - id: execute\n    prompt: 'Execute the planned work.'\n"
+    wrong_yaml = "name: wrong\nphases:\n  - id: wrong\n    prompt: 'Execute the wrong workflow.'\n"
+    planning_calls: list[dict[str, object]] = []
+
+    def fake_plan(**kwargs):
+        planning_calls.append(kwargs)
+        workflow_path = Path(kwargs["project_dir"]) / "workflow.yaml"
+        workflow_path.write_text(planned_yaml)
+        return PlanResult(success=True, workflow_yaml_path=str(workflow_path), temp_dir=None)
+
+    with goal(
+        "Ship the API",
+        working_dir=tmp_path,
+        backend=first_backend,
+        max_bounces=1,
+        session_name="example",
+    ) as session:
+        with patch("juvenal.api._plan_workflow_internal", side_effect=fake_plan):
+            with pytest.raises(JuvenalExecutionError):
+                plan_and_do("Break the work into phases.", stage_id="plan-stage")
+
+        assert len(planning_calls) == 1
+        assert session.stages["plan-stage"]["status"] == "planner_complete"
+        owner_path = (tmp_path / ".plan" / "staged-plan-owner.json").resolve()
+        assert owner_path.exists()
+        owner_path.unlink()
+        (tmp_path / "workflow.yaml").write_text(wrong_yaml)
+
+    second_backend = MockBackend()
+    second_backend.add_response(exit_code=0, output="planned work complete")
+
+    with goal(
+        "Ship the API",
+        working_dir=tmp_path,
+        backend=second_backend,
+        max_bounces=1,
+        session_name="example",
+    ) as session:
+        with patch("juvenal.api._plan_workflow_internal", side_effect=AssertionError("planner should not rerun")):
+            plan_and_do("Break the work into phases.", stage_id="plan-stage")
+
+        assert (tmp_path / ".plan" / "staged-plan-owner.json").exists()
+        assert session.stages["plan-stage"]["run_id"] == "001"
+        assert session.stages["plan-stage"]["status"] == "completed"
+        assert session.history[-1]["kind"] == "plan_and_do"
+        assert "Execute the planned work." in second_backend.calls[0]
+        assert "Execute the wrong workflow." not in second_backend.calls[0]
+
+
+def test_staged_plan_and_do_rejects_planner_asset_drift_before_resume(tmp_path):
+    backend = MockBackend()
+
+    with goal("Ship the API", working_dir=tmp_path, backend=backend, session_name="example") as session:
+        with patch(
+            "juvenal.api._plan_workflow_internal",
+            return_value=PlanResult(success=False, error="planner failed", temp_dir=None),
+        ):
+            with pytest.raises(JuvenalExecutionError):
+                plan_and_do("Break the work into phases.", stage_id="plan-stage")
+
+        planner_assets_path = Path(session.stages["plan-stage"]["planner_assets_path"])
+        assert session.stages["plan-stage"]["status"] == "running"
+        assert planner_assets_path.exists()
+
+    with goal("Ship the API", working_dir=tmp_path, backend=MockBackend(), session_name="example"):
+        with patch(
+            "juvenal.api._build_planner_assets_manifest",
+            return_value={"digest": "changed", "files": [], "root": "planner"},
+        ):
+            with patch("juvenal.api._plan_workflow_internal", side_effect=AssertionError("planner should not rerun")):
+                with pytest.raises(JuvenalExecutionError) as exc_info:
+                    plan_and_do("Break the work into phases.", stage_id="plan-stage")
+
+        assert exc_info.value.inspection_path == planner_assets_path.resolve()
+
+
+def test_staged_plan_and_do_rejects_file_relative_yaml_and_rewinds_planner_state(tmp_path):
+    backend = MockBackend()
+    bad_yaml = (
+        "name: planned\n"
+        "include:\n"
+        "  - shared.yaml\n"
+        "phases:\n"
+        "  - id: execute\n"
+        "    prompt: 'Execute the planned work.'\n"
+    )
+
+    with goal("Ship the API", working_dir=tmp_path, backend=backend, session_name="example") as session:
+        def fake_plan(**kwargs):
+            workflow_path = Path(kwargs["project_dir"]) / "workflow.yaml"
+            workflow_path.write_text(bad_yaml)
+            return PlanResult(success=True, workflow_yaml_path=str(workflow_path), temp_dir=None)
+
+        with patch("juvenal.api._plan_workflow_internal", side_effect=fake_plan):
+            with pytest.raises(JuvenalExecutionError) as exc_info:
+                plan_and_do("Break the work into phases.", stage_id="plan-stage")
+
+        error = exc_info.value
+        assert error.inspection_path == (tmp_path / "workflow.yaml").resolve()
+        assert session.stages["plan-stage"]["status"] == "running"
+        planner_state = json.loads(Path(session.stages["plan-stage"]["planner_state_path"]).read_text())
+        assert planner_state["phases"]["write-workflow"]["status"] == "pending"
+        assert "top-level include is not allowed" in planner_state["phases"]["write-workflow"][
+            "failure_contexts"
+        ][-1]["context"]
