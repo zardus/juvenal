@@ -98,6 +98,18 @@ def test_goal_named_session_requires_valid_manifest_when_directory_exists(tmp_pa
             pass
 
 
+def test_goal_named_session_rejects_manifest_missing_session_name(tmp_path):
+    with goal("Goal", working_dir=tmp_path, backend=MockBackend(), session_name="example") as session:
+        manifest = json.loads(session.manifest_path.read_text())
+
+    del manifest["session_name"]
+    session.manifest_path.write_text(json.dumps(manifest))
+
+    with pytest.raises(JuvenalUsageError, match="session_name is required for named sessions"):
+        with goal("Goal", working_dir=tmp_path, backend=MockBackend(), session_name="example"):
+            pass
+
+
 def test_goal_named_session_rejects_identity_mismatches(tmp_path):
     working_dir = tmp_path / "work"
     working_dir.mkdir()

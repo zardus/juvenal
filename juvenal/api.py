@@ -250,6 +250,8 @@ def _load_session_manifest(manifest_path: Path) -> dict[str, Any]:
                 manifest_path,
                 f"session_name {session_name!r} must match session_id {session_id!r}",
             )
+    elif not _is_reserved_session_name(session_id):
+        raise _invalid_session_manifest(manifest_path, "session_name is required for named sessions")
 
     if session_id != manifest_path.parent.name:
         raise _invalid_session_manifest(
