@@ -923,7 +923,8 @@ def _collect_planner_asset_files(path: Path, seen_yaml: set[Path], assets: set[P
 
 def _build_planner_assets_manifest() -> dict[str, Any]:
     planner_yaml = (Path(__file__).parent / "workflows" / "plan.yaml").resolve()
-    assets: set[Path] = set()
+    planner_validator = (Path(__file__).parent / "plan_validation.py").resolve()
+    assets: set[Path] = {planner_validator}
     _collect_planner_asset_files(planner_yaml, set(), assets)
 
     files: list[dict[str, str]] = []

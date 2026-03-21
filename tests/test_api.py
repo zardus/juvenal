@@ -751,6 +751,16 @@ def test_staged_plan_and_do_rejects_planner_asset_drift_before_resume(tmp_path):
         assert exc_info.value.inspection_path == planner_assets_path.resolve()
 
 
+def test_planner_assets_manifest_includes_plan_validation_module():
+    from juvenal.api import _build_planner_assets_manifest
+
+    manifest = _build_planner_assets_manifest()
+    manifest_paths = {entry["path"] for entry in manifest["files"]}
+    expected_path = str((Path(__file__).resolve().parents[1] / "juvenal" / "plan_validation.py").resolve())
+
+    assert expected_path in manifest_paths
+
+
 def test_staged_plan_and_do_rejects_file_relative_yaml_and_rewinds_planner_state(tmp_path):
     backend = MockBackend()
     bad_yaml = (
