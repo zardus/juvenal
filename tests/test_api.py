@@ -70,6 +70,116 @@ def test_goal_restores_nested_session_and_allocates_distinct_default_session_dir
         assert [entry["instruction"] for entry in outer.history] == ["Outer task"]
 
 
+@pytest.mark.parametrize(
+    "session_name",
+    ["", "Example", "has_underscore", "two--parts", "-leading", "trailing-", "with space", " spaced", "a/b", ".", ".."],
+)
+def test_goal_rejects_invalid_session_names(tmp_path, session_name):
+    with pytest.raises(JuvenalUsageError, match="session_name must match"):
+        with goal("Goal", working_dir=tmp_path, backend=MockBackend(), session_name=session_name):
+            pass
+
+
+def test_goal_rejects_reserved_named_session_namespace(tmp_path):
+    with pytest.raises(JuvenalUsageError, match="reserved for anonymous sessions"):
+        with goal("Goal", working_dir=tmp_path, backend=MockBackend(), session_name="session-001"):
+            pass
+
+
+@pytest.mark.parametrize("manifest_text", [None, "{not json"])
+def test_goal_named_session_requires_valid_manifest_when_directory_exists(tmp_path, manifest_text):
+    session_dir = tmp_path / ".juvenal-api" / "example"
+    session_dir.mkdir(parents=True)
+    if manifest_text is not None:
+        (session_dir / "session.json").write_text(manifest_text)
+
+    with pytest.raises(JuvenalUsageError, match="Invalid session manifest"):
+        with goal("Goal", working_dir=tmp_path, backend=MockBackend(), session_name="example"):
+            pass
+
+
+def test_goal_named_session_rejects_identity_mismatches(tmp_path):
+    working_dir = tmp_path / "work"
+    working_dir.mkdir()
+    other_working_dir = tmp_path / "other"
+    other_working_dir.mkdir()
+    artifact_dir = tmp_path / "artifacts"
+
+    class AlternateBackend(MockBackend):
+        def name(self) -> str:
+            return "alternate-mock"
+
+    with goal(
+        "Goal",
+        working_dir=working_dir,
+        artifact_dir=artifact_dir,
+        backend=MockBackend(),
+        session_name="example",
+    ):
+        pass
+
+    mismatch_cases = [
+        ({"description": "Different goal"}, "goal_text"),
+        ({"working_dir": other_working_dir}, "working_dir"),
+        ({"backend": AlternateBackend()}, "backend_name"),
+        ({"max_bounces": 1}, "max_bounces"),
+        ({"serialize": True}, "serialize"),
+        ({"clear_context_on_bounce": True}, "clear_context_on_bounce"),
+    ]
+
+    for overrides, field_name in mismatch_cases:
+        kwargs = {
+            "description": "Goal",
+            "working_dir": working_dir,
+            "artifact_dir": artifact_dir,
+            "backend": MockBackend(),
+            "session_name": "example",
+        }
+        kwargs.update(overrides)
+        with pytest.raises(JuvenalUsageError, match=field_name):
+            with goal(**kwargs):
+                pass
+
+
+def test_goal_named_session_reuses_manifest_and_restores_state(tmp_path):
+    first_backend = MockBackend()
+    first_backend.add_response(exit_code=0, output="repo prepared")
+
+    with goal("Ship the API", working_dir=tmp_path, backend=first_backend, session_name="example") as session:
+        assert session.session_id == "example"
+        assert session.session_key == "example"
+        assert session.session_name == "example"
+        assert session.session_artifact_dir == (tmp_path / ".juvenal-api" / "example").resolve()
+        assert session.manifest_path == (tmp_path / ".juvenal-api" / "example" / "session.json").resolve()
+        assert session.manifest_path.exists()
+
+        do("Prepare the repository")
+
+        manifest = json.loads(session.manifest_path.read_text())
+        assert manifest["run_counter"] == 1
+        assert [entry["instruction"] for entry in manifest["history"]] == ["Prepare the repository"]
+        assert manifest["stages"]["do-001"]["status"] == "completed"
+
+    second_backend = MockBackend()
+    second_backend.add_response(exit_code=0, output="api implemented")
+
+    with goal("Ship the API", working_dir=tmp_path, backend=second_backend, plain=True, session_name="example") as session:
+        assert session.plain is True
+        assert session.run_counter == 1
+        assert [entry["instruction"] for entry in session.history] == ["Prepare the repository"]
+        assert session.stages["do-001"]["status"] == "completed"
+
+        do("Implement the API")
+
+        assert [entry["instruction"] for entry in session.history] == ["Prepare the repository", "Implement the API"]
+        assert (session.session_artifact_dir / "run-002-do.json").exists()
+
+        manifest = json.loads(session.manifest_path.read_text())
+        assert manifest["run_counter"] == 2
+        assert [entry["instruction"] for entry in manifest["history"]] == ["Prepare the repository", "Implement the API"]
+        assert manifest["stages"]["do-002"]["status"] == "completed"
+
+
 def test_do_requires_active_goal_session():
     with pytest.raises(JuvenalUsageError, match="requires an active juvenal.goal"):
         do("Build the feature")
@@ -283,6 +393,11 @@ def test_plan_and_do_uses_session_working_dir_and_preserves_history(tmp_path):
         assert planned_state_files[0].exists()
         assert "Execute the planned work." in backend.calls[-1]
         assert "Execute the wrong workflow." not in backend.calls[-1]
+        manifest = json.loads(session.manifest_path.read_text())
+        assert manifest["run_counter"] == 2
+        assert manifest["history"][-1]["kind"] == "plan_and_do"
+        assert manifest["stages"]["do-001"]["status"] == "completed"
+        assert manifest["stages"]["plan-and-do-002"]["status"] == "completed"
 
 
 def test_plan_and_do_load_failure_reports_workflow_yaml_path(tmp_path):
