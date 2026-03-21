@@ -50,7 +50,12 @@ def _write_planned_workflow_structure(base_dir: Path, phases: list[dict[str, obj
     (plan_dir / "workflow-structure.yaml").write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
 
 
-def _write_planned_workflow(base_dir: Path, workflow_text: str, *, phases: list[dict[str, object]] | None = None) -> Path:
+def _write_planned_workflow(
+    base_dir: Path,
+    workflow_text: str,
+    *,
+    phases: list[dict[str, object]] | None = None,
+) -> Path:
     workflow_path = (base_dir / "workflow.yaml").resolve()
     workflow_path.write_text(workflow_text, encoding="utf-8")
     _write_planned_workflow_structure(base_dir, phases=phases)
@@ -929,7 +934,10 @@ def test_staged_do_missing_or_corrupt_state_file_reports_recorded_path(tmp_path,
             state_file.write_text("{not json", encoding="utf-8")
 
     with goal("Ship the API", working_dir=tmp_path, backend=MockBackend(), session_name="example"):
-        with pytest.raises(JuvenalExecutionError, match="Recorded do\\(\\) state file is missing or unreadable") as exc_info:
+        with pytest.raises(
+            JuvenalExecutionError,
+            match="Recorded do\\(\\) state file is missing or unreadable",
+        ) as exc_info:
             do("Prepare the repository", stage_id="build-stage")
 
     assert exc_info.value.inspection_path == state_file.resolve()
@@ -1005,7 +1013,10 @@ def test_staged_plan_and_do_zero_attempt_planner_resume_uses_stored_goal_snapsho
         do("Prepare the repository")
         initial_summary = session.history[-1]["summary"]
 
-        with patch("juvenal.api._plan_workflow_internal", side_effect=RuntimeError("planner crashed before first attempt")):
+        with patch(
+            "juvenal.api._plan_workflow_internal",
+            side_effect=RuntimeError("planner crashed before first attempt"),
+        ):
             with pytest.raises(JuvenalExecutionError, match="Planning failed"):
                 plan_and_do("Break the work into phases.", stage_id="plan-stage")
 
@@ -1022,7 +1033,11 @@ def test_staged_plan_and_do_zero_attempt_planner_resume_uses_stored_goal_snapsho
 
         def fake_plan(**kwargs):
             captured.update(kwargs)
-            workflow_path = _write_planned_workflow(Path(kwargs["project_dir"]), "name: planned\nphases: []\n", phases=[])
+            workflow_path = _write_planned_workflow(
+                Path(kwargs["project_dir"]),
+                "name: planned\nphases: []\n",
+                phases=[],
+            )
             return PlanResult(success=True, workflow_yaml_path=str(workflow_path), temp_dir=None)
 
         with patch("juvenal.api._plan_workflow_internal", side_effect=fake_plan):
@@ -1084,7 +1099,10 @@ def test_staged_plan_and_do_missing_planner_state_file_reports_recorded_path(tmp
         planner_state_path.unlink()
 
     with goal("Ship the API", working_dir=tmp_path, backend=MockBackend(), session_name="example"):
-        with pytest.raises(JuvenalExecutionError, match="Recorded planner state file is missing or unreadable") as exc_info:
+        with pytest.raises(
+            JuvenalExecutionError,
+            match="Recorded planner state file is missing or unreadable",
+        ) as exc_info:
             plan_and_do("Break the work into phases.", stage_id="plan-stage")
 
     assert exc_info.value.inspection_path == planner_state_path.resolve()

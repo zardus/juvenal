@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-import subprocess
 import re
+import subprocess
 from contextlib import contextmanager
 from pathlib import Path
 from unittest.mock import patch
