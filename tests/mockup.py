@@ -191,22 +191,6 @@ def _build_toy_planner_prompt(target_dir: Path) -> str:
     """
 
 
-def __getattr__(name: str) -> object:
-    legacy_names = {
-        "LIBNAME": EXAMPLE_APP_NAME,
-        "DISTRO": "repo-local toy example",
-        "PREPARE_ORIGINAL_STAGE_ID": PREPARE_EXAMPLE_BRIEF_STAGE_ID,
-        "PREPARE_TESTS_STAGE_ID": PREPARE_ACCEPTANCE_ASSETS_STAGE_ID,
-        "PORT_LIBRARY_STAGE_ID": BUILD_TOY_TODO_STAGE_ID,
-        "_build_final_planner_prompt": _build_toy_planner_prompt,
-    }
-    if name == ("RESEARCH_" + "C" + "VES_STAGE_ID"):
-        return PREPARE_SAMPLE_INTERACTIONS_STAGE_ID
-    if name in legacy_names:
-        return legacy_names[name]
-    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
-
-
 def main(
     working_dir: str | Path | None = None,
     *,
