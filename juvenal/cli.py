@@ -12,7 +12,7 @@ def build_parser() -> argparse.ArgumentParser:
         description="Who guards the agents? Orchestrate AI coding agents through verified implementation phases.",
     )
     parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
-    parser.add_argument("--plain", action="store_true", help="Plain text output (no Rich TUI)")
+    parser.add_argument("--rich", action="store_true", help="Rich TUI output (default: plain text)")
     sub = parser.add_subparsers(dest="command")
 
     # run
@@ -63,7 +63,6 @@ def build_parser() -> argparse.ArgumentParser:
         "-i", "--interactive", action="store_true", help="Interactive mode: chat with the agent during plan refinement"
     )
     plan_p.add_argument("--resume", action="store_true", help="Resume a previously interrupted plan")
-    plan_p.add_argument("--plain", action="store_true", help="Plain text output (no Rich TUI)")
 
     # do
     do_p = sub.add_parser("do", help="Plan + immediately run a workflow")
@@ -371,6 +370,9 @@ def main(argv: list[str] | None = None) -> None:
     if not args.command:
         parser.print_help()
         sys.exit(1)
+
+    # --rich opts into Rich TUI; default is plain text
+    args.plain = not getattr(args, "rich", False)
 
     handlers = {
         "run": cmd_run,

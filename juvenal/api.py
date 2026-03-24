@@ -997,7 +997,7 @@ def goal(
     working_dir: str | Path = ".",
     backend: str | Backend = "codex",
     max_bounces: int = 999,
-    plain: bool = False,
+    plain: bool = True,
     serialize: bool = False,
     clear_context_on_bounce: bool = False,
     artifact_dir: str | Path | None = None,

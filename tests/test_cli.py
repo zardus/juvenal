@@ -243,6 +243,16 @@ class TestArgumentParsing:
         args = parser.parse_args(["do", "build a thing", "--serialize"])
         assert args.serialize is True
 
+    def test_rich_flag(self):
+        parser = build_parser()
+        args = parser.parse_args(["--rich", "run", "workflow.yaml"])
+        assert args.rich is True
+
+    def test_default_is_plain(self):
+        parser = build_parser()
+        args = parser.parse_args(["run", "workflow.yaml"])
+        assert args.rich is False
+
     def test_no_command(self):
         parser = build_parser()
         args = parser.parse_args([])

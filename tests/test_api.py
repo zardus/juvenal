@@ -520,7 +520,7 @@ def test_plan_and_do_uses_session_working_dir_and_preserves_history(tmp_path):
 
         assert captured["project_dir"] == session.working_dir
         assert captured["backend_instance"] is backend
-        assert captured["plain"] is False
+        assert captured["plain"] is True
         assert "Ship the API" in captured["goal"]
         assert prior_summary in captured["goal"]
         assert "Break the work into phases." in captured["goal"]
