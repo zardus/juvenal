@@ -85,78 +85,34 @@ juvenal do "add authentication to the Flask app"
 
 ## Embedded API
 
-Juvenal also exposes an embedded Python API for scripts that want resumable top-level stages:
+Juvenal exposes an embedded Python API. The repository includes a toy example at `tests/mockup.py`:
 
 ```python
+import subprocess, tempfile
 from juvenal.api import do, goal, plan_and_do
 
-with goal(
-    "port libzstd from C to Rust",
-    working_dir="/abs/path/to/workspace",
-    backend="codex",
-    session_name="stable-session",
-):
-    do("prepare the source tree", stage_id="prepare-source")
-    plan_and_do("break the port into linear implementation phases", stage_id="port-library")
+tmpdir = tempfile.mkdtemp()
+subprocess.run(["git", "init"], cwd=tmpdir, check=True)
+subprocess.run(["git", "commit", "--allow-empty", "-m", "init"], cwd=tmpdir, check=True)
+
+with goal("build a toy todo CLI", working_dir=tmpdir):
+    do("write example-brief.md describing the toy todo CLI", checker="pm")
+    do(
+        ["create sample-interactions.md with happy-path transcripts",
+         "add edge-case transcripts to sample-interactions.md"],
+        checkers=["security-engineer"],
+    )
+    do(
+        ["derive acceptance-checklist.md from the prep artifacts",
+         "expand the checklist with missing coverage",
+         "add persisted-state scenarios to the checklist",
+         "write smoke-test.sh for shell validation"],
+        checkers=["tester", "senior-tester"],
+    )
+    plan_and_do("build the toy todo CLI in toy_app/")
 ```
 
-### Session Naming and Artifact Paths
-
-- `goal(..., session_name="name")` creates or reuses a named embedded session.
-- `artifact_dir` defaults to `<working_dir>/.juvenal-api`. Relative `artifact_dir` values are resolved against `working_dir`.
-- The session manifest path is always `<resolved artifact_root>/<session_name>/session.json`.
-- Cross-process resume requires the same resolved `working_dir`, `session_name`, and `artifact_dir`.
-- Named-session reuse also validates the stored identity: goal text, backend name, `max_bounces`, `serialize`, and `clear_context_on_bounce` must still match.
-- `session_name` and `stage_id` must match `^[a-z0-9]+(?:-[a-z0-9]+)*$`.
-- `session_name` must not use the reserved anonymous namespace `^session-[0-9]+$`.
-
-### `do(..., stage_id=...)`
-
-- `do(..., stage_id="name")` turns a top-level embedded `do()` call into a resumable stage.
-- A staged `do()` snapshots each generated implement prompt at stage creation time. Resume uses the stored prompts even if later session history changes.
-- Staged `do()` writes its state file before the first attempt, so a zero-attempt state file may already exist if the process dies early.
-- Reusing a completed staged `do()` is a no-op.
-- Reusing a `stage_id` with different tasks or checker specs is rejected.
-- If the recorded staged `do()` state file is missing or unreadable, resume fails immediately and points at that exact artifact.
-
-### `plan_and_do(..., stage_id=...)`
-
-- `plan_and_do(..., stage_id="name")` is the resumable planner form. It requires a named session.
-- The stage-less form `plan_and_do("goal")` remains non-resumable. It uses `working_dir/.plan` and `working_dir/workflow.yaml` as scratch planner workspace, so use it only in a clean planner workspace.
-- Only one staged `plan_and_do()` owner may exist per workspace at a time. Starting another staged planner while `.plan/staged-plan-owner.json` belongs to an in-progress stage fails immediately.
-- Staged and unstaged planner usage must not mix in one workspace.
-- Staged planner resume stores a stable `planning_goal`, so later session history does not rewrite the planner prompt for an existing stage.
-- Staged planner setup writes zero-attempt planner state immediately, plus a planner owner file at `.plan/staged-plan-owner.json`.
-- Planner assets are tracked by digest in the recorded `run-XXX-planner-assets.json`. Resume fails explicitly if that manifest is missing, unreadable, or if the planner assets no longer match the stored digest.
-- Resume also fails explicitly if recorded planner artifacts are deleted, including the planner state, archived planned workflow, or planned execution state.
-- After planning succeeds and the archived workflow plus planned execution state are created, the stage enters `planner_complete`. Resume from `planner_complete` loads the archived workflow instead of rerunning the planner.
-- Reusing a completed staged `plan_and_do()` is a no-op.
-
-### Planned Workflow Rules
-
-Planner-generated workflows are intentionally stricter than hand-written workflows:
-
-- The generated YAML must stay linear.
-- Verifiers must be explicit phases, not generated via `checks:` shorthand.
-- Every verifier must immediately follow the implement phase it verifies.
-- Every verifier must use a single fixed `bounce_target` back to that immediately preceding implement phase.
-- Generated planned workflows must be inline-only: no top-level `include`, no phase-level `prompt_file`, `workflow_file`, `workflow_dir`, and no phase-level `checks`.
-- Agent-guided `bounce_targets` lists are not allowed in generated planned workflows.
-
-### Rerunnable `mockup.py`
-
-The sample script is designed to be rerun with a stable named session:
-
-```bash
-python mockup.py \
-  --working-dir /tmp/libzstd-port \
-  --session-name stable-session \
-  --backend codex \
-  --plain \
-  --max-bounces 999
-```
-
-Run the same command again to reuse the repo, reuse the named embedded session, and skip already-completed top-level stages.
+Run it from a repo checkout: `python -m tests.mockup`
 
 ## Workflow Formats
 
