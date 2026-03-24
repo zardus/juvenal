@@ -83,6 +83,37 @@ juvenal plan "implement a REST API with tests" -o workflow.yaml
 juvenal do "add authentication to the Flask app"
 ```
 
+## Embedded API
+
+Juvenal exposes an embedded Python API. The repository includes a toy example at `tests/mockup.py`:
+
+```python
+import subprocess, tempfile
+from juvenal.api import do, goal, plan_and_do
+
+tmpdir = tempfile.mkdtemp()
+subprocess.run(["git", "init"], cwd=tmpdir, check=True)
+subprocess.run(["git", "commit", "--allow-empty", "-m", "init"], cwd=tmpdir, check=True)
+
+with goal("build a toy todo CLI", working_dir=tmpdir):
+    do("write example-brief.md describing the toy todo CLI", checker="pm")
+    do(
+        ["create sample-interactions.md with happy-path transcripts",
+         "add edge-case transcripts to sample-interactions.md"],
+        checkers=["security-engineer"],
+    )
+    do(
+        ["derive acceptance-checklist.md from the prep artifacts",
+         "expand the checklist with missing coverage",
+         "add persisted-state scenarios to the checklist",
+         "write smoke-test.sh for shell validation"],
+        checkers=["tester", "senior-tester"],
+    )
+    plan_and_do("build the toy todo CLI in toy_app/")
+```
+
+Run it from a repo checkout: `python -m tests.mockup`
+
 ## Workflow Formats
 
 ### YAML

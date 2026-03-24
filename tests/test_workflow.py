@@ -1,5 +1,7 @@
 """Unit tests for workflow loading."""
 
+from pathlib import Path
+
 import pytest
 
 from juvenal.workflow import (
@@ -679,6 +681,9 @@ class TestParseCheckerString:
     def test_role(self):
         assert parse_checker_string("tester") == "tester"
 
+    def test_role_security_engineer(self):
+        assert parse_checker_string("security-engineer") == "security-engineer"
+
     def test_role_senior(self):
         assert parse_checker_string("senior-tester") == "senior-tester"
 
@@ -714,6 +719,18 @@ class TestInjectCheckers:
         assert result.phases[1].id == "build~check-1"
         assert result.phases[1].type == "check"
         assert result.phases[1].role == "tester"
+        assert result.phases[1].bounce_target == "build"
+
+    def test_single_implement_security_engineer_checker(self):
+        wf = Workflow(
+            name="test",
+            phases=[Phase(id="build", type="implement", prompt="Build it.")],
+        )
+        result = inject_checkers(wf, ["security-engineer"])
+        assert len(result.phases) == 2
+        assert result.phases[1].id == "build~check-1"
+        assert result.phases[1].type == "check"
+        assert result.phases[1].role == "security-engineer"
         assert result.phases[1].bounce_target == "build"
 
     def test_single_implement_script_checker(self):
@@ -1290,7 +1307,6 @@ class TestScaffoldWorkflow:
     def test_scaffold_creates_files(self, tmp_path):
         target = str(tmp_path / "my-workflow")
         scaffold_workflow(target)
-        from pathlib import Path
 
         t = Path(target)
         assert t.exists()
@@ -1304,7 +1320,6 @@ class TestScaffoldWorkflow:
     def test_scaffold_creates_parent_dirs(self, tmp_path):
         target = str(tmp_path / "deep" / "nested" / "workflow")
         scaffold_workflow(target)
-        from pathlib import Path
 
         assert Path(target).exists()
 
@@ -1316,6 +1331,15 @@ class TestLoadRolePrompt:
         prompt = _load_role_prompt("tester")
         assert len(prompt) > 0
         assert "VERDICT" in prompt
+
+    def test_security_engineer_role(self):
+        from juvenal.workflow import _load_role_prompt
+
+        prompt = _load_role_prompt("security-engineer")
+        assert "Security Engineer REVIEWING" in prompt
+        assert "Input handling and trust boundaries" in prompt
+        assert "SSRF" in prompt
+        assert "Software Tester REVIEWING" not in prompt
 
     def test_invalid_role_raises(self):
         from juvenal.workflow import _load_role_prompt
@@ -1443,3 +1467,61 @@ phases:
             load_workflow(tmp_path / "workflow.yaml")
             assert len(w) == 1
             assert "typo_key" in str(w[0].message)
+
+
+class TestPlannerWorkflowAssets:
+    def test_plan_workflow_runs_both_post_write_validators_before_review(self):
+        repo_root = Path(__file__).resolve().parents[1]
+        workflow = load_workflow(repo_root / "juvenal" / "workflows" / "plan.yaml")
+        phase_ids = [phase.id for phase in workflow.phases]
+        write_index = phase_ids.index("write-workflow")
+        yaml_validate_index = phase_ids.index("yaml-validate")
+        planned_validate_index = phase_ids.index("planned-workflow-validate")
+        review_index = phase_ids.index("workflow-review")
+
+        assert yaml_validate_index == write_index + 1
+        assert planned_validate_index == yaml_validate_index + 1
+        assert review_index == planned_validate_index + 1
+
+        assert phase_ids[write_index + 1 : write_index + 4] == [
+            "yaml-validate",
+            "planned-workflow-validate",
+            "workflow-review",
+        ]
+
+        phases = {phase.id: phase for phase in workflow.phases}
+        assert phases["yaml-validate"].type == "script"
+        assert phases["yaml-validate"].bounce_target == "write-workflow"
+        assert phases["planned-workflow-validate"].type == "script"
+        assert phases["planned-workflow-validate"].bounce_target == "write-workflow"
+        assert (
+            phases["planned-workflow-validate"].run
+            == "python -m juvenal.plan_validation .plan/workflow-structure.yaml workflow.yaml"
+        )
+        assert phases["workflow-review"].bounce_target == "write-workflow"
+
+    def test_cleanup_prompts_use_snapshot_instead_of_git_history(self):
+        repo_root = Path(__file__).resolve().parents[1]
+        cleanup_prompt = (repo_root / "juvenal" / "workflows" / "plan-phases" / "05-plan-cleanup.md").read_text()
+        review_prompt = (repo_root / "juvenal" / "workflows" / "plan-phases" / "06-plan-cleanup-review.md").read_text()
+
+        assert ".plan/plan-before-cleanup.md" in cleanup_prompt
+        assert ".plan/plan-before-cleanup.md" in review_prompt
+        assert ".plan/plan.md" in review_prompt
+        assert "Compare the concrete snapshot file against the rewritten plan directly." in review_prompt
+        assert "Do not use `git diff`, `git log`, or git history." in review_prompt
+
+    def test_workflow_writer_and_review_prompts_require_structure_contract(self):
+        repo_root = Path(__file__).resolve().parents[1]
+        writer_prompt = (repo_root / "juvenal" / "workflows" / "plan-phases" / "09-write-workflow.md").read_text()
+        review_prompt = (repo_root / "juvenal" / "workflows" / "plan-phases" / "10-workflow-review.md").read_text()
+
+        assert ".plan/workflow-structure.yaml" in writer_prompt
+        assert ".plan/workflow-structure.yaml" in review_prompt
+        assert "fixed `bounce_target` values" in writer_prompt
+        assert "no agent-guided `bounce_targets` lists" in writer_prompt
+        assert "no phase-level `prompt_file`, `workflow_file`, `workflow_dir`, or `checks`" in writer_prompt
+        assert (
+            "no phase-level `prompt_file`, `workflow_file`, `workflow_dir`, `checks`, or `bounce_targets`"
+            in review_prompt
+        )

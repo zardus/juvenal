@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from threading import Lock
 
-from juvenal.backends import create_backend
+from juvenal.backends import Backend, create_backend
 from juvenal.checkers import NO_VERDICT_REASON, parse_verdict, run_script
 from juvenal.display import Display
 from juvenal.notifications import build_notification_payload, send_webhook
@@ -92,9 +92,10 @@ class Engine:
         clear_context_on_bounce: bool = False,
         serialize: bool = False,
         interactive: bool = False,
+        backend_instance: Backend | None = None,
     ):
         self.workflow = workflow
-        self.backend = create_backend(workflow.backend)
+        self.backend = backend_instance if backend_instance is not None else create_backend(workflow.backend)
         self.display = Display(plain=plain)
         self._depth = _depth
         self._max_depth = _max_depth
@@ -549,11 +550,14 @@ class Engine:
 
         sub_engine = Engine(
             sub_workflow,
+            backend_instance=self.backend,
             state_file=sub_state,
             _depth=self._depth + 1,
             _max_depth=effective_max_depth,
+            clear_context_on_bounce=not self.preserve_context_on_bounce,
+            serialize=self.serialize,
+            interactive=self.interactive,
         )
-        sub_engine.backend = self.backend
         sub_engine.display = self.display
 
         exit_code = sub_engine.run()
@@ -587,8 +591,10 @@ class Engine:
             backend_instance=self.backend,
             display=self.display,
             working_dir=self.workflow.working_dir,
+            serialize=self.serialize,
             depth=self._depth + 1,
             max_depth=effective_max_depth,
+            interactive=self.interactive,
         )
         self.state.add_tokens(phase.id, plan_result.input_tokens, plan_result.output_tokens)
 
@@ -607,11 +613,14 @@ class Engine:
 
         sub_engine = Engine(
             sub_workflow,
+            backend_instance=self.backend,
             state_file=str(Path(plan_result.temp_dir) / ".juvenal-state.json"),
             _depth=self._depth + 1,
             _max_depth=effective_max_depth,
+            clear_context_on_bounce=not self.preserve_context_on_bounce,
+            serialize=self.serialize,
+            interactive=self.interactive,
         )
-        sub_engine.backend = self.backend
         sub_engine.display = self.display
 
         exit_code = sub_engine.run()
@@ -994,11 +1003,12 @@ class Engine:
 
 def _plan_workflow_internal(
     goal: str,
-    backend_instance: object | None = None,
+    backend_instance: Backend | None = None,
     display: Display | None = None,
     working_dir: str | None = None,
     backend_name: str = "codex",
     plain: bool = False,
+    serialize: bool = False,
     depth: int = 0,
     max_depth: int = 3,
     interactive: bool = False,
@@ -1034,6 +1044,8 @@ def _plan_workflow_internal(
     try:
         plan_yaml = Path(__file__).parent / "workflows" / "plan.yaml"
         workflow = load_workflow(plan_yaml)
+        if backend_instance is None:
+            workflow.backend = backend_name
         workflow.vars["GOAL"] = goal
         workflow.working_dir = work_dir
 
@@ -1041,19 +1053,17 @@ def _plan_workflow_internal(
 
         engine = Engine(
             workflow,
+            backend_instance=backend_instance,
             resume=resume,
             state_file=state_path,
             plain=plain,
+            serialize=serialize,
             _depth=depth,
             _max_depth=max_depth,
             clear_context_on_bounce=True,
             interactive=interactive,
         )
-        # Share backend/display if provided, otherwise use defaults
-        if backend_instance is not None:
-            engine.backend = backend_instance
-        else:
-            engine.backend = create_backend(backend_name)
+        # Share display if provided, otherwise use defaults
         if display is not None:
             engine.display = display
 

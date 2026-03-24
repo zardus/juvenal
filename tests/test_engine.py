@@ -1,7 +1,7 @@
 """Unit tests for the execution engine with mocked backend."""
 
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 import pytest
 
@@ -822,6 +822,62 @@ class TestWorkflowPhase:
         assert "max_depth=2" in captured.out
         assert "Build a REST API" in captured.out
 
+    def test_dynamic_workflow_inherits_backend_and_execution_flags(self, tmp_path):
+        from juvenal.engine import PlanResult
+
+        backend = MockBackend()
+        backend.add_response(exit_code=0, output="done")
+        created_engines = []
+        original_init = Engine.__init__
+
+        sub_yaml = tmp_path / "sub" / "workflow.yaml"
+        sub_yaml.parent.mkdir(parents=True)
+        sub_yaml.write_text("name: sub\nphases:\n  - id: inner\n    prompt: do it\n")
+        plan_result = PlanResult(
+            success=True,
+            workflow_yaml_path=str(sub_yaml),
+            temp_dir=str(sub_yaml.parent),
+            input_tokens=0,
+            output_tokens=0,
+        )
+
+        def tracking_init(self, *args, **kwargs):
+            original_init(self, *args, **kwargs)
+            created_engines.append(self)
+
+        project_dir = tmp_path / "project"
+        project_dir.mkdir()
+        workflow = Workflow(
+            name="test",
+            phases=[Phase(id="dynamic", type="workflow", prompt="Build a thing.")],
+            max_bounces=3,
+            working_dir=str(project_dir),
+        )
+
+        with patch.object(Engine, "__init__", tracking_init):
+            with patch("juvenal.engine.create_backend", side_effect=AssertionError("factory should not be called")):
+                engine = Engine(
+                    workflow,
+                    state_file=str(tmp_path / "state.json"),
+                    plain=True,
+                    serialize=True,
+                    interactive=True,
+                    clear_context_on_bounce=True,
+                    backend_instance=backend,
+                )
+                with patch("juvenal.engine._plan_workflow_internal", return_value=plan_result) as plan_mock:
+                    assert engine.run() == 0
+
+        assert plan_mock.call_args.kwargs["interactive"] is True
+        assert plan_mock.call_args.kwargs["serialize"] is True
+        assert plan_mock.call_args.kwargs["backend_instance"] is backend
+        child = next(created for created in created_engines if created._depth == 1)
+        assert child.backend is backend
+        assert child.workflow.working_dir == str(project_dir)
+        assert child.serialize is True
+        assert child.interactive is True
+        assert child.preserve_context_on_bounce is False
+
 
 class TestCheckersShorthandEngine:
     def _make_engine(self, workflow, backend, tmp_path, **kwargs):
@@ -1133,12 +1189,13 @@ class TestExtractYaml:
 
 
 class TestPlanWorkflow:
-    def test_plan_creates_temp_structure(self, tmp_path):
+    def test_plan_creates_temp_structure(self, tmp_path, monkeypatch):
         """plan_workflow creates temp dir with .plan/goal.md and runs Engine."""
         from unittest.mock import MagicMock, patch
 
         from juvenal.engine import plan_workflow
 
+        monkeypatch.chdir(tmp_path)
         mock_engine_instance = MagicMock()
         mock_engine_instance.run.return_value = 0
 
@@ -1167,12 +1224,13 @@ class TestPlanWorkflow:
         content = Path(out_path).read_text()
         assert "phases" in content
 
-    def test_plan_copies_output_on_success(self, tmp_path):
+    def test_plan_copies_output_on_success(self, tmp_path, monkeypatch):
         """plan_workflow copies workflow.yaml to output path and cleans up."""
         from unittest.mock import MagicMock, patch
 
         from juvenal.engine import plan_workflow
 
+        monkeypatch.chdir(tmp_path)
         yaml_content = "name: result\nphases:\n  - id: x\n    prompt: hi\n"
 
         def fake_engine_init(self_engine, workflow, **kwargs):
@@ -1198,11 +1256,13 @@ class TestPlanWorkflow:
         assert parsed["name"] == "result"
         assert "phases" in parsed
 
-    def test_plan_fails_on_engine_failure(self, tmp_path):
+    def test_plan_fails_on_engine_failure(self, tmp_path, monkeypatch):
         """plan_workflow raises SystemExit if engine returns non-zero."""
         from unittest.mock import MagicMock, patch
 
         from juvenal.engine import plan_workflow
+
+        monkeypatch.chdir(tmp_path)
 
         def fake_engine_init(self_engine, workflow, **kwargs):
             self_engine.workflow = workflow
@@ -2080,6 +2140,62 @@ class TestKeyboardInterrupt:
         assert state.phases["setup"].status == "completed"
 
 
+class TestBackendInjection:
+    def test_engine_uses_backend_instance_without_factory(self, tmp_path):
+        backend = MockBackend()
+        workflow = Workflow(name="test", phases=[Phase(id="build", type="implement", prompt="Build.")])
+
+        with patch("juvenal.engine.create_backend", side_effect=AssertionError("factory should not be called")):
+            engine = Engine(
+                workflow,
+                state_file=str(tmp_path / "state.json"),
+                plain=True,
+                backend_instance=backend,
+            )
+
+        assert engine.backend is backend
+
+    def test_backend_instance_overrides_workflow_backend_during_run(self, tmp_path):
+        backend = MockBackend()
+        backend.add_response(exit_code=0, output="done")
+        workflow = Workflow(
+            name="test",
+            backend="definitely-not-real",
+            phases=[Phase(id="build", type="implement", prompt="Build.")],
+        )
+
+        with patch("juvenal.engine.create_backend", side_effect=AssertionError("factory should not be called")):
+            engine = Engine(
+                workflow,
+                state_file=str(tmp_path / "state.json"),
+                plain=True,
+                backend_instance=backend,
+            )
+            assert engine.run() == 0
+
+        assert backend.calls == ["Build."]
+
+    def test_engine_preserves_existing_positional_resume_argument(self, tmp_path):
+        from juvenal.state import PipelineState
+
+        workflow = Workflow(
+            name="test",
+            phases=[
+                Phase(id="phase-1", type="implement", prompt="One."),
+                Phase(id="phase-2", type="implement", prompt="Two."),
+            ],
+        )
+        state_file = tmp_path / "state.json"
+        state = PipelineState(state_file=state_file)
+        state.mark_completed("phase-1")
+        state.save()
+
+        with patch("juvenal.engine.create_backend", return_value=MockBackend()):
+            engine = Engine(workflow, True, state_file=str(state_file), plain=True)
+
+        assert engine._start_idx == 1
+
+
 class TestStaticWorkflowPhase:
     def test_workflow_file_success(self, tmp_path):
         """Static workflow_file phase loads and executes the sub-workflow."""
@@ -2188,6 +2304,47 @@ class TestStaticWorkflowPhase:
         engine.run()
         captured = capsys.readouterr()
         assert "/path/to/sub.yaml" in captured.out
+
+    def test_static_workflow_inherits_backend_and_execution_flags(self, tmp_path):
+        sub_yaml = tmp_path / "sub.yaml"
+        sub_yaml.write_text("name: sub\nphases:\n  - id: inner\n    prompt: 'Inner.'\n")
+        project_dir = tmp_path / "project"
+        project_dir.mkdir()
+
+        backend = MockBackend()
+        backend.add_response(exit_code=0, output="done")
+        created_engines = []
+        original_init = Engine.__init__
+
+        def tracking_init(self, *args, **kwargs):
+            original_init(self, *args, **kwargs)
+            created_engines.append(self)
+
+        workflow = Workflow(
+            name="test",
+            phases=[Phase(id="sub-wf", type="workflow", workflow_file=str(sub_yaml))],
+            working_dir=str(project_dir),
+        )
+
+        with patch.object(Engine, "__init__", tracking_init):
+            with patch("juvenal.engine.create_backend", side_effect=AssertionError("factory should not be called")):
+                engine = Engine(
+                    workflow,
+                    state_file=str(tmp_path / "state.json"),
+                    plain=True,
+                    serialize=True,
+                    interactive=True,
+                    clear_context_on_bounce=True,
+                    backend_instance=backend,
+                )
+                assert engine.run() == 0
+
+        child = next(created for created in created_engines if created._depth == 1)
+        assert child.backend is backend
+        assert child.workflow.working_dir == str(project_dir)
+        assert child.serialize is True
+        assert child.interactive is True
+        assert child.preserve_context_on_bounce is False
 
 
 class TestInteractiveMode:
@@ -2362,17 +2519,36 @@ class TestInteractiveMode:
 
 
 class TestPlanWorkflowInternal:
+    def test_plan_workflow_internal_resume_keeps_existing_goal_file(self, tmp_path):
+        backend = MockBackend()
+        plan_dir = tmp_path / ".plan"
+        plan_dir.mkdir()
+        goal_path = plan_dir / "goal.md"
+        goal_path.write_text("existing goal")
+
+        with patch.object(Engine, "run", return_value=1):
+            _plan_workflow_internal(
+                goal="new goal",
+                backend_instance=backend,
+                plain=True,
+                project_dir=str(tmp_path),
+                resume=True,
+            )
+
+        assert goal_path.read_text() == "existing goal"
+
     def test_project_dir_creates_plan_directory(self, tmp_path):
         """When project_dir is set, .plan/ is created there with goal.md."""
         backend = MockBackend()
         # Plan pipeline will fail immediately since mock doesn't produce artifacts,
         # but we can verify .plan/ directory creation
-        _plan_workflow_internal(
-            goal="test goal",
-            backend_instance=backend,
-            plain=True,
-            project_dir=str(tmp_path),
-        )
+        with patch.object(Engine, "run", return_value=1):
+            _plan_workflow_internal(
+                goal="test goal",
+                backend_instance=backend,
+                plain=True,
+                project_dir=str(tmp_path),
+            )
         plan_dir = tmp_path / ".plan"
         assert plan_dir.exists()
         assert (plan_dir / "goal.md").exists()
@@ -2381,11 +2557,12 @@ class TestPlanWorkflowInternal:
     def test_temp_dir_used_without_project_dir(self):
         """When project_dir is None, a temp dir is used."""
         backend = MockBackend()
-        result = _plan_workflow_internal(
-            goal="test goal",
-            backend_instance=backend,
-            plain=True,
-        )
+        with patch.object(Engine, "run", return_value=1):
+            result = _plan_workflow_internal(
+                goal="test goal",
+                backend_instance=backend,
+                plain=True,
+            )
         # temp_dir should be set when no project_dir
         assert result.temp_dir is not None
         # Clean up
@@ -2405,12 +2582,13 @@ class TestPlanWorkflowInternal:
             engines_created.append(self)
 
         with patch.object(Engine, "__init__", tracking_init):
-            _plan_workflow_internal(
-                goal="test goal",
-                backend_instance=backend,
-                plain=True,
-                project_dir=str(tmp_path),
-            )
+            with patch.object(Engine, "run", return_value=1):
+                _plan_workflow_internal(
+                    goal="test goal",
+                    backend_instance=backend,
+                    plain=True,
+                    project_dir=str(tmp_path),
+                )
 
         assert len(engines_created) >= 1
         # The plan engine should not preserve context on bounce
@@ -2427,13 +2605,58 @@ class TestPlanWorkflowInternal:
             engines_created.append(self)
 
         with patch.object(Engine, "__init__", tracking_init):
-            _plan_workflow_internal(
-                goal="test goal",
-                backend_instance=backend,
-                plain=True,
-                project_dir=str(tmp_path),
-                interactive=True,
-            )
+            with patch.object(Engine, "run", return_value=1):
+                _plan_workflow_internal(
+                    goal="test goal",
+                    backend_instance=backend,
+                    plain=True,
+                    project_dir=str(tmp_path),
+                    interactive=True,
+                )
 
         assert len(engines_created) >= 1
         assert engines_created[0].interactive is True
+
+    def test_serialize_flag_passed_to_engine(self, tmp_path):
+        backend = MockBackend()
+        engines_created = []
+        original_init = Engine.__init__
+
+        def tracking_init(self, *args, **kwargs):
+            original_init(self, *args, **kwargs)
+            engines_created.append(self)
+
+        with patch.object(Engine, "__init__", tracking_init):
+            with patch.object(Engine, "run", return_value=1):
+                _plan_workflow_internal(
+                    goal="test goal",
+                    backend_instance=backend,
+                    plain=True,
+                    project_dir=str(tmp_path),
+                    serialize=True,
+                )
+
+        assert len(engines_created) >= 1
+        assert engines_created[0].serialize is True
+
+    def test_backend_instance_is_passed_into_plan_engine(self, tmp_path):
+        backend = MockBackend()
+        seen_backends = []
+        backend_factory = Mock(side_effect=AssertionError("factory should not be called"))
+
+        def fake_run(self):
+            seen_backends.append(self.backend)
+            return 1
+
+        with patch("juvenal.engine.create_backend", backend_factory):
+            with patch.object(Engine, "run", autospec=True, side_effect=fake_run):
+                result = _plan_workflow_internal(
+                    goal="test goal",
+                    backend_instance=backend,
+                    plain=True,
+                    project_dir=str(tmp_path),
+                )
+
+        assert result.success is False
+        assert backend_factory.call_count == 0
+        assert seen_backends == [backend]
