@@ -349,6 +349,22 @@ def required_template_vars(text: str, vars: Mapping[str, object] | None = None) 
                 else_locals = visit_nodes(node.else_, optional=optional, guarded=else_guarded, local_names=local_names)
             return body_locals | elif_locals | else_locals
 
+        if isinstance(node, nodes.For):
+            visit(node.iter, optional=optional, guarded=guarded, local_names=local_names)
+            loop_locals = local_names | _collect_store_names(node.target) | {"loop"}
+            iter_value = truth_value(node.iter, local_names)
+
+            if node.test is not None:
+                visit(node.test, optional=optional, guarded=guarded, local_names=loop_locals)
+
+            if iter_value is not False:
+                visit_nodes(node.body, optional=optional, guarded=guarded, local_names=loop_locals)
+
+            if iter_value is not True or node.test is not None:
+                visit_nodes(node.else_, optional=optional, guarded=guarded, local_names=local_names)
+
+            return local_names
+
         for child in node.iter_child_nodes():
             visit(child, optional=optional, guarded=guarded, local_names=local_names)
         return local_names
