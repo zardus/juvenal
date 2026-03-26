@@ -69,38 +69,80 @@ def required_template_vars(text: str) -> set[str]:
     undeclared = meta.find_undeclared_variables(ast)
     required: set[str] = set()
 
-    def visit(node: nodes.Node, optional: bool = False) -> None:
+    def _collect_load_names(node: nodes.Node) -> set[str]:
+        names: set[str] = set()
+
+        def collect(child: nodes.Node) -> None:
+            if isinstance(child, nodes.Name) and child.ctx == "load":
+                names.add(child.name)
+            for grandchild in child.iter_child_nodes():
+                collect(grandchild)
+
+        collect(node)
+        return names
+
+    def guard_names(node: nodes.Node, truthy: bool) -> set[str]:
+        if isinstance(node, nodes.Test):
+            target_names = _collect_load_names(node.node)
+            if node.name == "defined":
+                return target_names if truthy else set()
+            if node.name == "undefined":
+                return set() if truthy else target_names
+        if isinstance(node, nodes.Not):
+            return guard_names(node.node, not truthy)
+        if isinstance(node, nodes.And):
+            if truthy:
+                return guard_names(node.left, True) | guard_names(node.right, True)
+            return set()
+        if isinstance(node, nodes.Or):
+            if truthy:
+                return guard_names(node.left, True) & guard_names(node.right, True)
+            return set()
+        return set()
+
+    def visit(node: nodes.Node, optional: bool = False, guarded: set[str] | None = None) -> None:
+        guarded = guarded or set()
         if isinstance(node, nodes.Name) and node.ctx == "load":
-            if not optional:
+            if not optional and node.name not in guarded:
                 required.add(node.name)
             return
 
         if isinstance(node, nodes.Filter) and node.name in {"default", "d"}:
-            visit(node.node, optional=True)
+            visit(node.node, optional=True, guarded=guarded)
             for arg in node.args:
-                visit(arg, optional=optional)
+                visit(arg, optional=optional, guarded=guarded)
             for kwarg in node.kwargs:
-                visit(kwarg.value, optional=optional)
+                visit(kwarg.value, optional=optional, guarded=guarded)
             if node.dyn_args is not None:
-                visit(node.dyn_args, optional=optional)
+                visit(node.dyn_args, optional=optional, guarded=guarded)
             if node.dyn_kwargs is not None:
-                visit(node.dyn_kwargs, optional=optional)
+                visit(node.dyn_kwargs, optional=optional, guarded=guarded)
             return
 
         if isinstance(node, nodes.Test) and node.name in {"defined", "undefined"}:
-            visit(node.node, optional=True)
+            visit(node.node, optional=True, guarded=guarded)
             for arg in node.args:
-                visit(arg, optional=optional)
+                visit(arg, optional=optional, guarded=guarded)
             for kwarg in node.kwargs:
-                visit(kwarg.value, optional=optional)
+                visit(kwarg.value, optional=optional, guarded=guarded)
             if node.dyn_args is not None:
-                visit(node.dyn_args, optional=optional)
+                visit(node.dyn_args, optional=optional, guarded=guarded)
             if node.dyn_kwargs is not None:
-                visit(node.dyn_kwargs, optional=optional)
+                visit(node.dyn_kwargs, optional=optional, guarded=guarded)
+            return
+
+        if isinstance(node, nodes.If):
+            visit(node.test, optional=optional, guarded=guarded)
+            body_guarded = guarded | guard_names(node.test, truthy=True)
+            else_guarded = guarded | guard_names(node.test, truthy=False)
+            for child in node.body:
+                visit(child, optional=optional, guarded=body_guarded)
+            for child in node.else_:
+                visit(child, optional=optional, guarded=else_guarded)
             return
 
         for child in node.iter_child_nodes():
-            visit(child, optional=optional)
+            visit(child, optional=optional, guarded=guarded)
 
     visit(ast)
     return required & undeclared
