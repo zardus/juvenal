@@ -9,7 +9,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 import yaml
-from jinja2 import Environment, TemplateSyntaxError, Undefined, meta
+from jinja2 import Environment, TemplateSyntaxError, Undefined, meta, nodes
 
 
 class PreservePlaceholderUndefined(Undefined):
@@ -53,6 +53,55 @@ def template_vars(text: str) -> set[str]:
     if not text:
         return set()
     return meta.find_undeclared_variables(_parse_template(text))
+
+
+def required_template_vars(text: str) -> set[str]:
+    """Return variables that must be defined for a template to render safely.
+
+    Variables used only through standard optional patterns like
+    ``|default(...)`` or ``is defined`` / ``is undefined`` are excluded.
+    """
+
+    if not text:
+        return set()
+
+    required: set[str] = set()
+
+    def visit(node: nodes.Node, optional: bool = False) -> None:
+        if isinstance(node, nodes.Name) and node.ctx == "load":
+            if not optional:
+                required.add(node.name)
+            return
+
+        if isinstance(node, nodes.Filter) and node.name in {"default", "d"}:
+            visit(node.node, optional=True)
+            for arg in node.args:
+                visit(arg, optional=optional)
+            for kwarg in node.kwargs:
+                visit(kwarg.value, optional=optional)
+            if node.dyn_args is not None:
+                visit(node.dyn_args, optional=optional)
+            if node.dyn_kwargs is not None:
+                visit(node.dyn_kwargs, optional=optional)
+            return
+
+        if isinstance(node, nodes.Test) and node.name in {"defined", "undefined"}:
+            visit(node.node, optional=True)
+            for arg in node.args:
+                visit(arg, optional=optional)
+            for kwarg in node.kwargs:
+                visit(kwarg.value, optional=optional)
+            if node.dyn_args is not None:
+                visit(node.dyn_args, optional=optional)
+            if node.dyn_kwargs is not None:
+                visit(node.dyn_kwargs, optional=optional)
+            return
+
+        for child in node.iter_child_nodes():
+            visit(child, optional=optional)
+
+    visit(_parse_template(text))
+    return required
 
 
 def apply_vars(text: str, vars: Mapping[str, object] | None) -> str:
@@ -1028,8 +1077,8 @@ def validate_workflow(workflow: Workflow) -> list[str]:
     defined_vars = set(workflow.vars.keys())
     for phase in workflow.phases:
         try:
-            referenced_vars = template_vars(phase.prompt)
-            referenced_vars.update(template_vars(phase.run or ""))
+            referenced_vars = required_template_vars(phase.prompt)
+            referenced_vars.update(required_template_vars(phase.run or ""))
         except TemplateSyntaxError as exc:
             errors.append(f"Phase {phase.id!r}: invalid template syntax on line {exc.lineno}: {exc.message}")
             continue

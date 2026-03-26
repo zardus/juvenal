@@ -433,6 +433,30 @@ class TestTemplateVarValidation:
         errors = validate_workflow(wf)
         assert any("template render failed" in e and "division by zero" in e for e in errors)
 
+    def test_default_filter_allows_optional_missing_var(self):
+        wf = Workflow(
+            name="test",
+            phases=[Phase(id="build", type="implement", prompt="{{ MISSING|default('x') }}")],
+        )
+        errors = validate_workflow(wf)
+        assert not any("MISSING" in e and "no value defined" in e for e in errors)
+
+    def test_defined_test_allows_optional_missing_var(self):
+        wf = Workflow(
+            name="test",
+            phases=[Phase(id="build", type="implement", prompt="{% if MISSING is defined %}x{% endif %}")],
+        )
+        errors = validate_workflow(wf)
+        assert not any("MISSING" in e and "no value defined" in e for e in errors)
+
+    def test_required_use_still_fails_when_same_var_is_optional_elsewhere(self):
+        wf = Workflow(
+            name="test",
+            phases=[Phase(id="build", type="implement", prompt="{{ MISSING|default('x') }} {{ MISSING }}")],
+        )
+        errors = validate_workflow(wf)
+        assert any("MISSING" in e and "no value defined" in e for e in errors)
+
 
 class TestLaneValidation:
     def test_lane_phase_existence(self):
