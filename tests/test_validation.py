@@ -489,9 +489,7 @@ class TestTemplateVarValidation:
     def test_not_defined_guard_allows_use_inside_branch(self):
         wf = Workflow(
             name="test",
-            phases=[
-                Phase(id="build", type="implement", prompt="{% if X is not defined %}{{ X }}{% endif %}")
-            ],
+            phases=[Phase(id="build", type="implement", prompt="{% if X is not defined %}{{ X }}{% endif %}")],
         )
         errors = validate_workflow(wf)
         assert not any("X" in e and "no value defined" in e for e in errors)
@@ -510,9 +508,7 @@ class TestTemplateVarValidation:
     def test_not_undefined_guard_allows_use_inside_branch(self):
         wf = Workflow(
             name="test",
-            phases=[
-                Phase(id="build", type="implement", prompt="{% if X is not undefined %}{{ X }}{% endif %}")
-            ],
+            phases=[Phase(id="build", type="implement", prompt="{% if X is not undefined %}{{ X }}{% endif %}")],
             vars={"X": "hi"},
         )
         errors = validate_workflow(wf)
