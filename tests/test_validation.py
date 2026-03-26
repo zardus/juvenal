@@ -504,6 +504,23 @@ class TestTemplateVarValidation:
         errors = validate_workflow(wf)
         assert not any("X" in e and "no value defined" in e for e in errors)
 
+    def test_short_circuit_undefined_guard_allows_rhs_and_body_use(self):
+        wf = Workflow(
+            name="test",
+            phases=[Phase(id="build", type="implement", prompt="{% if X is undefined or X %}{{ X }}{% endif %}")],
+        )
+        errors = validate_workflow(wf)
+        assert not any("X" in e and "no value defined" in e for e in errors)
+
+    def test_short_circuit_or_does_not_guard_unrelated_body_use(self):
+        wf = Workflow(
+            name="test",
+            phases=[Phase(id="build", type="implement", prompt="{% if X is defined or Y %}{{ X }}{% endif %}")],
+            vars={"Y": "yes"},
+        )
+        errors = validate_workflow(wf)
+        assert any("X" in e and "no value defined" in e for e in errors)
+
     def test_inline_conditional_defined_guard_allows_branch_use(self):
         wf = Workflow(
             name="test",

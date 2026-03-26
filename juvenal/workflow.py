@@ -93,9 +93,22 @@ def required_template_vars(text: str) -> set[str]:
         collect(node)
         return names
 
-    def guard_names(node: nodes.Node, truthy: bool) -> set[str]:
+    def short_circuit_guard_names(node: nodes.Node, truthy: bool) -> set[str]:
         if isinstance(node, nodes.Filter) and node.name in {"default", "d"}:
             return _collect_load_names(node.node)
+        if isinstance(node, nodes.Test):
+            target_names = _collect_load_names(node.node)
+            if node.name in {"defined", "undefined"}:
+                return target_names
+        if isinstance(node, nodes.Not):
+            if isinstance(node.node, nodes.Test) and node.node.name in {"defined", "undefined"}:
+                return _collect_load_names(node.node.node)
+            return short_circuit_guard_names(node.node, not truthy)
+        return set()
+
+    def guard_names(node: nodes.Node, truthy: bool) -> set[str]:
+        if isinstance(node, nodes.Filter) and node.name in {"default", "d"}:
+            return _collect_load_names(node.node) if truthy else set()
         if isinstance(node, nodes.Test):
             target_names = _collect_load_names(node.node)
             if node.name in {"defined", "undefined"} and truthy:
@@ -110,7 +123,12 @@ def required_template_vars(text: str) -> set[str]:
             return set()
         if isinstance(node, nodes.Or):
             if truthy:
-                return guard_names(node.left, True) & guard_names(node.right, True)
+                left_truthy = guard_names(node.left, True)
+                right_truthy = guard_names(node.right, True)
+                right_names = _collect_load_names(node.right)
+                if right_names and right_names <= short_circuit_guard_names(node.left, False):
+                    right_truthy |= right_names
+                return left_truthy & right_truthy
             return set()
         return set()
 
@@ -164,7 +182,7 @@ def required_template_vars(text: str) -> set[str]:
             visit(
                 node.right,
                 optional=optional,
-                guarded=guarded | guard_names(node.left, truthy=True),
+                guarded=guarded | short_circuit_guard_names(node.left, truthy=True),
                 local_names=local_names,
             )
             return local_names
@@ -174,7 +192,7 @@ def required_template_vars(text: str) -> set[str]:
             visit(
                 node.right,
                 optional=optional,
-                guarded=guarded | guard_names(node.left, truthy=False),
+                guarded=guarded | short_circuit_guard_names(node.left, truthy=False),
                 local_names=local_names,
             )
             return local_names
