@@ -514,6 +514,24 @@ class TestTemplateVarValidation:
         errors = validate_workflow(wf)
         assert not any("X" in e and "no value defined" in e for e in errors)
 
+    def test_known_false_condition_skips_branch_required_vars(self):
+        wf = Workflow(
+            name="test",
+            phases=[Phase(id="p", type="implement", prompt="{% if ENABLE_DEPLOY %}Deploy {{ ENV }}{% endif %}")],
+            vars={"ENABLE_DEPLOY": False},
+        )
+        errors = validate_workflow(wf)
+        assert not any("ENV" in e and "no value defined" in e for e in errors)
+
+    def test_known_false_conditional_expression_skips_required_var(self):
+        wf = Workflow(
+            name="test",
+            phases=[Phase(id="p", type="implement", prompt="{{ ENV if ENABLE_DEPLOY else 'skip' }}")],
+            vars={"ENABLE_DEPLOY": False},
+        )
+        errors = validate_workflow(wf)
+        assert not any("ENV" in e and "no value defined" in e for e in errors)
+
     def test_elif_branch_reports_missing_var_when_outer_guard_does_not_apply(self):
         wf = Workflow(
             name="test",

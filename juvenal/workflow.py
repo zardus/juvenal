@@ -55,7 +55,7 @@ def template_vars(text: str) -> set[str]:
     return meta.find_undeclared_variables(_parse_template(text))
 
 
-def required_template_vars(text: str) -> set[str]:
+def required_template_vars(text: str, vars: Mapping[str, object] | None = None) -> set[str]:
     """Return variables that must be defined for a template to render safely.
 
     Variables used only through standard optional patterns like
@@ -65,6 +65,7 @@ def required_template_vars(text: str) -> set[str]:
     if not text:
         return set()
 
+    known_vars = dict(vars or {})
     ast = _parse_template(text)
     undeclared = meta.find_undeclared_variables(ast)
     required: set[str] = set()
@@ -144,6 +145,74 @@ def required_template_vars(text: str) -> set[str]:
             current_locals = visit(child, optional=optional, guarded=guarded, local_names=current_locals)
         return current_locals
 
+    def truth_value(node: nodes.Node, local_names: set[str]) -> bool | None:
+        if isinstance(node, nodes.Const):
+            return bool(node.value)
+
+        if isinstance(node, nodes.Name) and node.ctx == "load":
+            if node.name in local_names or node.name not in known_vars:
+                return None
+            return bool(known_vars[node.name])
+
+        if isinstance(node, nodes.Filter) and node.name in {"default", "d"}:
+            base_value = truth_value(node.node, local_names)
+            if base_value is not None:
+                return base_value
+            if (
+                isinstance(node.node, nodes.Name)
+                and node.node.ctx == "load"
+                and node.node.name not in local_names
+                and node.node.name not in known_vars
+                and node.args
+            ):
+                return truth_value(node.args[0], local_names)
+            return None
+
+        if isinstance(node, nodes.Test) and isinstance(node.node, nodes.Name) and node.node.ctx == "load":
+            if node.node.name in local_names:
+                return None
+            if node.name == "defined":
+                return node.node.name in known_vars
+            if node.name == "undefined":
+                return node.node.name not in known_vars
+            return None
+
+        if isinstance(node, nodes.Not):
+            value = truth_value(node.node, local_names)
+            return None if value is None else not value
+
+        if isinstance(node, nodes.And):
+            left_value = truth_value(node.left, local_names)
+            if left_value is False:
+                return False
+            right_value = truth_value(node.right, local_names)
+            if left_value is True:
+                return right_value
+            if right_value is False:
+                return False
+            return None
+
+        if isinstance(node, nodes.Or):
+            left_value = truth_value(node.left, local_names)
+            if left_value is True:
+                return True
+            right_value = truth_value(node.right, local_names)
+            if left_value is False:
+                return right_value
+            if right_value is True:
+                return True
+            return None
+
+        if isinstance(node, nodes.CondExpr):
+            test_value = truth_value(node.test, local_names)
+            if test_value is True:
+                return truth_value(node.expr1, local_names)
+            if test_value is False and node.expr2 is not None:
+                return truth_value(node.expr2, local_names)
+            return None
+
+        return None
+
     def visit(
         node: nodes.Node,
         optional: bool = False,
@@ -183,33 +252,37 @@ def required_template_vars(text: str) -> set[str]:
 
         if isinstance(node, nodes.And):
             visit(node.left, optional=optional, guarded=guarded, local_names=local_names)
-            visit(
-                node.right,
-                optional=optional,
-                guarded=guarded | short_circuit_guard_names(node.left, truthy=True),
-                local_names=local_names,
-            )
+            if truth_value(node.left, local_names) is not False:
+                visit(
+                    node.right,
+                    optional=optional,
+                    guarded=guarded | short_circuit_guard_names(node.left, truthy=True),
+                    local_names=local_names,
+                )
             return local_names
 
         if isinstance(node, nodes.Or):
             visit(node.left, optional=optional, guarded=guarded, local_names=local_names)
-            visit(
-                node.right,
-                optional=optional,
-                guarded=guarded | short_circuit_guard_names(node.left, truthy=False),
-                local_names=local_names,
-            )
+            if truth_value(node.left, local_names) is not True:
+                visit(
+                    node.right,
+                    optional=optional,
+                    guarded=guarded | short_circuit_guard_names(node.left, truthy=False),
+                    local_names=local_names,
+                )
             return local_names
 
         if isinstance(node, nodes.CondExpr):
             visit(node.test, optional=optional, guarded=guarded, local_names=local_names)
-            visit(
-                node.expr1,
-                optional=optional,
-                guarded=guarded | guard_names(node.test, truthy=True),
-                local_names=local_names,
-            )
-            if node.expr2 is not None:
+            test_value = truth_value(node.test, local_names)
+            if test_value is not False:
+                visit(
+                    node.expr1,
+                    optional=optional,
+                    guarded=guarded | guard_names(node.test, truthy=True),
+                    local_names=local_names,
+                )
+            if node.expr2 is not None and test_value is not True:
                 visit(
                     node.expr2,
                     optional=optional,
@@ -234,9 +307,15 @@ def required_template_vars(text: str) -> set[str]:
             visit(node.test, optional=optional, guarded=guarded, local_names=local_names)
             body_guarded = guarded | guard_names(node.test, truthy=True)
             else_guarded = guarded | guard_names(node.test, truthy=False)
-            body_locals = visit_nodes(node.body, optional=optional, guarded=body_guarded, local_names=local_names)
-            elif_locals = visit_nodes(node.elif_, optional=optional, guarded=else_guarded, local_names=local_names)
-            else_locals = visit_nodes(node.else_, optional=optional, guarded=else_guarded, local_names=local_names)
+            test_value = truth_value(node.test, local_names)
+            body_locals = set(local_names)
+            elif_locals = set(local_names)
+            else_locals = set(local_names)
+            if test_value is not False:
+                body_locals = visit_nodes(node.body, optional=optional, guarded=body_guarded, local_names=local_names)
+            if test_value is not True:
+                elif_locals = visit_nodes(node.elif_, optional=optional, guarded=else_guarded, local_names=local_names)
+                else_locals = visit_nodes(node.else_, optional=optional, guarded=else_guarded, local_names=local_names)
             return body_locals | elif_locals | else_locals
 
         for child in node.iter_child_nodes():
@@ -1220,8 +1299,8 @@ def validate_workflow(workflow: Workflow) -> list[str]:
     defined_vars = set(workflow.vars.keys())
     for phase in workflow.phases:
         try:
-            referenced_vars = required_template_vars(phase.prompt)
-            referenced_vars.update(required_template_vars(phase.run or ""))
+            referenced_vars = required_template_vars(phase.prompt, workflow.vars)
+            referenced_vars.update(required_template_vars(phase.run or "", workflow.vars))
         except TemplateSyntaxError as exc:
             errors.append(f"Phase {phase.id!r}: invalid template syntax on line {exc.lineno}: {exc.message}")
             continue
