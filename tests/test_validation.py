@@ -425,6 +425,14 @@ class TestTemplateVarValidation:
         errors = validate_workflow(wf)
         assert any("invalid template syntax" in e for e in errors)
 
+    def test_runtime_jinja_error_reports_error(self):
+        wf = Workflow(
+            name="test",
+            phases=[Phase(id="build", type="implement", prompt="{{ 1 / 0 }}")],
+        )
+        errors = validate_workflow(wf)
+        assert any("template render failed" in e and "division by zero" in e for e in errors)
+
 
 class TestLaneValidation:
     def test_lane_phase_existence(self):

@@ -185,7 +185,14 @@ def _expand_standard_checkers(args: argparse.Namespace) -> None:
 
 def cmd_run(args: argparse.Namespace) -> int:
     from juvenal.engine import Engine
-    from juvenal.workflow import Phase, Workflow, inject_checkers, inject_implementer, validate_workflow
+    from juvenal.workflow import (
+        Phase,
+        TemplateRenderError,
+        Workflow,
+        inject_checkers,
+        inject_implementer,
+        validate_workflow,
+    )
 
     # Parse --implementer flags into role-only vs inline phases
     inline_phases: list[Phase] = []
@@ -226,8 +233,12 @@ def cmd_run(args: argparse.Namespace) -> int:
         print('Error: workflow path is required (or use --implementer role:"prompt")')
         return 1
 
-    if args.defines:
-        workflow = _apply_defines(workflow, _parse_defines(args.defines))
+    try:
+        if args.defines:
+            workflow = _apply_defines(workflow, _parse_defines(args.defines))
+    except TemplateRenderError as e:
+        print(f"Error: {e}")
+        return 1
     _expand_standard_checkers(args)
     if args.checker:
         workflow = inject_checkers(workflow, args.checker)
@@ -320,14 +331,18 @@ def cmd_do(args: argparse.Namespace) -> int:
     import tempfile
 
     from juvenal.engine import Engine, plan_workflow
-    from juvenal.workflow import inject_checkers, inject_implementer
+    from juvenal.workflow import TemplateRenderError, inject_checkers, inject_implementer
 
     with tempfile.NamedTemporaryFile(suffix=".yaml", delete=False, mode="w") as f:
         plan_workflow(args.goal, f.name, args.backend, plain=args.plain, interactive=args.interactive)
         workflow = _load_workflow_or_exit(f.name)
 
-    if args.defines:
-        workflow = _apply_defines(workflow, _parse_defines(args.defines))
+    try:
+        if args.defines:
+            workflow = _apply_defines(workflow, _parse_defines(args.defines))
+    except TemplateRenderError as e:
+        print(f"Error: {e}")
+        return 1
     if args.implementer:
         workflow = inject_implementer(workflow, args.implementer)
     _expand_standard_checkers(args)
@@ -366,11 +381,15 @@ def cmd_init(args: argparse.Namespace) -> int:
 
 def cmd_validate(args: argparse.Namespace) -> int:
     from juvenal.engine import Engine
-    from juvenal.workflow import inject_checkers, inject_implementer
+    from juvenal.workflow import TemplateRenderError, inject_checkers, inject_implementer
 
     workflow = _load_workflow_or_exit(args.workflow)
-    if args.defines:
-        workflow = _apply_defines(workflow, _parse_defines(args.defines))
+    try:
+        if args.defines:
+            workflow = _apply_defines(workflow, _parse_defines(args.defines))
+    except TemplateRenderError as e:
+        print(f"Error: {e}")
+        return 1
     if args.implementer:
         workflow = inject_implementer(workflow, args.implementer)
     _expand_standard_checkers(args)

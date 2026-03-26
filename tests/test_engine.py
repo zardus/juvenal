@@ -1978,6 +1978,48 @@ class TestTemplateVarsEngine:
             mock_run.assert_called_once()
             assert mock_run.call_args[0][0] == "echo OK"
 
+    def test_render_error_in_implement_prompt_fails_cleanly(self, mock_backend, tmp_path):
+        workflow = Workflow(
+            name="test",
+            phases=[Phase(id="build", type="implement", prompt="{{ 1 / 0 }}")],
+            vars={},
+        )
+        engine = Engine(workflow, state_file=str(tmp_path / "state.json"), plain=True)
+        engine.backend = mock_backend
+        assert engine.run() == 1
+        assert mock_backend.calls == []
+
+    def test_render_error_in_check_prompt_fails_cleanly(self, mock_backend, tmp_path):
+        mock_backend.add_response(exit_code=0, output="done")
+        workflow = Workflow(
+            name="test",
+            phases=[
+                Phase(id="build", type="implement", prompt="Build it."),
+                Phase(id="review", type="check", prompt="{{ 1 / 0 }}", bounce_target="build"),
+            ],
+            vars={},
+        )
+        engine = Engine(workflow, state_file=str(tmp_path / "state.json"), plain=True)
+        engine.backend = mock_backend
+        assert engine.run() == 1
+        assert len(mock_backend.calls) == 1
+
+    def test_render_error_in_script_command_fails_cleanly(self, mock_backend, tmp_path):
+        mock_backend.add_response(exit_code=0, output="done")
+        workflow = Workflow(
+            name="test",
+            phases=[
+                Phase(id="build", type="implement", prompt="Build it."),
+                Phase(id="test", type="script", run="echo {{ 1 / 0 }}", bounce_target="build"),
+            ],
+            vars={},
+        )
+        engine = Engine(workflow, state_file=str(tmp_path / "state.json"), plain=True)
+        engine.backend = mock_backend
+        with patch("juvenal.engine.run_script") as mock_run:
+            assert engine.run() == 1
+            mock_run.assert_not_called()
+
     def test_vars_unrecognized_passthrough(self, mock_backend, tmp_path):
         """Unrecognized {{VAR}} placeholders pass through unchanged."""
         mock_backend.add_response(exit_code=0, output="done")

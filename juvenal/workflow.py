@@ -39,6 +39,10 @@ _JINJA_ENV = Environment(
 )
 
 
+class TemplateRenderError(ValueError):
+    """Raised when a Jinja2 template fails during rendering."""
+
+
 def _parse_template(text: str):
     """Parse a Jinja2 template string into an AST."""
     return _JINJA_ENV.parse(text)
@@ -58,7 +62,10 @@ def apply_vars(text: str, vars: Mapping[str, object] | None) -> str:
     """
     if vars is None:
         return text
-    return _JINJA_ENV.from_string(text).render(dict(vars))
+    try:
+        return _JINJA_ENV.from_string(text).render(dict(vars))
+    except Exception as exc:
+        raise TemplateRenderError(str(exc)) from exc
 
 
 @dataclass
@@ -1030,6 +1037,16 @@ def validate_workflow(workflow: Workflow) -> list[str]:
         undefined = referenced_vars - defined_vars
         for var_name in sorted(undefined):
             errors.append(f"Phase {phase.id!r}: template variable {{{{{var_name}}}}} has no value defined")
+        if undefined:
+            continue
+
+        try:
+            if phase.prompt:
+                apply_vars(phase.prompt, workflow.vars)
+            if phase.run:
+                apply_vars(phase.run, workflow.vars)
+        except TemplateRenderError as exc:
+            errors.append(f"Phase {phase.id!r}: template render failed: {exc}")
 
     return errors
 
