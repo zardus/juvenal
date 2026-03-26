@@ -1989,6 +1989,28 @@ class TestTemplateVarsEngine:
         assert engine.run() == 1
         assert mock_backend.calls == []
 
+    def test_render_error_in_interactive_prompt_initializes_display_timer(self, mock_backend, tmp_path):
+        workflow = Workflow(
+            name="test",
+            phases=[Phase(id="refine", type="implement", prompt="{{ 1 / 0 }}", interactive=True)],
+            vars={},
+        )
+        engine = Engine(workflow, state_file=str(tmp_path / "state.json"), plain=True, interactive=True)
+        engine.backend = mock_backend
+
+        original_step_fail = engine.display.step_fail
+        worker_start_seen = {}
+
+        def checked_step_fail(step_name, reason):
+            worker_start_seen["value"] = engine.display._worker_start
+            original_step_fail(step_name, reason)
+
+        engine.display.step_fail = checked_step_fail
+
+        assert engine.run() == 1
+        assert worker_start_seen["value"] > 0
+        assert mock_backend.calls == []
+
     def test_render_error_in_check_prompt_fails_cleanly(self, mock_backend, tmp_path):
         mock_backend.add_response(exit_code=0, output="done")
         workflow = Workflow(

@@ -319,13 +319,13 @@ class Engine:
 
     def _run_interactive_loop(self, phase: Phase, attempt: int, failure_context: str) -> PhaseResult:
         """Run an agent-driven Q&A loop. Agent asks questions, user answers, agent updates plan."""
+        self.display.step_start("interactive")
         try:
             prompt = phase.render_prompt(failure_context=failure_context, vars=self.workflow.vars)
         except TemplateRenderError as exc:
             return self._template_failure(phase, "interactive", exc)
         prompt = self._INTERACTIVE_PREAMBLE + prompt
 
-        self.display.step_start("interactive")
         result = self.backend.run_agent(
             prompt,
             working_dir=self.workflow.working_dir,
