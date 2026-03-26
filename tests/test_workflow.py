@@ -15,6 +15,7 @@ from juvenal.workflow import (
     load_workflow,
     parse_checker_string,
     scaffold_workflow,
+    validate_workflow,
 )
 
 
@@ -1309,6 +1310,19 @@ class TestExpandMultiVars:
         result = expand_multi_vars(wf, {})
         assert len(result.phases) == 1
         assert result.phases[0].id == "build"
+
+    def test_preserves_unresolved_control_flow_during_expansion(self):
+        wf = Workflow(
+            name="test",
+            phases=[Phase(id="build", type="implement", prompt="{% if ENABLED %}Build {{TARGET}}{% endif %}")],
+        )
+        result = expand_multi_vars(wf, {"TARGET": ["linux", "windows"]})
+        assert [p.prompt for p in result.phases] == [
+            "{% if ENABLED %}Build {{'linux'}}{% endif %}",
+            "{% if ENABLED %}Build {{'windows'}}{% endif %}",
+        ]
+        errors = validate_workflow(result)
+        assert not any("has no prompt" in e for e in errors)
 
     def test_phases_in_existing_parallel_group_skipped(self):
         """Phases already in a parallel group are not expanded."""

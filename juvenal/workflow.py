@@ -370,6 +370,61 @@ def apply_vars(text: str, vars: Mapping[str, object] | None) -> str:
         raise TemplateRenderError(str(exc)) from exc
 
 
+def _jinja_literal(value: object) -> str:
+    """Convert a Python value into a Jinja literal string."""
+    if value is None:
+        return "none"
+    if value is True:
+        return "true"
+    if value is False:
+        return "false"
+    if isinstance(value, str):
+        return repr(value)
+    if isinstance(value, (int, float)):
+        return repr(value)
+    if isinstance(value, list):
+        return "[" + ", ".join(_jinja_literal(item) for item in value) + "]"
+    if isinstance(value, tuple):
+        items = ", ".join(_jinja_literal(item) for item in value)
+        if len(value) == 1:
+            items += ","
+        return f"({items})"
+    if isinstance(value, dict):
+        items = ", ".join(f"{_jinja_literal(k)}: {_jinja_literal(v)}" for k, v in value.items())
+        return "{" + items + "}"
+    return repr(value)
+
+
+def _substitute_known_template_vars(text: str, vars: Mapping[str, object] | None) -> str:
+    """Replace known undeclared vars with Jinja literals without evaluating the template."""
+    if not text or not vars:
+        return text
+
+    undeclared = template_vars(text)
+    replaceable = undeclared & set(vars)
+    if not replaceable:
+        return text
+
+    rendered: list[str] = []
+    for _, token_type, value in _JINJA_ENV.lex(text):
+        if token_type == "name" and value in replaceable:
+            rendered.append(_jinja_literal(vars[value]))
+        else:
+            rendered.append(value)
+    return "".join(rendered)
+
+
+def _render_known_template_vars(text: str, vars: Mapping[str, object] | None) -> str:
+    """Bind known vars source-to-source, then fully render only if the rest is resolvable."""
+    if not text or vars is None:
+        return text
+
+    text = _substitute_known_template_vars(text, vars)
+    if template_vars(text) <= set(vars):
+        return apply_vars(text, vars)
+    return text
+
+
 @dataclass
 class Phase:
     """A single phase in the workflow pipeline.
@@ -1177,8 +1232,8 @@ def expand_multi_vars(workflow: Workflow, multi_vars: dict[str, list[str]]) -> W
                 new_phase = Phase(
                     id=new_id,
                     type=phase.type,
-                    prompt=apply_vars(phase.prompt, render_vars) if phase.prompt else "",
-                    run=apply_vars(phase.run, render_vars) if phase.run else phase.run,
+                    prompt=_render_known_template_vars(phase.prompt, render_vars) if phase.prompt else "",
+                    run=_render_known_template_vars(phase.run, render_vars) if phase.run else phase.run,
                     role=phase.role,
                     bounce_target=new_bounce,
                     bounce_targets=new_bounce_targets,
