@@ -111,10 +111,14 @@ def required_template_vars(text: str) -> set[str]:
             return _collect_load_names(node.node) if truthy else set()
         if isinstance(node, nodes.Test):
             target_names = _collect_load_names(node.node)
-            if node.name in {"defined", "undefined"} and truthy:
+            if node.name == "defined" and truthy:
+                return target_names
+            if node.name == "undefined":
                 return target_names
         if isinstance(node, nodes.Not):
             if isinstance(node.node, nodes.Test) and node.node.name in {"defined", "undefined"}:
+                if node.node.name == "defined":
+                    return _collect_load_names(node.node.node)
                 return _collect_load_names(node.node.node) if truthy else set()
             return guard_names(node.node, not truthy)
         if isinstance(node, nodes.And):
