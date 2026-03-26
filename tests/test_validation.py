@@ -518,6 +518,28 @@ class TestTemplateVarValidation:
         errors = validate_workflow(wf)
         assert not any("X" in e and "no value defined" in e for e in errors)
 
+    def test_elif_branch_reports_missing_var_when_outer_guard_does_not_apply(self):
+        wf = Workflow(
+            name="test",
+            phases=[
+                Phase(id="build", type="implement", prompt="{% if X is defined %}{{ X }}{% elif Y %}{{ X }}{% endif %}")
+            ],
+            vars={"Y": "yes"},
+        )
+        errors = validate_workflow(wf)
+        assert any("X" in e and "no value defined" in e for e in errors)
+
+    def test_elif_branch_inherits_outer_undefined_false_guard(self):
+        wf = Workflow(
+            name="test",
+            phases=[
+                Phase(id="build", type="implement", prompt="{% if X is undefined %}skip{% elif X %}{{ X }}{% endif %}")
+            ],
+            vars={"X": "hi"},
+        )
+        errors = validate_workflow(wf)
+        assert not any("X" in e and "no value defined" in e for e in errors)
+
     def test_short_circuit_defined_guard_allows_rhs_use(self):
         wf = Workflow(
             name="test",

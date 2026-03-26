@@ -235,8 +235,9 @@ def required_template_vars(text: str) -> set[str]:
             body_guarded = guarded | guard_names(node.test, truthy=True)
             else_guarded = guarded | guard_names(node.test, truthy=False)
             body_locals = visit_nodes(node.body, optional=optional, guarded=body_guarded, local_names=local_names)
+            elif_locals = visit_nodes(node.elif_, optional=optional, guarded=else_guarded, local_names=local_names)
             else_locals = visit_nodes(node.else_, optional=optional, guarded=else_guarded, local_names=local_names)
-            return body_locals | else_locals
+            return body_locals | elif_locals | else_locals
 
         for child in node.iter_child_nodes():
             visit(child, optional=optional, guarded=guarded, local_names=local_names)
