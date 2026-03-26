@@ -603,6 +603,32 @@ class TestTemplateVarValidation:
         errors = validate_workflow(wf)
         assert not any("X" in e and "no value defined" in e for e in errors)
 
+    def test_truthy_default_filter_does_not_guard_branch_use(self):
+        wf = Workflow(
+            name="test",
+            phases=[Phase(id="build", type="implement", prompt="{% if X|default(true) %}{{ X }}{% endif %}")],
+        )
+        errors = validate_workflow(wf)
+        assert any("X" in e and "no value defined" in e for e in errors)
+
+    def test_truthy_default_filter_allows_else_branch_use(self):
+        wf = Workflow(
+            name="test",
+            phases=[
+                Phase(id="build", type="implement", prompt="{% if X|default(true) %}ok{% else %}{{ X }}{% endif %}")
+            ],
+        )
+        errors = validate_workflow(wf)
+        assert not any("X" in e and "no value defined" in e for e in errors)
+
+    def test_default_filter_without_argument_skips_missing_branch(self):
+        wf = Workflow(
+            name="test",
+            phases=[Phase(id="build", type="implement", prompt="{% if X|default %}Deploy {{ ENV }}{% endif %}")],
+        )
+        errors = validate_workflow(wf)
+        assert not any("ENV" in e and "no value defined" in e for e in errors)
+
     def test_required_use_still_fails_when_same_var_is_optional_elsewhere(self):
         wf = Workflow(
             name="test",

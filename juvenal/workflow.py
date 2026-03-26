@@ -96,7 +96,7 @@ def required_template_vars(text: str, vars: Mapping[str, object] | None = None) 
 
     def short_circuit_guard_names(node: nodes.Node, truthy: bool) -> set[str]:
         if isinstance(node, nodes.Filter) and node.name in {"default", "d"}:
-            return _collect_load_names(node.node)
+            return default_guard_names(node, truthy)
         if isinstance(node, nodes.Test):
             target_names = _collect_load_names(node.node)
             if node.name in {"defined", "undefined"}:
@@ -109,7 +109,7 @@ def required_template_vars(text: str, vars: Mapping[str, object] | None = None) 
 
     def guard_names(node: nodes.Node, truthy: bool) -> set[str]:
         if isinstance(node, nodes.Filter) and node.name in {"default", "d"}:
-            return _collect_load_names(node.node) if truthy else set()
+            return default_guard_names(node, truthy)
         if isinstance(node, nodes.Test):
             target_names = _collect_load_names(node.node)
             if node.name == "defined" and truthy:
@@ -145,6 +145,17 @@ def required_template_vars(text: str, vars: Mapping[str, object] | None = None) 
             current_locals = visit(child, optional=optional, guarded=guarded, local_names=current_locals)
         return current_locals
 
+    def default_missing_truth_value(node: nodes.Filter) -> bool | None:
+        if node.args:
+            return truth_value(node.args[0], set())
+        return False
+
+    def default_guard_names(node: nodes.Filter, truthy: bool) -> set[str]:
+        missing_truth = default_missing_truth_value(node)
+        if missing_truth is None or missing_truth is truthy:
+            return set()
+        return _collect_load_names(node.node)
+
     def truth_value(node: nodes.Node, local_names: set[str]) -> bool | None:
         if isinstance(node, nodes.Const):
             return bool(node.value)
@@ -163,9 +174,8 @@ def required_template_vars(text: str, vars: Mapping[str, object] | None = None) 
                 and node.node.ctx == "load"
                 and node.node.name not in local_names
                 and node.node.name not in known_vars
-                and node.args
             ):
-                return truth_value(node.args[0], local_names)
+                return default_missing_truth_value(node)
             return None
 
         if isinstance(node, nodes.Test) and isinstance(node.node, nodes.Name) and node.node.ctx == "load":
