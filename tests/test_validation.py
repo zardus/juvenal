@@ -767,6 +767,36 @@ class TestTemplateVarValidation:
         errors = validate_workflow(wf)
         assert any("FALLBACK" in e and "no value defined" in e for e in errors)
 
+    def test_filtered_for_loop_else_branch_is_skipped_when_known_item_matches(self):
+        wf = Workflow(
+            name="test",
+            phases=[
+                Phase(
+                    id="build",
+                    type="implement",
+                    prompt="{% for item in ITEMS if item.enabled %}{{ item.name }}{% else %}{{ FALLBACK }}{% endfor %}",
+                )
+            ],
+            vars={"ITEMS": [{"enabled": True, "name": "alpha"}]},
+        )
+        errors = validate_workflow(wf)
+        assert not any("FALLBACK" in e and "no value defined" in e for e in errors)
+
+    def test_filtered_for_loop_else_branch_is_required_when_no_known_item_matches(self):
+        wf = Workflow(
+            name="test",
+            phases=[
+                Phase(
+                    id="build",
+                    type="implement",
+                    prompt="{% for item in ITEMS if item.enabled %}{{ item.name }}{% else %}{{ FALLBACK }}{% endfor %}",
+                )
+            ],
+            vars={"ITEMS": [{"enabled": False, "name": "alpha"}]},
+        )
+        errors = validate_workflow(wf)
+        assert any("FALLBACK" in e and "no value defined" in e for e in errors)
+
     def test_set_local_var_is_not_reported_missing(self):
         wf = Workflow(
             name="test",
