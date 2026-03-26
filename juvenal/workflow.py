@@ -117,6 +117,16 @@ def required_template_vars(text: str) -> set[str]:
                 visit(node.dyn_kwargs, optional=optional, guarded=guarded)
             return
 
+        if isinstance(node, nodes.And):
+            visit(node.left, optional=optional, guarded=guarded)
+            visit(node.right, optional=optional, guarded=guarded | guard_names(node.left, truthy=True))
+            return
+
+        if isinstance(node, nodes.Or):
+            visit(node.left, optional=optional, guarded=guarded)
+            visit(node.right, optional=optional, guarded=guarded | guard_names(node.left, truthy=False))
+            return
+
         if isinstance(node, nodes.Test) and node.name in {"defined", "undefined"}:
             visit(node.node, optional=True, guarded=guarded)
             for arg in node.args:

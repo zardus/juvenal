@@ -467,6 +467,14 @@ class TestTemplateVarValidation:
         errors = validate_workflow(wf)
         assert not any("MISSING" in e and "no value defined" in e for e in errors)
 
+    def test_short_circuit_defined_guard_allows_rhs_use(self):
+        wf = Workflow(
+            name="test",
+            phases=[Phase(id="build", type="implement", prompt="{% if X is defined and X %}{{ X }}{% endif %}")],
+        )
+        errors = validate_workflow(wf)
+        assert not any("X" in e and "no value defined" in e for e in errors)
+
     def test_required_use_still_fails_when_same_var_is_optional_elsewhere(self):
         wf = Workflow(
             name="test",
