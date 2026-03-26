@@ -409,6 +409,22 @@ class TestTemplateVarValidation:
         undefined = [e for e in errors if "no value defined" in e]
         assert len(undefined) == 1
 
+    def test_undefined_var_in_jinja_control_flow(self):
+        wf = Workflow(
+            name="test",
+            phases=[Phase(id="build", type="implement", prompt="{% if ENABLE_DEPLOY %}Deploy{% endif %}")],
+        )
+        errors = validate_workflow(wf)
+        assert any("ENABLE_DEPLOY" in e and "no value defined" in e for e in errors)
+
+    def test_invalid_jinja_template_reports_error(self):
+        wf = Workflow(
+            name="test",
+            phases=[Phase(id="build", type="implement", prompt="{{ broken }")],
+        )
+        errors = validate_workflow(wf)
+        assert any("invalid template syntax" in e for e in errors)
+
 
 class TestLaneValidation:
     def test_lane_phase_existence(self):

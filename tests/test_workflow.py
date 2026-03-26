@@ -1005,6 +1005,14 @@ class TestTemplateVars:
         result = apply_vars("{{A}} and {{B}}", {"A": "foo", "B": "bar"})
         assert result == "foo and bar"
 
+    def test_apply_vars_jinja_filter(self):
+        result = apply_vars("Hello {{ name|upper }}", {"name": "world"})
+        assert result == "Hello WORLD"
+
+    def test_apply_vars_jinja_condition(self):
+        result = apply_vars("{% if ENABLED %}ship it{% else %}skip it{% endif %}", {"ENABLED": True})
+        assert result == "ship it"
+
     def test_apply_vars_unrecognized_passthrough(self):
         assert apply_vars("Hello {{UNKNOWN}}", {"NAME": "world"}) == "Hello {{UNKNOWN}}"
 
@@ -1029,6 +1037,11 @@ class TestTemplateVars:
         phase = Phase(id="check", type="check", prompt="Verify {{COMPONENT}}.")
         result = phase.render_check_prompt(vars={"COMPONENT": "auth"})
         assert result == "Verify auth."
+
+    def test_render_prompt_with_jinja_expression(self):
+        phase = Phase(id="build", prompt="Build {{ project|upper }}.")
+        result = phase.render_prompt(vars={"project": "myapp"})
+        assert result == "Build MYAPP."
 
     def test_render_prompt_none_vars(self):
         phase = Phase(id="build", prompt="Build {{PROJECT}}.")
@@ -1260,6 +1273,16 @@ class TestExpandMultiVars:
         assert len(result.phases) == 4
         prompts = {p.prompt for p in result.phases}
         assert prompts == {"Build x on 1.", "Build x on 2.", "Build y on 1.", "Build y on 2."}
+
+    def test_uses_existing_vars_during_expansion(self):
+        wf = Workflow(
+            name="test",
+            phases=[Phase(id="build", type="implement", prompt="Build {{ APP|upper }} for {{TARGET}}.")],
+            vars={"APP": "service"},
+        )
+        result = expand_multi_vars(wf, {"TARGET": ["linux", "windows"]})
+        prompts = [p.prompt for p in result.phases]
+        assert prompts == ["Build SERVICE for linux.", "Build SERVICE for windows."]
 
     def test_empty_multi_vars_is_noop(self):
         """Empty multi_vars returns workflow unchanged."""

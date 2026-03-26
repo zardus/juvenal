@@ -3,24 +3,62 @@
 from __future__ import annotations
 
 import itertools
-import re
 import shutil
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 
 import yaml
+from jinja2 import Environment, TemplateSyntaxError, Undefined, meta
 
-_VAR_RE = re.compile(r"\{\{(\w+)\}\}")
+
+class PreservePlaceholderUndefined(Undefined):
+    """Render undefined variables back to their placeholder form."""
+
+    __slots__ = ()
+
+    def __str__(self) -> str:
+        name = self._undefined_name or "undefined"
+        return f"{{{{{name}}}}}"
+
+    def __getattr__(self, name: str) -> PreservePlaceholderUndefined:
+        if name.startswith("__"):
+            raise AttributeError(name)
+        current = self._undefined_name or "undefined"
+        return type(self)(name=f"{current}.{name}")
+
+    def __getitem__(self, key: object) -> PreservePlaceholderUndefined:
+        current = self._undefined_name or "undefined"
+        return type(self)(name=f"{current}[{key!r}]")
 
 
-def apply_vars(text: str, vars: dict[str, str]) -> str:
-    """Replace {{VAR}} placeholders with values from vars dict.
+_JINJA_ENV = Environment(
+    autoescape=False,
+    keep_trailing_newline=True,
+    undefined=PreservePlaceholderUndefined,
+)
 
-    Unrecognized variables pass through unchanged.
+
+def _parse_template(text: str):
+    """Parse a Jinja2 template string into an AST."""
+    return _JINJA_ENV.parse(text)
+
+
+def template_vars(text: str) -> set[str]:
+    """Return the undeclared variables referenced by a Jinja2 template."""
+    if not text:
+        return set()
+    return meta.find_undeclared_variables(_parse_template(text))
+
+
+def apply_vars(text: str, vars: Mapping[str, object] | None) -> str:
+    """Render a Jinja2 template string with the provided variables.
+
+    Unrecognized variables render back to their placeholder form.
     """
     if not vars:
         return text
-    return _VAR_RE.sub(lambda m: vars.get(m.group(1), m.group(0)), text)
+    return _JINJA_ENV.from_string(text).render(dict(vars))
 
 
 @dataclass
@@ -791,10 +829,14 @@ def expand_multi_vars(workflow: Workflow, multi_vars: dict[str, list[str]]) -> W
             continue
 
         # Find which multi-value vars this group references
-        all_text = parent.prompt + (parent.run or "")
-        for child in group[1:]:
-            all_text += child.prompt + (child.run or "")
-        used_vars = set(_VAR_RE.findall(all_text))
+        used_vars: set[str] = set()
+        try:
+            for phase in group:
+                used_vars.update(template_vars(phase.prompt))
+                used_vars.update(template_vars(phase.run or ""))
+        except TemplateSyntaxError:
+            new_phases.extend(group)
+            continue
         referenced = [k for k in multi_vars if k in used_vars]
 
         if not referenced:
@@ -820,12 +862,14 @@ def expand_multi_vars(workflow: Workflow, multi_vars: dict[str, list[str]]) -> W
                 if new_bounce in group_old_ids:
                     new_bounce = f"{new_bounce}~{suffix}"
                 new_bounce_targets = [f"{bt}~{suffix}" if bt in group_old_ids else bt for bt in phase.bounce_targets]
+                render_vars = dict(workflow.vars)
+                render_vars.update(combo_vars)
 
                 new_phase = Phase(
                     id=new_id,
                     type=phase.type,
-                    prompt=apply_vars(phase.prompt, combo_vars) if phase.prompt else "",
-                    run=apply_vars(phase.run, combo_vars) if phase.run else phase.run,
+                    prompt=apply_vars(phase.prompt, render_vars) if phase.prompt else "",
+                    run=apply_vars(phase.run, render_vars) if phase.run else phase.run,
                     role=phase.role,
                     bounce_target=new_bounce,
                     bounce_targets=new_bounce_targets,
@@ -976,8 +1020,14 @@ def validate_workflow(workflow: Workflow) -> list[str]:
     # Template variable validation: all {{VAR}} references must have values
     defined_vars = set(workflow.vars.keys())
     for phase in workflow.phases:
-        all_text = phase.prompt + (phase.run or "")
-        undefined = set(_VAR_RE.findall(all_text)) - defined_vars
+        try:
+            referenced_vars = template_vars(phase.prompt)
+            referenced_vars.update(template_vars(phase.run or ""))
+        except TemplateSyntaxError as exc:
+            errors.append(f"Phase {phase.id!r}: invalid template syntax on line {exc.lineno}: {exc.message}")
+            continue
+
+        undefined = referenced_vars - defined_vars
         for var_name in sorted(undefined):
             errors.append(f"Phase {phase.id!r}: template variable {{{{{var_name}}}}} has no value defined")
 

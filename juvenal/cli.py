@@ -55,7 +55,7 @@ def build_parser() -> argparse.ArgumentParser:
         help=argparse.SUPPRESS,  # deprecated no-op, kept for compatibility
     )
     run_p.add_argument(
-        "-D", action="append", default=[], metavar="VAR=VAL", dest="defines", help="Set template variable"
+        "-D", action="append", default=[], metavar="VAR=VAL", dest="defines", help="Set Jinja2 template variable"
     )
     run_p.add_argument("--serialize", action="store_true", help="Disable all parallelization")
 
@@ -102,7 +102,7 @@ def build_parser() -> argparse.ArgumentParser:
         help=argparse.SUPPRESS,  # deprecated no-op, kept for compatibility
     )
     do_p.add_argument(
-        "-D", action="append", default=[], metavar="VAR=VAL", dest="defines", help="Set template variable"
+        "-D", action="append", default=[], metavar="VAR=VAL", dest="defines", help="Set Jinja2 template variable"
     )
     do_p.add_argument("--serialize", action="store_true", help="Disable all parallelization")
 
