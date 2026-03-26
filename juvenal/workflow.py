@@ -69,6 +69,7 @@ def required_template_vars(text: str, vars: Mapping[str, object] | None = None) 
     ast = _parse_template(text)
     undeclared = meta.find_undeclared_variables(ast)
     required: set[str] = set()
+    unknown = object()
 
     def _collect_load_names(node: nodes.Node) -> set[str]:
         names: set[str] = set()
@@ -167,6 +168,64 @@ def required_template_vars(text: str, vars: Mapping[str, object] | None = None) 
             return set()
         return _collect_load_names(node.node)
 
+    def resolved_value(node: nodes.Node, local_names: set[str]) -> object:
+        if isinstance(node, nodes.Const):
+            return node.value
+
+        if isinstance(node, nodes.Name) and node.ctx == "load":
+            if node.name in local_names or node.name not in known_vars:
+                return unknown
+            return known_vars[node.name]
+
+        if isinstance(node, nodes.List):
+            items: list[object] = []
+            for item in node.items:
+                value = resolved_value(item, local_names)
+                if value is unknown:
+                    return unknown
+                items.append(value)
+            return items
+
+        if isinstance(node, nodes.Tuple):
+            items: list[object] = []
+            for item in node.items:
+                value = resolved_value(item, local_names)
+                if value is unknown:
+                    return unknown
+                items.append(value)
+            return tuple(items)
+
+        if isinstance(node, nodes.Dict):
+            items: dict[object, object] = {}
+            for key, value_node in node.items:
+                key_value = resolved_value(key, local_names)
+                value_value = resolved_value(value_node, local_names)
+                if key_value is unknown or value_value is unknown:
+                    return unknown
+                items[key_value] = value_value
+            return items
+
+        if isinstance(node, nodes.Filter) and node.name in {"default", "d"}:
+            base_value = resolved_value(node.node, local_names)
+            fallback_value = resolved_value(node.args[0], local_names) if node.args else ""
+            boolean_value = default_boolean_truth_value(node, local_names)
+            if base_value is not unknown:
+                if base_value or boolean_value is False:
+                    return base_value
+                if boolean_value is True and fallback_value is not unknown:
+                    return fallback_value
+                return unknown
+            if (
+                isinstance(node.node, nodes.Name)
+                and node.node.ctx == "load"
+                and node.node.name not in local_names
+                and node.node.name not in known_vars
+            ):
+                return fallback_value
+            return unknown
+
+        return unknown
+
     def truth_value(node: nodes.Node, local_names: set[str]) -> bool | None:
         if isinstance(node, nodes.Const):
             return bool(node.value)
@@ -241,6 +300,45 @@ def required_template_vars(text: str, vars: Mapping[str, object] | None = None) 
             if test_value is False and node.expr2 is not None:
                 return truth_value(node.expr2, local_names)
             return None
+
+        if isinstance(node, nodes.Compare):
+            left_value = resolved_value(node.expr, local_names)
+            if left_value is unknown:
+                return None
+
+            current = left_value
+            for op in node.ops:
+                right_value = resolved_value(op.expr, local_names)
+                if right_value is unknown:
+                    return None
+
+                try:
+                    if op.op == "eq":
+                        matches = current == right_value
+                    elif op.op == "ne":
+                        matches = current != right_value
+                    elif op.op == "gt":
+                        matches = current > right_value
+                    elif op.op == "gteq":
+                        matches = current >= right_value
+                    elif op.op == "lt":
+                        matches = current < right_value
+                    elif op.op == "lteq":
+                        matches = current <= right_value
+                    elif op.op == "in":
+                        matches = current in right_value
+                    elif op.op == "notin":
+                        matches = current not in right_value
+                    else:
+                        return None
+                except Exception:
+                    return None
+
+                if not matches:
+                    return False
+                current = right_value
+
+            return True
 
         return None
 

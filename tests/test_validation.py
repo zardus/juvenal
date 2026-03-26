@@ -595,6 +595,33 @@ class TestTemplateVarValidation:
         errors = validate_workflow(wf)
         assert any("X" in e and "no value defined" in e for e in errors)
 
+    def test_comparison_false_skips_branch_required_var(self):
+        wf = Workflow(
+            name="test",
+            phases=[Phase(id="build", type="implement", prompt="{% if ENV == 'prod' %}{{ REGION }}{% endif %}")],
+            vars={"ENV": "staging"},
+        )
+        errors = validate_workflow(wf)
+        assert not any("REGION" in e and "no value defined" in e for e in errors)
+
+    def test_comparison_true_requires_branch_var(self):
+        wf = Workflow(
+            name="test",
+            phases=[Phase(id="build", type="implement", prompt="{% if ENV == 'prod' %}{{ REGION }}{% endif %}")],
+            vars={"ENV": "prod"},
+        )
+        errors = validate_workflow(wf)
+        assert any("REGION" in e and "no value defined" in e for e in errors)
+
+    def test_comparison_false_skips_inline_conditional_required_var(self):
+        wf = Workflow(
+            name="test",
+            phases=[Phase(id="build", type="implement", prompt="{{ REGION if ENV == 'prod' else 'skip' }}")],
+            vars={"ENV": "staging"},
+        )
+        errors = validate_workflow(wf)
+        assert not any("REGION" in e and "no value defined" in e for e in errors)
+
     def test_default_filter_guard_allows_branch_use(self):
         wf = Workflow(
             name="test",
