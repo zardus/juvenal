@@ -457,6 +457,16 @@ class TestTemplateVarValidation:
         errors = validate_workflow(wf)
         assert not any("MISSING" in e and "no value defined" in e for e in errors)
 
+    def test_undefined_guard_allows_use_inside_branch(self):
+        wf = Workflow(
+            name="test",
+            phases=[
+                Phase(id="build", type="implement", prompt="{% if MISSING is undefined %}{{ MISSING }}{% endif %}")
+            ],
+        )
+        errors = validate_workflow(wf)
+        assert not any("MISSING" in e and "no value defined" in e for e in errors)
+
     def test_required_use_still_fails_when_same_var_is_optional_elsewhere(self):
         wf = Workflow(
             name="test",

@@ -84,10 +84,8 @@ def required_template_vars(text: str) -> set[str]:
     def guard_names(node: nodes.Node, truthy: bool) -> set[str]:
         if isinstance(node, nodes.Test):
             target_names = _collect_load_names(node.node)
-            if node.name == "defined":
-                return target_names if truthy else set()
-            if node.name == "undefined":
-                return set() if truthy else target_names
+            if node.name in {"defined", "undefined"}:
+                return target_names
         if isinstance(node, nodes.Not):
             return guard_names(node.node, not truthy)
         if isinstance(node, nodes.And):
