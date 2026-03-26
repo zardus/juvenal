@@ -65,6 +65,8 @@ def required_template_vars(text: str) -> set[str]:
     if not text:
         return set()
 
+    ast = _parse_template(text)
+    undeclared = meta.find_undeclared_variables(ast)
     required: set[str] = set()
 
     def visit(node: nodes.Node, optional: bool = False) -> None:
@@ -100,8 +102,8 @@ def required_template_vars(text: str) -> set[str]:
         for child in node.iter_child_nodes():
             visit(child, optional=optional)
 
-    visit(_parse_template(text))
-    return required
+    visit(ast)
+    return required & undeclared
 
 
 def apply_vars(text: str, vars: Mapping[str, object] | None) -> str:
