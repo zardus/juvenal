@@ -9,7 +9,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 import yaml
-from jinja2 import Environment, TemplateSyntaxError, Undefined, meta, nodes
+from jinja2 import TemplateSyntaxError, Undefined, meta, nodes
+from jinja2.sandbox import SandboxedEnvironment
 
 
 class PreservePlaceholderUndefined(Undefined):
@@ -32,7 +33,7 @@ class PreservePlaceholderUndefined(Undefined):
         return type(self)(name=f"{current}[{key!r}]")
 
 
-_JINJA_ENV = Environment(
+_JINJA_ENV = SandboxedEnvironment(
     autoescape=False,
     keep_trailing_newline=True,
     undefined=PreservePlaceholderUndefined,

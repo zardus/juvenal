@@ -433,6 +433,21 @@ class TestTemplateVarValidation:
         errors = validate_workflow(wf)
         assert any("template render failed" in e and "division by zero" in e for e in errors)
 
+    def test_sandboxed_jinja_error_reports_error(self):
+        wf = Workflow(
+            name="test",
+            phases=[
+                Phase(
+                    id="build",
+                    type="implement",
+                    prompt="{{ cycler.__init__.__globals__.os.popen('printf checker-pwned').read() }}",
+                )
+            ],
+        )
+        errors = validate_workflow(wf)
+        assert any("template render failed" in e for e in errors)
+        assert not any("checker-pwned" in e for e in errors)
+
     def test_default_filter_allows_optional_missing_var(self):
         wf = Workflow(
             name="test",

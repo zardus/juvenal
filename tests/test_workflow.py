@@ -7,6 +7,7 @@ import pytest
 from juvenal.workflow import (
     ParallelGroup,
     Phase,
+    TemplateRenderError,
     Workflow,
     apply_vars,
     expand_multi_vars,
@@ -1025,6 +1026,11 @@ class TestTemplateVars:
 
     def test_apply_vars_empty_dict_renders_jinja_control_flow(self):
         assert apply_vars("{% if true %}rendered{% endif %}", {}) == "rendered"
+
+    def test_apply_vars_sandbox_blocks_code_execution(self):
+        payload = "{{ cycler.__init__.__globals__.os.popen('printf checker-pwned').read() }}"
+        with pytest.raises(TemplateRenderError):
+            apply_vars(payload, {})
 
     def test_apply_vars_no_placeholders(self):
         assert apply_vars("no vars here", {"NAME": "world"}) == "no vars here"
