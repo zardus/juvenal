@@ -56,7 +56,7 @@ def apply_vars(text: str, vars: Mapping[str, object] | None) -> str:
 
     Unrecognized variables render back to their placeholder form.
     """
-    if not vars:
+    if vars is None:
         return text
     return _JINJA_ENV.from_string(text).render(dict(vars))
 
@@ -89,7 +89,7 @@ class Phase:
     def render_prompt(self, failure_context: str = "", vars: dict[str, str] | None = None) -> str:
         """Render the implementation prompt, injecting failure context on retry."""
         text = self.prompt
-        if vars:
+        if vars is not None:
             text = apply_vars(text, vars)
         if failure_context:
             text += (
@@ -103,7 +103,7 @@ class Phase:
         """Render the checker prompt for check phases."""
         if self.prompt:
             text = self.prompt
-            if vars:
+            if vars is not None:
                 text = apply_vars(text, vars)
             return text
         if self.role:

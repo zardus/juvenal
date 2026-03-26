@@ -1019,6 +1019,12 @@ class TestTemplateVars:
     def test_apply_vars_empty_dict(self):
         assert apply_vars("Hello {{NAME}}", {}) == "Hello {{NAME}}"
 
+    def test_apply_vars_empty_dict_renders_jinja_expression(self):
+        assert apply_vars("{{ 'ok'|upper }}", {}) == "OK"
+
+    def test_apply_vars_empty_dict_renders_jinja_control_flow(self):
+        assert apply_vars("{% if true %}rendered{% endif %}", {}) == "rendered"
+
     def test_apply_vars_no_placeholders(self):
         assert apply_vars("no vars here", {"NAME": "world"}) == "no vars here"
 
@@ -1042,6 +1048,16 @@ class TestTemplateVars:
         phase = Phase(id="build", prompt="Build {{ project|upper }}.")
         result = phase.render_prompt(vars={"project": "myapp"})
         assert result == "Build MYAPP."
+
+    def test_render_prompt_empty_dict_renders_jinja_expression(self):
+        phase = Phase(id="build", prompt="{{ 'ok'|upper }}")
+        result = phase.render_prompt(vars={})
+        assert result == "OK"
+
+    def test_render_check_prompt_empty_dict_renders_jinja_expression(self):
+        phase = Phase(id="check", type="check", prompt="{% if true %}rendered{% endif %}")
+        result = phase.render_check_prompt(vars={})
+        assert result == "rendered"
 
     def test_render_prompt_none_vars(self):
         phase = Phase(id="build", prompt="Build {{PROJECT}}.")

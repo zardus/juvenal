@@ -1894,6 +1894,18 @@ class TestTemplateVarsEngine:
         engine.run()
         assert "Deploy to prod in us-west-2." in mock_backend.calls[0]
 
+    def test_empty_vars_still_render_implement_prompt(self, mock_backend, tmp_path):
+        mock_backend.add_response(exit_code=0, output="done")
+        workflow = Workflow(
+            name="test",
+            phases=[Phase(id="build", type="implement", prompt="{{ 'ok'|upper }}")],
+            vars={},
+        )
+        engine = Engine(workflow, state_file=str(tmp_path / "state.json"), plain=True)
+        engine.backend = mock_backend
+        engine.run()
+        assert mock_backend.calls[0] == "OK"
+
     def test_vars_substituted_in_check_prompt(self, mock_backend, tmp_path):
         """Vars are substituted in check phase prompts."""
         mock_backend.add_response(exit_code=0, output="done")
@@ -1911,6 +1923,23 @@ class TestTemplateVarsEngine:
         engine.run()
         # Check phase prompt should contain the substituted var
         assert "Verify myservice works." in mock_backend.calls[1]
+
+    def test_empty_vars_still_render_check_prompt(self, mock_backend, tmp_path):
+        mock_backend.add_response(exit_code=0, output="done")
+        mock_backend.add_response(exit_code=0, output="VERDICT: PASS")
+        workflow = Workflow(
+            name="test",
+            phases=[
+                Phase(id="build", type="implement", prompt="{% if true %}rendered{% endif %}"),
+                Phase(id="review", type="check", prompt="{{ 'ok'|upper }}", bounce_target="build"),
+            ],
+            vars={},
+        )
+        engine = Engine(workflow, state_file=str(tmp_path / "state.json"), plain=True)
+        engine.backend = mock_backend
+        engine.run()
+        assert "rendered" in mock_backend.calls[1]
+        assert "OK" in mock_backend.calls[1]
 
     def test_vars_substituted_in_script_run(self, mock_backend, tmp_path):
         """Vars are substituted in script phase run commands."""
@@ -1930,6 +1959,24 @@ class TestTemplateVarsEngine:
             engine.run()
             mock_run.assert_called_once()
             assert mock_run.call_args[0][0] == "pytest tests/unit -x"
+
+    def test_empty_vars_still_render_script_run(self, mock_backend, tmp_path):
+        mock_backend.add_response(exit_code=0, output="done")
+        workflow = Workflow(
+            name="test",
+            phases=[
+                Phase(id="build", type="implement", prompt="Build it."),
+                Phase(id="test", type="script", run="echo {{ 'ok'|upper }}", bounce_target="build"),
+            ],
+            vars={},
+        )
+        engine = Engine(workflow, state_file=str(tmp_path / "state.json"), plain=True)
+        engine.backend = mock_backend
+        with patch("juvenal.engine.run_script") as mock_run:
+            mock_run.return_value = type("R", (), {"exit_code": 0, "output": "ok"})()
+            engine.run()
+            mock_run.assert_called_once()
+            assert mock_run.call_args[0][0] == "echo OK"
 
     def test_vars_unrecognized_passthrough(self, mock_backend, tmp_path):
         """Unrecognized {{VAR}} placeholders pass through unchanged."""

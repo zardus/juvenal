@@ -388,7 +388,7 @@ class Engine:
         self.display.step_start(f"script: {phase.id}")
 
         timeout = phase.timeout or 600
-        run_cmd = apply_vars(phase.run, self.workflow.vars) if self.workflow.vars else phase.run
+        run_cmd = apply_vars(phase.run, self.workflow.vars)
         result = run_script(run_cmd, self.workflow.working_dir, timeout=timeout, env=phase.env or None)
         self.state.log_step(phase.id, attempt, "script", result.output, input=phase.run)
 
@@ -426,8 +426,7 @@ class Engine:
         # Inject the parent implement phase's directions so the checker knows what to verify
         parent_prompt = self._get_parent_prompt(phase, phases, phase_idx)
         if parent_prompt:
-            if self.workflow.vars:
-                parent_prompt = apply_vars(parent_prompt, self.workflow.vars)
+            parent_prompt = apply_vars(parent_prompt, self.workflow.vars)
             prompt = (
                 f"You are a CHECKER. You must NOT write any code or implement anything. "
                 f"Another agent has already attempted the task below. "
