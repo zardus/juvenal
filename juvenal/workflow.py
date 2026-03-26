@@ -127,6 +127,13 @@ def required_template_vars(text: str) -> set[str]:
             visit(node.right, optional=optional, guarded=guarded | guard_names(node.left, truthy=False))
             return
 
+        if isinstance(node, nodes.CondExpr):
+            visit(node.test, optional=optional, guarded=guarded)
+            visit(node.expr1, optional=optional, guarded=guarded | guard_names(node.test, truthy=True))
+            if node.expr2 is not None:
+                visit(node.expr2, optional=optional, guarded=guarded | guard_names(node.test, truthy=False))
+            return
+
         if isinstance(node, nodes.Test) and node.name in {"defined", "undefined"}:
             visit(node.node, optional=True, guarded=guarded)
             for arg in node.args:
