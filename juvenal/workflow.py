@@ -81,6 +81,18 @@ def required_template_vars(text: str) -> set[str]:
         collect(node)
         return names
 
+    def _collect_store_names(node: nodes.Node) -> set[str]:
+        names: set[str] = set()
+
+        def collect(child: nodes.Node) -> None:
+            if isinstance(child, nodes.Name) and child.ctx == "store":
+                names.add(child.name)
+            for grandchild in child.iter_child_nodes():
+                collect(grandchild)
+
+        collect(node)
+        return names
+
     def guard_names(node: nodes.Node, truthy: bool) -> set[str]:
         if isinstance(node, nodes.Filter) and node.name in {"default", "d"}:
             return _collect_load_names(node.node)
@@ -100,66 +112,111 @@ def required_template_vars(text: str) -> set[str]:
             return set()
         return set()
 
-    def visit(node: nodes.Node, optional: bool = False, guarded: set[str] | None = None) -> None:
+    def visit_nodes(
+        child_nodes: list[nodes.Node], optional: bool, guarded: set[str], local_names: set[str]
+    ) -> set[str]:
+        current_locals = set(local_names)
+        for child in child_nodes:
+            current_locals = visit(child, optional=optional, guarded=guarded, local_names=current_locals)
+        return current_locals
+
+    def visit(
+        node: nodes.Node,
+        optional: bool = False,
+        guarded: set[str] | None = None,
+        local_names: set[str] | None = None,
+    ) -> set[str]:
         guarded = guarded or set()
+        local_names = local_names or set()
+
+        if isinstance(node, nodes.Template):
+            return visit_nodes(node.body, optional=optional, guarded=guarded, local_names=local_names)
+
         if isinstance(node, nodes.Name) and node.ctx == "load":
-            if not optional and node.name not in guarded:
+            if not optional and node.name not in guarded and node.name not in local_names:
                 required.add(node.name)
-            return
+            return local_names
+
+        if isinstance(node, nodes.Assign):
+            visit(node.node, optional=optional, guarded=guarded, local_names=local_names)
+            return local_names | _collect_store_names(node.target)
+
+        if isinstance(node, nodes.AssignBlock):
+            visit_nodes(node.body, optional=optional, guarded=guarded, local_names=local_names)
+            return local_names | _collect_store_names(node.target)
 
         if isinstance(node, nodes.Filter) and node.name in {"default", "d"}:
-            visit(node.node, optional=True, guarded=guarded)
+            visit(node.node, optional=True, guarded=guarded, local_names=local_names)
             for arg in node.args:
-                visit(arg, optional=optional, guarded=guarded)
+                visit(arg, optional=optional, guarded=guarded, local_names=local_names)
             for kwarg in node.kwargs:
-                visit(kwarg.value, optional=optional, guarded=guarded)
+                visit(kwarg.value, optional=optional, guarded=guarded, local_names=local_names)
             if node.dyn_args is not None:
-                visit(node.dyn_args, optional=optional, guarded=guarded)
+                visit(node.dyn_args, optional=optional, guarded=guarded, local_names=local_names)
             if node.dyn_kwargs is not None:
-                visit(node.dyn_kwargs, optional=optional, guarded=guarded)
-            return
+                visit(node.dyn_kwargs, optional=optional, guarded=guarded, local_names=local_names)
+            return local_names
 
         if isinstance(node, nodes.And):
-            visit(node.left, optional=optional, guarded=guarded)
-            visit(node.right, optional=optional, guarded=guarded | guard_names(node.left, truthy=True))
-            return
+            visit(node.left, optional=optional, guarded=guarded, local_names=local_names)
+            visit(
+                node.right,
+                optional=optional,
+                guarded=guarded | guard_names(node.left, truthy=True),
+                local_names=local_names,
+            )
+            return local_names
 
         if isinstance(node, nodes.Or):
-            visit(node.left, optional=optional, guarded=guarded)
-            visit(node.right, optional=optional, guarded=guarded | guard_names(node.left, truthy=False))
-            return
+            visit(node.left, optional=optional, guarded=guarded, local_names=local_names)
+            visit(
+                node.right,
+                optional=optional,
+                guarded=guarded | guard_names(node.left, truthy=False),
+                local_names=local_names,
+            )
+            return local_names
 
         if isinstance(node, nodes.CondExpr):
-            visit(node.test, optional=optional, guarded=guarded)
-            visit(node.expr1, optional=optional, guarded=guarded | guard_names(node.test, truthy=True))
+            visit(node.test, optional=optional, guarded=guarded, local_names=local_names)
+            visit(
+                node.expr1,
+                optional=optional,
+                guarded=guarded | guard_names(node.test, truthy=True),
+                local_names=local_names,
+            )
             if node.expr2 is not None:
-                visit(node.expr2, optional=optional, guarded=guarded | guard_names(node.test, truthy=False))
-            return
+                visit(
+                    node.expr2,
+                    optional=optional,
+                    guarded=guarded | guard_names(node.test, truthy=False),
+                    local_names=local_names,
+                )
+            return local_names
 
         if isinstance(node, nodes.Test) and node.name in {"defined", "undefined"}:
-            visit(node.node, optional=True, guarded=guarded)
+            visit(node.node, optional=True, guarded=guarded, local_names=local_names)
             for arg in node.args:
-                visit(arg, optional=optional, guarded=guarded)
+                visit(arg, optional=optional, guarded=guarded, local_names=local_names)
             for kwarg in node.kwargs:
-                visit(kwarg.value, optional=optional, guarded=guarded)
+                visit(kwarg.value, optional=optional, guarded=guarded, local_names=local_names)
             if node.dyn_args is not None:
-                visit(node.dyn_args, optional=optional, guarded=guarded)
+                visit(node.dyn_args, optional=optional, guarded=guarded, local_names=local_names)
             if node.dyn_kwargs is not None:
-                visit(node.dyn_kwargs, optional=optional, guarded=guarded)
-            return
+                visit(node.dyn_kwargs, optional=optional, guarded=guarded, local_names=local_names)
+            return local_names
 
         if isinstance(node, nodes.If):
-            visit(node.test, optional=optional, guarded=guarded)
+            visit(node.test, optional=optional, guarded=guarded, local_names=local_names)
             body_guarded = guarded | guard_names(node.test, truthy=True)
             else_guarded = guarded | guard_names(node.test, truthy=False)
-            for child in node.body:
-                visit(child, optional=optional, guarded=body_guarded)
-            for child in node.else_:
-                visit(child, optional=optional, guarded=else_guarded)
-            return
+            body_locals = visit_nodes(node.body, optional=optional, guarded=body_guarded, local_names=local_names)
+            else_locals = visit_nodes(node.else_, optional=optional, guarded=else_guarded, local_names=local_names)
+            return body_locals | else_locals
 
         for child in node.iter_child_nodes():
-            visit(child, optional=optional, guarded=guarded)
+            visit(child, optional=optional, guarded=guarded, local_names=local_names)
+        return local_names
 
     visit(ast)
     return required & undeclared

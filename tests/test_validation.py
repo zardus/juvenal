@@ -516,6 +516,17 @@ class TestTemplateVarValidation:
         errors = validate_workflow(wf)
         assert not any("x" in e and "no value defined" in e for e in errors)
 
+    def test_conditional_set_local_var_is_not_reported_missing(self):
+        wf = Workflow(
+            name="test",
+            phases=[
+                Phase(id="build", type="implement", prompt="{% if X is defined %}{% set y = X %}{% endif %}{{ y }}")
+            ],
+            vars={"X": "hi"},
+        )
+        errors = validate_workflow(wf)
+        assert not any("y" in e and "no value defined" in e for e in errors)
+
 
 class TestLaneValidation:
     def test_lane_phase_existence(self):
