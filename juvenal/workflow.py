@@ -197,9 +197,9 @@ def required_template_vars(text: str, vars: Mapping[str, object] | None = None) 
 
         if isinstance(node, nodes.Dict):
             items: dict[object, object] = {}
-            for key, value_node in node.items:
-                key_value = resolved_value(key, local_names)
-                value_value = resolved_value(value_node, local_names)
+            for pair in node.items:
+                key_value = resolved_value(pair.key, local_names)
+                value_value = resolved_value(pair.value, local_names)
                 if key_value is unknown or value_value is unknown:
                     return unknown
                 items[key_value] = value_value
@@ -234,6 +234,10 @@ def required_template_vars(text: str, vars: Mapping[str, object] | None = None) 
             if node.name in local_names or node.name not in known_vars:
                 return None
             return bool(known_vars[node.name])
+
+        if isinstance(node, (nodes.List, nodes.Tuple, nodes.Dict)):
+            value = resolved_value(node, local_names)
+            return None if value is unknown else bool(value)
 
         if isinstance(node, nodes.Filter) and node.name in {"default", "d"}:
             fallback_value = default_missing_truth_value(node)
