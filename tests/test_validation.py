@@ -457,6 +457,14 @@ class TestTemplateVarValidation:
         errors = validate_workflow(wf)
         assert not any("MISSING" in e and "no value defined" in e for e in errors)
 
+    def test_defined_guard_does_not_allow_use_inside_else_branch(self):
+        wf = Workflow(
+            name="test",
+            phases=[Phase(id="build", type="implement", prompt="{% if X is defined %}ok{% else %}{{ X }}{% endif %}")],
+        )
+        errors = validate_workflow(wf)
+        assert any("X" in e and "no value defined" in e for e in errors)
+
     def test_undefined_guard_allows_use_inside_branch(self):
         wf = Workflow(
             name="test",
@@ -482,6 +490,14 @@ class TestTemplateVarValidation:
         )
         errors = validate_workflow(wf)
         assert not any("X" in e and "no value defined" in e for e in errors)
+
+    def test_inline_conditional_defined_guard_does_not_allow_else_use(self):
+        wf = Workflow(
+            name="test",
+            phases=[Phase(id="build", type="implement", prompt="{{ 'yes' if X is defined else X }}")],
+        )
+        errors = validate_workflow(wf)
+        assert any("X" in e and "no value defined" in e for e in errors)
 
     def test_default_filter_guard_allows_branch_use(self):
         wf = Workflow(
