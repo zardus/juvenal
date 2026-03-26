@@ -148,6 +148,17 @@ def required_template_vars(text: str, vars: Mapping[str, object] | None = None) 
     def default_missing_truth_value(node: nodes.Filter) -> bool | None:
         if node.args:
             return truth_value(node.args[0], set())
+        for kwarg in node.kwargs:
+            if kwarg.key == "default_value":
+                return truth_value(kwarg.value, set())
+        return False
+
+    def default_boolean_truth_value(node: nodes.Filter, local_names: set[str]) -> bool | None:
+        if len(node.args) >= 2:
+            return truth_value(node.args[1], local_names)
+        for kwarg in node.kwargs:
+            if kwarg.key == "boolean":
+                return truth_value(kwarg.value, local_names)
         return False
 
     def default_guard_names(node: nodes.Filter, truthy: bool) -> set[str]:
@@ -166,16 +177,26 @@ def required_template_vars(text: str, vars: Mapping[str, object] | None = None) 
             return bool(known_vars[node.name])
 
         if isinstance(node, nodes.Filter) and node.name in {"default", "d"}:
+            fallback_value = default_missing_truth_value(node)
+            boolean_value = default_boolean_truth_value(node, local_names)
             base_value = truth_value(node.node, local_names)
-            if base_value is not None:
-                return base_value
+            if base_value is True:
+                return True
+            if base_value is False:
+                if boolean_value is True:
+                    return fallback_value
+                if boolean_value is False:
+                    return False
+                return False if fallback_value is False else None
             if (
                 isinstance(node.node, nodes.Name)
                 and node.node.ctx == "load"
                 and node.node.name not in local_names
                 and node.node.name not in known_vars
             ):
-                return default_missing_truth_value(node)
+                return fallback_value
+            if boolean_value is True and fallback_value is True:
+                return True
             return None
 
         if isinstance(node, nodes.Test) and isinstance(node.node, nodes.Name) and node.node.ctx == "load":

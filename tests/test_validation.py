@@ -629,6 +629,24 @@ class TestTemplateVarValidation:
         errors = validate_workflow(wf)
         assert not any("ENV" in e and "no value defined" in e for e in errors)
 
+    def test_default_filter_boolean_mode_executes_branch_for_falsey_defined_value(self):
+        wf = Workflow(
+            name="test",
+            phases=[Phase(id="build", type="implement", prompt="{% if X|default(true, true) %}{{ Y }}{% endif %}")],
+            vars={"X": ""},
+        )
+        errors = validate_workflow(wf)
+        assert any("Y" in e and "no value defined" in e for e in errors)
+
+    def test_default_filter_boolean_mode_executes_inline_conditional_for_falsey_defined_value(self):
+        wf = Workflow(
+            name="test",
+            phases=[Phase(id="build", type="implement", prompt="{{ Y if X|default(true, true) else 'ok' }}")],
+            vars={"X": ""},
+        )
+        errors = validate_workflow(wf)
+        assert any("Y" in e and "no value defined" in e for e in errors)
+
     def test_required_use_still_fails_when_same_var_is_optional_elsewhere(self):
         wf = Workflow(
             name="test",
