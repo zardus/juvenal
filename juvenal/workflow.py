@@ -661,7 +661,7 @@ class Phase:
     workflow_file: str | None = None  # path to static sub-workflow YAML (resolved at load time)
     workflow_dir: str | None = None  # path to static sub-workflow directory (resolved at load time)
 
-    def render_prompt(self, failure_context: str = "", vars: dict[str, str] | None = None) -> str:
+    def render_prompt(self, failure_context: str = "", vars: Mapping[str, object] | None = None) -> str:
         """Render the implementation prompt, injecting failure context on retry."""
         text = self.prompt
         if vars is not None:
@@ -674,7 +674,7 @@ class Phase:
             )
         return text
 
-    def render_check_prompt(self, vars: dict[str, str] | None = None) -> str:
+    def render_check_prompt(self, vars: Mapping[str, object] | None = None) -> str:
         """Render the checker prompt for check phases."""
         if self.prompt:
             text = self.prompt
@@ -734,7 +734,7 @@ class Workflow:
     backoff: float = 0.0  # base backoff delay in seconds between bounces (0 = no backoff)
     max_backoff: float = 60.0  # maximum backoff delay cap in seconds
     notify: list[str] = field(default_factory=list)  # webhook URLs for completion/failure notifications
-    vars: dict[str, str] = field(default_factory=dict)  # template variables for {{VAR}} substitution
+    vars: dict[str, object] = field(default_factory=dict)  # template variables for Jinja2 rendering
 
 
 def load_workflow(path: str | Path) -> Workflow:
@@ -796,7 +796,7 @@ def _load_yaml_with_includes(path: Path, seen: set[str]) -> Workflow:
     # Resolve includes first — insert included phases before this workflow's phases
     included_phases: list[Phase] = []
     included_parallel_groups: list[ParallelGroup] = []
-    included_vars: dict[str, str] = {}
+    included_vars: dict[str, object] = {}
     for include_path_str in data.get("include", []):
         include_path = path.parent / include_path_str
         if not include_path.exists():
@@ -1361,7 +1361,18 @@ def inject_implementer(workflow: Workflow, role: str) -> Workflow:
     )
 
 
-def expand_multi_vars(workflow: Workflow, multi_vars: dict[str, list[str]]) -> Workflow:
+def _multi_var_suffix_value(value: object) -> str:
+    """Format a multi-value variant for stable phase IDs."""
+    if value is True:
+        return "true"
+    if value is False:
+        return "false"
+    if value is None:
+        return "null"
+    return str(value)
+
+
+def expand_multi_vars(workflow: Workflow, multi_vars: dict[str, list[object]]) -> Workflow:
     """Expand phases that reference multi-value vars into parallel duplicates.
 
     For each phase whose prompt or run command references a multi-value var,
@@ -1425,7 +1436,7 @@ def expand_multi_vars(workflow: Workflow, multi_vars: dict[str, list[str]]) -> W
         lanes: list[list[str]] = []
         for combo in combinations:
             combo_vars = dict(combo)
-            suffix = "~".join(f"{k}={v}" for k, v in combo)
+            suffix = "~".join(f"{k}={_multi_var_suffix_value(v)}" for k, v in combo)
             group_old_ids = {p.id for p in group}
             lane_ids: list[str] = []
 

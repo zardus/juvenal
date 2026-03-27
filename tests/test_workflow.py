@@ -1330,6 +1330,15 @@ class TestExpandMultiVars:
         errors = validate_workflow(result)
         assert not any("has no prompt" in e for e in errors)
 
+    def test_boolean_multi_values_preserve_jinja_truthiness(self):
+        wf = Workflow(
+            name="test",
+            phases=[Phase(id="deploy", type="implement", prompt="{% if ENABLED %}ship it{% else %}skip it{% endif %}")],
+        )
+        result = expand_multi_vars(wf, {"ENABLED": [False, True]})
+        assert [p.id for p in result.phases] == ["deploy~ENABLED=false", "deploy~ENABLED=true"]
+        assert [p.prompt for p in result.phases] == ["skip it", "ship it"]
+
     def test_phases_in_existing_parallel_group_skipped(self):
         """Phases already in a parallel group are not expanded."""
         wf = Workflow(

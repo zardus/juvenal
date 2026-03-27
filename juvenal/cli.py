@@ -1,11 +1,16 @@
 """Juvenal CLI — orchestrate AI coding agents through verified phases."""
 
 import argparse
+import re
 import sys
+
+import yaml
 
 from juvenal import __version__
 
 STANDARD_CHECKERS = ["tester", "senior-tester", "senior-engineer", "architect", "pm"]
+_INT_LITERAL_RE = re.compile(r"[-+]?(?:0|[1-9][0-9]*)$")
+_FLOAT_LITERAL_RE = re.compile(r"[-+]?(?:(?:[0-9]+\.[0-9]*|\.[0-9]+)(?:[eE][-+]?[0-9]+)?|[0-9]+[eE][-+]?[0-9]+)$")
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -131,19 +136,46 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def _parse_defines(defines: list[str]) -> dict[str, list[str]]:
+def _parse_define_value(raw: str) -> object:
+    """Parse a CLI -D value into a native Jinja-friendly value."""
+    stripped = raw.strip()
+    lowered = stripped.lower()
+
+    if stripped == "":
+        return raw
+    if lowered == "true":
+        return True
+    if lowered == "false":
+        return False
+    if lowered in {"null", "none", "~"}:
+        return None
+    if stripped[0] in "[{\"'":
+        try:
+            return yaml.safe_load(stripped)
+        except yaml.YAMLError as exc:
+            print(f"Error: invalid -D value {raw!r}: {exc}")
+            sys.exit(1)
+
+    if _INT_LITERAL_RE.fullmatch(stripped):
+        return int(stripped)
+    if _FLOAT_LITERAL_RE.fullmatch(stripped):
+        return float(stripped)
+    return raw
+
+
+def _parse_defines(defines: list[str]) -> dict[str, list[object]]:
     """Parse -D VAR=VAL arguments, accumulating multiple values per key."""
-    result: dict[str, list[str]] = {}
+    result: dict[str, list[object]] = {}
     for d in defines:
         if "=" not in d:
             print(f"Error: invalid -D value {d!r}: must be VAR=VAL")
             sys.exit(1)
         key, val = d.split("=", 1)
-        result.setdefault(key, []).append(val)
+        result.setdefault(key, []).append(_parse_define_value(val))
     return result
 
 
-def _apply_defines(workflow, all_vars: dict[str, list[str]]):
+def _apply_defines(workflow, all_vars: dict[str, list[object]]):
     """Apply parsed -D vars: single-value go into workflow.vars, multi-value expand phases."""
     from juvenal.workflow import expand_multi_vars
 
