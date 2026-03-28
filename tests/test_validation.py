@@ -459,6 +459,17 @@ class TestTemplateVarValidation:
         assert any("template render failed" in e for e in errors)
         assert items == ["a", "b"]
 
+    def test_recursive_template_vars_report_validation_error(self):
+        x = []
+        x.append(x)
+        wf = Workflow(
+            name="test",
+            phases=[Phase(id="build", type="implement", prompt="{{ X }}")],
+            vars={"X": x},
+        )
+        errors = validate_workflow(wf)
+        assert any("template render failed" in e and "recursive data" in e for e in errors)
+
     def test_default_filter_allows_optional_missing_var(self):
         wf = Workflow(
             name="test",
@@ -990,6 +1001,26 @@ phases:
         assert result == 1
         captured = capsys.readouterr()
         assert "error" in captured.out
+
+    def test_validate_recursive_template_vars_clean_error(self, tmp_path, capsys):
+        yaml_content = """\
+name: test
+vars:
+  X: &x [*x]
+phases:
+  - id: build
+    prompt: "{{ X }}"
+"""
+        yaml_path = tmp_path / "recursive.yaml"
+        yaml_path.write_text(yaml_content)
+        parser = build_parser()
+        args = parser.parse_args(["validate", str(yaml_path)])
+        args.plain = True
+        result = cmd_validate(args)
+        assert result == 1
+        captured = capsys.readouterr()
+        assert "recursive data" in captured.out
+        assert "Traceback" not in captured.out
 
     def test_validate_missing_id_clean_error(self, tmp_path, capsys):
         """Missing phase ID prints a clean error, no stack trace."""

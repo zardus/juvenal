@@ -1743,6 +1743,9 @@ def validate_workflow(workflow: Workflow) -> list[str]:
         except TemplateSyntaxError as exc:
             errors.append(f"Phase {phase.id!r}: invalid template syntax on line {exc.lineno}: {exc.message}")
             continue
+        except TemplateRenderError as exc:
+            errors.append(f"Phase {phase.id!r}: template render failed: {exc}")
+            continue
 
         undefined = referenced_vars - defined_vars
         for var_name in sorted(undefined):
