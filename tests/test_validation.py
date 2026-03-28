@@ -482,6 +482,20 @@ class TestTemplateVarValidation:
         assert any("template render failed" in e for e in errors)
         assert not any("top secret" in e for e in errors)
 
+    def test_readonly_mapping_methods_are_allowed_during_validation(self):
+        wf = Workflow(
+            name="test",
+            phases=[
+                Phase(
+                    id="build",
+                    type="implement",
+                    prompt="{% for key, value in D.items() %}{{ key }}={{ value }}{% endfor %}",
+                )
+            ],
+            vars={"D": {"a": "b"}},
+        )
+        assert validate_workflow(wf) == []
+
     def test_default_filter_allows_optional_missing_var(self):
         wf = Workflow(
             name="test",

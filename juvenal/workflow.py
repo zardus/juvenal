@@ -87,6 +87,18 @@ class _SafeTemplateDict:
     def __contains__(self, key: object) -> bool:
         return key in self._data
 
+    def keys(self) -> _SafeTemplateList:
+        return _SafeTemplateList(tuple(self._data.keys()))
+
+    def values(self) -> _SafeTemplateList:
+        return _SafeTemplateList(tuple(self._data.values()))
+
+    def items(self) -> _SafeTemplateList:
+        return _SafeTemplateList(tuple((key, value) for key, value in self._data.items()))
+
+    def get(self, key, default=None):
+        return self._data.get(key, default)
+
     def __repr__(self) -> str:
         return repr(self._data)
 

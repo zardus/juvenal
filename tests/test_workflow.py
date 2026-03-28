@@ -1050,6 +1050,10 @@ class TestTemplateVars:
         with pytest.raises(TemplateRenderError):
             apply_vars("{% for key in D %}{{ key.read_text()[:5] }}{% endfor %}", {"D": {target: "x"}})
 
+    def test_apply_vars_allows_readonly_mapping_methods(self):
+        result = apply_vars("{% for key, value in D.items() %}{{ key }}={{ value }}{% endfor %}", {"D": {"a": "b"}})
+        assert result == "a=b"
+
     def test_apply_vars_no_placeholders(self):
         assert apply_vars("no vars here", {"NAME": "world"}) == "no vars here"
 
