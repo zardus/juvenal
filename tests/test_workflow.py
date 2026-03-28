@@ -1044,6 +1044,12 @@ class TestTemplateVars:
             apply_vars("{{ ITEMS.pop() }}", {"ITEMS": items})
         assert items == ["a", "b"]
 
+    def test_apply_vars_blocks_method_calls_on_mapping_keys(self, tmp_path):
+        target = tmp_path / "secret.txt"
+        target.write_text("top secret")
+        with pytest.raises(TemplateRenderError):
+            apply_vars("{% for key in D %}{{ key.read_text()[:5] }}{% endfor %}", {"D": {target: "x"}})
+
     def test_apply_vars_no_placeholders(self):
         assert apply_vars("no vars here", {"NAME": "world"}) == "no vars here"
 

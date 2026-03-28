@@ -470,6 +470,18 @@ class TestTemplateVarValidation:
         errors = validate_workflow(wf)
         assert any("template render failed" in e and "recursive data" in e for e in errors)
 
+    def test_mapping_keys_are_sanitized_during_validation(self, tmp_path):
+        target = tmp_path / "secret.txt"
+        target.write_text("top secret")
+        wf = Workflow(
+            name="test",
+            phases=[Phase(id="build", type="implement", prompt="{% for key in D %}{{ key.read_text() }}{% endfor %}")],
+            vars={"D": {target: "x"}},
+        )
+        errors = validate_workflow(wf)
+        assert any("template render failed" in e for e in errors)
+        assert not any("top secret" in e for e in errors)
+
     def test_default_filter_allows_optional_missing_var(self):
         wf = Workflow(
             name="test",

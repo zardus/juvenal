@@ -140,7 +140,9 @@ def _safe_template_value(value: object, seen: set[int] | None = None) -> object:
     if isinstance(value, Mapping):
         seen.add(obj_id)
         try:
-            return _SafeTemplateDict({key: _safe_template_value(item, seen) for key, item in value.items()})
+            return _SafeTemplateDict(
+                {_safe_template_value(key, seen): _safe_template_value(item, seen) for key, item in value.items()}
+            )
         finally:
             seen.remove(obj_id)
 
