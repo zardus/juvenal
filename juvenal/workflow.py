@@ -366,6 +366,32 @@ def required_template_vars(text: str, vars: Mapping[str, object] | None = None) 
             except Exception:
                 return unknown
 
+        if isinstance(node, nodes.Call):
+            callee = resolved_value(node.node, local_names, local_values)
+            if callee is unknown or not callable(callee) or not _JINJA_ENV.is_safe_callable(callee):
+                return unknown
+            if node.dyn_args is not None or node.dyn_kwargs is not None:
+                return unknown
+
+            args: list[object] = []
+            for arg in node.args:
+                value = resolved_value(arg, local_names, local_values)
+                if value is unknown:
+                    return unknown
+                args.append(value)
+
+            kwargs: dict[str, object] = {}
+            for kwarg in node.kwargs:
+                value = resolved_value(kwarg.value, local_names, local_values)
+                if value is unknown:
+                    return unknown
+                kwargs[kwarg.key] = value
+
+            try:
+                return callee(*args, **kwargs)
+            except Exception:
+                return unknown
+
         if isinstance(node, nodes.Filter) and node.name in {"default", "d"}:
             base_value = resolved_value(node.node, local_names, local_values)
             fallback_value = resolved_value(node.args[0], local_names, local_values) if node.args else ""
@@ -419,7 +445,7 @@ def required_template_vars(text: str, vars: Mapping[str, object] | None = None) 
             except Exception:
                 return None
 
-        if isinstance(node, (nodes.Getattr, nodes.Getitem)):
+        if isinstance(node, (nodes.Getattr, nodes.Getitem, nodes.Call)):
             value = resolved_value(node, local_names, local_values)
             if value is unknown:
                 return None

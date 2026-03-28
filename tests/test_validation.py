@@ -784,6 +784,36 @@ class TestTemplateVarValidation:
         errors = validate_workflow(wf)
         assert any("FALLBACK" in e and "no value defined" in e for e in errors)
 
+    def test_for_loop_else_branch_is_skipped_for_non_empty_mapping_items_call(self):
+        wf = Workflow(
+            name="test",
+            phases=[
+                Phase(
+                    id="build",
+                    type="implement",
+                    prompt="{% for key, value in D.items() %}{{ key }}={{ value }}{% else %}{{ FALLBACK }}{% endfor %}",
+                )
+            ],
+            vars={"D": {"a": 1}},
+        )
+        errors = validate_workflow(wf)
+        assert not any("FALLBACK" in e and "no value defined" in e for e in errors)
+
+    def test_for_loop_else_branch_is_required_for_empty_mapping_items_call(self):
+        wf = Workflow(
+            name="test",
+            phases=[
+                Phase(
+                    id="build",
+                    type="implement",
+                    prompt="{% for key, value in D.items() %}{{ key }}={{ value }}{% else %}{{ FALLBACK }}{% endfor %}",
+                )
+            ],
+            vars={"D": {}},
+        )
+        errors = validate_workflow(wf)
+        assert any("FALLBACK" in e and "no value defined" in e for e in errors)
+
     @pytest.mark.parametrize("iterable", ["['a']", "('a',)", "{'a': 1}"])
     def test_for_loop_else_branch_is_skipped_for_non_empty_literal_collection(self, iterable):
         wf = Workflow(
