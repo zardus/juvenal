@@ -44,6 +44,121 @@ class TemplateRenderError(ValueError):
     """Raised when a Jinja2 template fails during rendering."""
 
 
+class _SafeTemplateList:
+    """Immutable sequence wrapper exposed to Jinja templates."""
+
+    __slots__ = ("_items",)
+
+    def __init__(self, items: tuple[object, ...]):
+        self._items = items
+
+    def __getitem__(self, index):
+        return self._items[index]
+
+    def __iter__(self):
+        return iter(self._items)
+
+    def __len__(self) -> int:
+        return len(self._items)
+
+    def __repr__(self) -> str:
+        return repr(list(self._items))
+
+    __str__ = __repr__
+
+
+class _SafeTemplateDict:
+    """Read-only mapping wrapper exposed to Jinja templates."""
+
+    __slots__ = ("_data",)
+
+    def __init__(self, data: dict[object, object]):
+        self._data = data
+
+    def __getitem__(self, key):
+        return self._data[key]
+
+    def __iter__(self):
+        return iter(self._data)
+
+    def __len__(self) -> int:
+        return len(self._data)
+
+    def __contains__(self, key: object) -> bool:
+        return key in self._data
+
+    def __repr__(self) -> str:
+        return repr(self._data)
+
+    __str__ = __repr__
+
+
+class _UnsafeTemplateValue:
+    """Placeholder for unsupported template values that fails on use."""
+
+    __slots__ = ("_type_name",)
+
+    def __init__(self, value: object):
+        self._type_name = type(value).__name__
+
+    def _raise(self) -> None:
+        raise TypeError(f"unsupported template variable type: {self._type_name}")
+
+    def __bool__(self) -> bool:
+        self._raise()
+
+    def __iter__(self):
+        self._raise()
+
+    def __len__(self) -> int:
+        self._raise()
+
+    def __getitem__(self, key):
+        self._raise()
+
+    def __str__(self) -> str:
+        self._raise()
+
+    def __repr__(self) -> str:
+        return f"<unsupported template variable type: {self._type_name}>"
+
+
+def _safe_template_value(value: object, seen: set[int] | None = None) -> object:
+    """Convert template values to immutable plain-data wrappers."""
+    if value is None or isinstance(value, (bool, int, float, str)):
+        return value
+    if isinstance(value, (_SafeTemplateList, _SafeTemplateDict, _UnsafeTemplateValue)):
+        return value
+
+    if seen is None:
+        seen = set()
+
+    obj_id = id(value)
+    if obj_id in seen:
+        raise TemplateRenderError("template variables cannot contain recursive data")
+
+    if isinstance(value, Mapping):
+        seen.add(obj_id)
+        try:
+            return _SafeTemplateDict({key: _safe_template_value(item, seen) for key, item in value.items()})
+        finally:
+            seen.remove(obj_id)
+
+    if isinstance(value, (list, tuple)):
+        seen.add(obj_id)
+        try:
+            return _SafeTemplateList(tuple(_safe_template_value(item, seen) for item in value))
+        finally:
+            seen.remove(obj_id)
+
+    return _UnsafeTemplateValue(value)
+
+
+def _safe_template_context(vars: Mapping[str, object]) -> dict[str, object]:
+    """Build a render context that cannot mutate or expose unsafe objects."""
+    return {key: _safe_template_value(value) for key, value in vars.items()}
+
+
 def _parse_template(text: str):
     """Parse a Jinja2 template string into an AST."""
     return _JINJA_ENV.parse(text)
@@ -66,7 +181,7 @@ def required_template_vars(text: str, vars: Mapping[str, object] | None = None) 
     if not text:
         return set()
 
-    known_vars = dict(vars or {})
+    known_vars = _safe_template_context(vars or {})
     ast = _parse_template(text)
     undeclared = meta.find_undeclared_variables(ast)
     required: set[str] = set()
@@ -270,18 +385,34 @@ def required_template_vars(text: str, vars: Mapping[str, object] | None = None) 
 
         if isinstance(node, nodes.Name) and node.ctx == "load":
             if node.name in local_values:
-                return bool(local_values[node.name])
+                try:
+                    return bool(local_values[node.name])
+                except Exception:
+                    return None
             if node.name in local_names or node.name not in known_vars:
                 return None
-            return bool(known_vars[node.name])
+            try:
+                return bool(known_vars[node.name])
+            except Exception:
+                return None
 
         if isinstance(node, (nodes.List, nodes.Tuple, nodes.Dict)):
             value = resolved_value(node, local_names, local_values)
-            return None if value is unknown else bool(value)
+            if value is unknown:
+                return None
+            try:
+                return bool(value)
+            except Exception:
+                return None
 
         if isinstance(node, (nodes.Getattr, nodes.Getitem)):
             value = resolved_value(node, local_names, local_values)
-            return None if value is unknown else bool(value)
+            if value is unknown:
+                return None
+            try:
+                return bool(value)
+            except Exception:
+                return None
 
         if isinstance(node, nodes.Filter) and node.name in {"default", "d"}:
             fallback_value = default_missing_truth_value(node)
@@ -576,7 +707,7 @@ def apply_vars(text: str, vars: Mapping[str, object] | None) -> str:
     if vars is None:
         return text
     try:
-        return _JINJA_ENV.from_string(text).render(dict(vars))
+        return _JINJA_ENV.from_string(text).render(_safe_template_context(vars))
     except Exception as exc:
         raise TemplateRenderError(str(exc)) from exc
 
@@ -603,7 +734,7 @@ def _jinja_literal(value: object) -> str:
     if isinstance(value, dict):
         items = ", ".join(f"{_jinja_literal(k)}: {_jinja_literal(v)}" for k, v in value.items())
         return "{" + items + "}"
-    return repr(value)
+    raise TemplateRenderError(f"unsupported template variable type: {type(value).__name__}")
 
 
 def _substitute_known_template_vars(text: str, vars: Mapping[str, object] | None) -> str:

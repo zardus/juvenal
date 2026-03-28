@@ -448,6 +448,17 @@ class TestTemplateVarValidation:
         assert any("template render failed" in e for e in errors)
         assert not any("checker-pwned" in e for e in errors)
 
+    def test_validation_does_not_mutate_template_vars(self):
+        items = ["a", "b"]
+        wf = Workflow(
+            name="test",
+            phases=[Phase(id="build", type="implement", prompt="{{ ITEMS.pop() }}")],
+            vars={"ITEMS": items},
+        )
+        errors = validate_workflow(wf)
+        assert any("template render failed" in e for e in errors)
+        assert items == ["a", "b"]
+
     def test_default_filter_allows_optional_missing_var(self):
         wf = Workflow(
             name="test",

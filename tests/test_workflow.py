@@ -1032,6 +1032,18 @@ class TestTemplateVars:
         with pytest.raises(TemplateRenderError):
             apply_vars(payload, {})
 
+    def test_apply_vars_blocks_method_calls_on_supplied_objects(self, tmp_path):
+        target = tmp_path / "secret.txt"
+        target.write_text("top secret")
+        with pytest.raises(TemplateRenderError):
+            apply_vars("{{ P.read_text() }}", {"P": target})
+
+    def test_apply_vars_does_not_mutate_supplied_lists(self):
+        items = ["a", "b"]
+        with pytest.raises(TemplateRenderError):
+            apply_vars("{{ ITEMS.pop() }}", {"ITEMS": items})
+        assert items == ["a", "b"]
+
     def test_apply_vars_no_placeholders(self):
         assert apply_vars("no vars here", {"NAME": "world"}) == "no vars here"
 
