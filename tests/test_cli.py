@@ -150,6 +150,47 @@ class TestArgumentParsing:
         args = parser.parse_args(["do", "build a thing"])
         assert args.checker == []
 
+    def test_run_standard_checkers(self):
+        from juvenal.cli import STANDARD_CHECKERS, _expand_standard_checkers
+
+        parser = build_parser()
+        args = parser.parse_args(["run", "workflow.yaml", "--standard-checkers"])
+        assert args.standard_checkers is True
+        _expand_standard_checkers(args)
+        assert args.checker == list(STANDARD_CHECKERS)
+
+    def test_run_standard_checkers_with_extra(self):
+        from juvenal.cli import STANDARD_CHECKERS, _expand_standard_checkers
+
+        parser = build_parser()
+        args = parser.parse_args(["run", "workflow.yaml", "--standard-checkers", "--checker", "run:pytest -x"])
+        _expand_standard_checkers(args)
+        assert args.checker == list(STANDARD_CHECKERS) + ["run:pytest -x"]
+
+    def test_standard_checkers_not_set(self):
+        from juvenal.cli import _expand_standard_checkers
+
+        parser = build_parser()
+        args = parser.parse_args(["run", "workflow.yaml", "--checker", "tester"])
+        _expand_standard_checkers(args)
+        assert args.checker == ["tester"]
+
+    def test_plan_standard_checkers(self):
+        from juvenal.cli import STANDARD_CHECKERS, _expand_standard_checkers
+
+        parser = build_parser()
+        args = parser.parse_args(["plan", "build an API", "--standard-checkers"])
+        _expand_standard_checkers(args)
+        assert args.checker == list(STANDARD_CHECKERS)
+
+    def test_do_standard_checkers(self):
+        from juvenal.cli import STANDARD_CHECKERS, _expand_standard_checkers
+
+        parser = build_parser()
+        args = parser.parse_args(["do", "build a thing", "--standard-checkers"])
+        _expand_standard_checkers(args)
+        assert args.checker == list(STANDARD_CHECKERS)
+
     def test_run_implementer(self):
         parser = build_parser()
         args = parser.parse_args(["run", "workflow.yaml", "--implementer", "software-engineer"])

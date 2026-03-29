@@ -47,6 +47,143 @@ class TemplateRenderError(ValueError):
     """Raised when a Jinja2 template fails during rendering."""
 
 
+class _SafeTemplateList:
+    """Immutable sequence wrapper exposed to Jinja templates."""
+
+    __slots__ = ("_items",)
+
+    def __init__(self, items: tuple[object, ...]):
+        self._items = items
+
+    def __getitem__(self, index):
+        return self._items[index]
+
+    def __iter__(self):
+        return iter(self._items)
+
+    def __len__(self) -> int:
+        return len(self._items)
+
+    def __repr__(self) -> str:
+        return repr(list(self._items))
+
+    __str__ = __repr__
+
+
+class _SafeTemplateDict:
+    """Read-only mapping wrapper exposed to Jinja templates."""
+
+    __slots__ = ("_data",)
+
+    def __init__(self, data: dict[object, object]):
+        self._data = data
+
+    def __getitem__(self, key):
+        return self._data[key]
+
+    def __iter__(self):
+        return iter(self._data)
+
+    def __len__(self) -> int:
+        return len(self._data)
+
+    def __contains__(self, key: object) -> bool:
+        return key in self._data
+
+    def keys(self) -> _SafeTemplateList:
+        return _SafeTemplateList(tuple(self._data.keys()))
+
+    def values(self) -> _SafeTemplateList:
+        return _SafeTemplateList(tuple(self._data.values()))
+
+    def items(self) -> _SafeTemplateList:
+        return _SafeTemplateList(tuple((key, value) for key, value in self._data.items()))
+
+    def get(self, key, default=None):
+        return self._data.get(key, default)
+
+    def __repr__(self) -> str:
+        return repr(self._data)
+
+    __str__ = __repr__
+
+
+class _UnsafeTemplateValue:
+    """Placeholder for unsupported template values that fails on use."""
+
+    __slots__ = ("_type_name",)
+
+    def __init__(self, value: object):
+        self._type_name = type(value).__name__
+
+    def _raise(self) -> None:
+        raise TypeError(f"unsupported template variable type: {self._type_name}")
+
+    def __getattr__(self, name: str):
+        if name.startswith("__"):
+            raise AttributeError(name)
+        self._raise()
+
+    def __bool__(self) -> bool:
+        self._raise()
+
+    def __iter__(self):
+        self._raise()
+
+    def __len__(self) -> int:
+        self._raise()
+
+    def __getitem__(self, key):
+        self._raise()
+
+    def __call__(self, *args, **kwargs):
+        self._raise()
+
+    def __str__(self) -> str:
+        self._raise()
+
+    def __repr__(self) -> str:
+        return f"<unsupported template variable type: {self._type_name}>"
+
+
+def _safe_template_value(value: object, seen: set[int] | None = None) -> object:
+    """Convert template values to immutable plain-data wrappers."""
+    if value is None or isinstance(value, (bool, int, float, str)):
+        return value
+    if isinstance(value, (_SafeTemplateList, _SafeTemplateDict, _UnsafeTemplateValue)):
+        return value
+
+    if seen is None:
+        seen = set()
+
+    obj_id = id(value)
+    if obj_id in seen:
+        raise TemplateRenderError("template variables cannot contain recursive data")
+
+    if isinstance(value, Mapping):
+        seen.add(obj_id)
+        try:
+            return _SafeTemplateDict(
+                {_safe_template_value(key, seen): _safe_template_value(item, seen) for key, item in value.items()}
+            )
+        finally:
+            seen.remove(obj_id)
+
+    if isinstance(value, (list, tuple)):
+        seen.add(obj_id)
+        try:
+            return _SafeTemplateList(tuple(_safe_template_value(item, seen) for item in value))
+        finally:
+            seen.remove(obj_id)
+
+    return _UnsafeTemplateValue(value)
+
+
+def _safe_template_context(vars: Mapping[str, object]) -> dict[str, object]:
+    """Build a render context that cannot mutate or expose unsafe objects."""
+    return {key: _safe_template_value(value) for key, value in vars.items()}
+
+
 def _parse_template(text: str):
     """Parse a Jinja2 template string into an AST."""
     return _JINJA_ENV.parse(text)
@@ -67,7 +204,7 @@ def apply_vars(text: str, vars: Mapping[str, object] | None) -> str:
     if vars is None:
         return text
     try:
-        return _JINJA_ENV.from_string(text).render(dict(vars))
+        return _JINJA_ENV.from_string(text).render(_safe_template_context(vars))
     except Exception as exc:
         raise TemplateRenderError(str(exc)) from exc
 
