@@ -8,7 +8,6 @@ import yaml
 
 from juvenal import __version__
 
-STANDARD_CHECKERS = ["tester", "senior-tester", "senior-engineer", "architect", "pm"]
 _INT_LITERAL_RE = re.compile(r"[-+]?(?:0|[1-9][0-9]*)$")
 _FLOAT_LITERAL_RE = re.compile(r"[-+]?(?:(?:[0-9]+\.[0-9]*|\.[0-9]+)(?:[eE][-+]?[0-9]+)?|[0-9]+[eE][-+]?[0-9]+)$")
 
@@ -39,11 +38,6 @@ def build_parser() -> argparse.ArgumentParser:
     run_p.add_argument("--notify", action="append", default=[], help="Webhook URL for completion/failure notifications")
     run_p.add_argument("--checker", action="append", default=[], help="Inject checker on every implement phase")
     run_p.add_argument(
-        "--standard-checkers",
-        action="store_true",
-        help="Inject standard checkers: tester, senior-tester, senior-engineer, architect, pm",
-    )
-    run_p.add_argument(
         "--implementer",
         action="append",
         default=[],
@@ -70,11 +64,6 @@ def build_parser() -> argparse.ArgumentParser:
     plan_p.add_argument("-o", "--output", default="workflow.yaml", help="Output file (default: workflow.yaml)")
     plan_p.add_argument("--backend", choices=["claude", "codex"], default="codex", help="AI backend to use")
     plan_p.add_argument("--checker", action="append", default=[], help="Inject checker on every implement phase")
-    plan_p.add_argument(
-        "--standard-checkers",
-        action="store_true",
-        help="Inject standard checkers: tester, senior-tester, senior-engineer, architect, pm",
-    )
     plan_p.add_argument("--implementer", help="Prepend implementer role prompt to every implement phase")
     plan_p.add_argument(
         "-i", "--interactive", action="store_true", help="Interactive mode: chat with the agent during plan refinement"
@@ -87,11 +76,6 @@ def build_parser() -> argparse.ArgumentParser:
     do_p.add_argument("--backend", choices=["claude", "codex"], default="codex", help="AI backend to use")
     do_p.add_argument("--max-bounces", type=int, default=999, help="Max bounces across all phases (default: 999)")
     do_p.add_argument("--checker", action="append", default=[], help="Inject checker on every implement phase")
-    do_p.add_argument(
-        "--standard-checkers",
-        action="store_true",
-        help="Inject standard checkers: tester, senior-tester, senior-engineer, architect, pm",
-    )
     do_p.add_argument("--implementer", help="Prepend implementer role prompt to every implement phase")
     do_p.add_argument(
         "-i", "--interactive", action="store_true", help="Interactive mode: chat with the agent during plan refinement"
@@ -129,7 +113,6 @@ def build_parser() -> argparse.ArgumentParser:
     validate_p.add_argument("--backoff", type=float, default=None)
     validate_p.add_argument("--notify", action="append", default=[])
     validate_p.add_argument("--checker", action="append", default=[])
-    validate_p.add_argument("--standard-checkers", action="store_true")
     validate_p.add_argument("--implementer")
     validate_p.add_argument("-D", action="append", default=[], metavar="VAR=VAL", dest="defines")
 
@@ -209,12 +192,6 @@ def _parse_implementer(spec: str) -> tuple[str, str | None]:
     return spec, None
 
 
-def _expand_standard_checkers(args: argparse.Namespace) -> None:
-    """If --standard-checkers is set, prepend the standard checker roles to args.checker."""
-    if getattr(args, "standard_checkers", False):
-        args.checker = list(STANDARD_CHECKERS) + args.checker
-
-
 def cmd_run(args: argparse.Namespace) -> int:
     from juvenal.engine import Engine
     from juvenal.workflow import (
@@ -271,7 +248,6 @@ def cmd_run(args: argparse.Namespace) -> int:
     except TemplateRenderError as e:
         print(f"Error: {e}")
         return 1
-    _expand_standard_checkers(args)
     if args.checker:
         workflow = inject_checkers(workflow, args.checker)
     errors = validate_workflow(workflow)
@@ -314,7 +290,6 @@ def cmd_plan(args: argparse.Namespace) -> int:
     )
     if args.implementer:
         _inject_implementer_into_yaml(args.output, args.implementer)
-    _expand_standard_checkers(args)
     if args.checker:
         _inject_checkers_into_yaml(args.output, args.checker)
     return 0
@@ -377,7 +352,6 @@ def cmd_do(args: argparse.Namespace) -> int:
         return 1
     if args.implementer:
         workflow = inject_implementer(workflow, args.implementer)
-    _expand_standard_checkers(args)
     if args.checker:
         workflow = inject_checkers(workflow, args.checker)
     if args.backend:
@@ -424,7 +398,6 @@ def cmd_validate(args: argparse.Namespace) -> int:
         return 1
     if args.implementer:
         workflow = inject_implementer(workflow, args.implementer)
-    _expand_standard_checkers(args)
     if args.checker:
         workflow = inject_checkers(workflow, args.checker)
     if args.backend:
