@@ -3,17 +3,14 @@
 from __future__ import annotations
 
 import itertools
-import re
 import shutil
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 
 import yaml
-from jinja2 import TemplateSyntaxError, Undefined, meta
+from jinja2 import TemplateSyntaxError, Undefined, meta, nodes
 from jinja2.sandbox import SandboxedEnvironment
-
-_UNRESOLVED_TEMPLATE_VAR_RE = re.compile(r"\{\{\s*([A-Za-z_][A-Za-z0-9_]*)\b")
 
 
 class PreservePlaceholderUndefined(Undefined):
@@ -196,6 +193,560 @@ def template_vars(text: str) -> set[str]:
     return meta.find_undeclared_variables(_parse_template(text))
 
 
+def required_template_vars(text: str, vars: Mapping[str, object] | None = None) -> set[str]:
+    """Return variables that must be defined for a template to render safely.
+
+    Variables used only through standard optional patterns like
+    ``|default(...)`` or ``is defined`` / ``is undefined`` are excluded.
+    """
+
+    if not text:
+        return set()
+
+    known_vars = _safe_template_context(vars or {})
+    ast = _parse_template(text)
+    undeclared = meta.find_undeclared_variables(ast)
+    required: set[str] = set()
+    unknown = object()
+
+    def _collect_load_names(node: nodes.Node) -> set[str]:
+        names: set[str] = set()
+
+        def collect(child: nodes.Node) -> None:
+            if isinstance(child, nodes.Name) and child.ctx == "load":
+                names.add(child.name)
+            for grandchild in child.iter_child_nodes():
+                collect(grandchild)
+
+        collect(node)
+        return names
+
+    def _collect_store_names(node: nodes.Node) -> set[str]:
+        names: set[str] = set()
+
+        def collect(child: nodes.Node) -> None:
+            if isinstance(child, nodes.Name) and child.ctx == "store":
+                names.add(child.name)
+            for grandchild in child.iter_child_nodes():
+                collect(grandchild)
+
+        collect(node)
+        return names
+
+    def short_circuit_guard_names(node: nodes.Node, truthy: bool) -> set[str]:
+        if isinstance(node, nodes.Filter) and node.name in {"default", "d"}:
+            return default_guard_names(node, truthy)
+        if isinstance(node, nodes.Test):
+            target_names = _collect_load_names(node.node)
+            if node.name in {"defined", "undefined"}:
+                return target_names
+        if isinstance(node, nodes.Not):
+            if isinstance(node.node, nodes.Test) and node.node.name in {"defined", "undefined"}:
+                return _collect_load_names(node.node.node)
+            return short_circuit_guard_names(node.node, not truthy)
+        return set()
+
+    def guard_names(node: nodes.Node, truthy: bool) -> set[str]:
+        if isinstance(node, nodes.Filter) and node.name in {"default", "d"}:
+            return default_guard_names(node, truthy)
+        if isinstance(node, nodes.Test):
+            target_names = _collect_load_names(node.node)
+            if node.name == "defined" and truthy:
+                return target_names
+            if node.name == "undefined":
+                return target_names
+        if isinstance(node, nodes.Not):
+            if isinstance(node.node, nodes.Test) and node.node.name in {"defined", "undefined"}:
+                if node.node.name == "defined":
+                    return _collect_load_names(node.node.node)
+                return _collect_load_names(node.node.node) if truthy else set()
+            return guard_names(node.node, not truthy)
+        if isinstance(node, nodes.And):
+            if truthy:
+                return guard_names(node.left, True) | guard_names(node.right, True)
+            return set()
+        if isinstance(node, nodes.Or):
+            if truthy:
+                left_truthy = guard_names(node.left, True)
+                right_truthy = guard_names(node.right, True)
+                right_names = _collect_load_names(node.right)
+                if right_names and right_names <= short_circuit_guard_names(node.left, False):
+                    right_truthy |= right_names
+                return left_truthy & right_truthy
+            return set()
+        return set()
+
+    def visit_nodes(
+        child_nodes: list[nodes.Node], optional: bool, guarded: set[str], local_names: set[str]
+    ) -> set[str]:
+        current_locals = set(local_names)
+        for child in child_nodes:
+            current_locals = visit(child, optional=optional, guarded=guarded, local_names=current_locals)
+        return current_locals
+
+    def default_missing_truth_value(node: nodes.Filter) -> bool | None:
+        if node.args:
+            return truth_value(node.args[0], set())
+        for kwarg in node.kwargs:
+            if kwarg.key == "default_value":
+                return truth_value(kwarg.value, set())
+        return False
+
+    def default_boolean_truth_value(
+        node: nodes.Filter,
+        local_names: set[str],
+        local_values: Mapping[str, object] | None = None,
+    ) -> bool | None:
+        if len(node.args) >= 2:
+            return truth_value(node.args[1], local_names, local_values)
+        for kwarg in node.kwargs:
+            if kwarg.key == "boolean":
+                return truth_value(kwarg.value, local_names, local_values)
+        return False
+
+    def default_guard_names(node: nodes.Filter, truthy: bool) -> set[str]:
+        missing_truth = default_missing_truth_value(node)
+        if missing_truth is None or missing_truth is truthy:
+            return set()
+        return _collect_load_names(node.node)
+
+    def resolved_value(
+        node: nodes.Node,
+        local_names: set[str],
+        local_values: Mapping[str, object] | None = None,
+    ) -> object:
+        local_values = local_values or {}
+
+        if isinstance(node, nodes.Const):
+            return node.value
+
+        if isinstance(node, nodes.Name) and node.ctx == "load":
+            if node.name in local_values:
+                return local_values[node.name]
+            if node.name in local_names or node.name not in known_vars:
+                return unknown
+            return known_vars[node.name]
+
+        if isinstance(node, nodes.List):
+            items: list[object] = []
+            for item in node.items:
+                value = resolved_value(item, local_names, local_values)
+                if value is unknown:
+                    return unknown
+                items.append(value)
+            return items
+
+        if isinstance(node, nodes.Tuple):
+            items: list[object] = []
+            for item in node.items:
+                value = resolved_value(item, local_names, local_values)
+                if value is unknown:
+                    return unknown
+                items.append(value)
+            return tuple(items)
+
+        if isinstance(node, nodes.Dict):
+            items: dict[object, object] = {}
+            for pair in node.items:
+                key_value = resolved_value(pair.key, local_names, local_values)
+                value_value = resolved_value(pair.value, local_names, local_values)
+                if key_value is unknown or value_value is unknown:
+                    return unknown
+                items[key_value] = value_value
+            return items
+
+        if isinstance(node, nodes.Getattr):
+            base_value = resolved_value(node.node, local_names, local_values)
+            if base_value is unknown:
+                return unknown
+            try:
+                return _JINJA_ENV.getattr(base_value, node.attr)
+            except Exception:
+                return unknown
+
+        if isinstance(node, nodes.Getitem):
+            base_value = resolved_value(node.node, local_names, local_values)
+            arg_value = resolved_value(node.arg, local_names, local_values)
+            if base_value is unknown or arg_value is unknown:
+                return unknown
+            try:
+                return _JINJA_ENV.getitem(base_value, arg_value)
+            except Exception:
+                return unknown
+
+        if isinstance(node, nodes.Call):
+            callee = resolved_value(node.node, local_names, local_values)
+            if callee is unknown or not callable(callee) or not _JINJA_ENV.is_safe_callable(callee):
+                return unknown
+            if node.dyn_args is not None or node.dyn_kwargs is not None:
+                return unknown
+
+            args: list[object] = []
+            for arg in node.args:
+                value = resolved_value(arg, local_names, local_values)
+                if value is unknown:
+                    return unknown
+                args.append(value)
+
+            kwargs: dict[str, object] = {}
+            for kwarg in node.kwargs:
+                value = resolved_value(kwarg.value, local_names, local_values)
+                if value is unknown:
+                    return unknown
+                kwargs[kwarg.key] = value
+
+            try:
+                return callee(*args, **kwargs)
+            except Exception:
+                return unknown
+
+        if isinstance(node, nodes.Filter) and node.name in {"default", "d"}:
+            base_value = resolved_value(node.node, local_names, local_values)
+            fallback_value = resolved_value(node.args[0], local_names, local_values) if node.args else ""
+            boolean_value = default_boolean_truth_value(node, local_names, local_values)
+            if base_value is not unknown:
+                if base_value or boolean_value is False:
+                    return base_value
+                if boolean_value is True and fallback_value is not unknown:
+                    return fallback_value
+                return unknown
+            if (
+                isinstance(node.node, nodes.Name)
+                and node.node.ctx == "load"
+                and node.node.name not in local_names
+                and node.node.name not in known_vars
+            ):
+                return fallback_value
+            return unknown
+
+        return unknown
+
+    def truth_value(
+        node: nodes.Node,
+        local_names: set[str],
+        local_values: Mapping[str, object] | None = None,
+    ) -> bool | None:
+        local_values = local_values or {}
+
+        if isinstance(node, nodes.Const):
+            return bool(node.value)
+
+        if isinstance(node, nodes.Name) and node.ctx == "load":
+            if node.name in local_values:
+                try:
+                    return bool(local_values[node.name])
+                except Exception:
+                    return None
+            if node.name in local_names or node.name not in known_vars:
+                return None
+            try:
+                return bool(known_vars[node.name])
+            except Exception:
+                return None
+
+        if isinstance(node, (nodes.List, nodes.Tuple, nodes.Dict)):
+            value = resolved_value(node, local_names, local_values)
+            if value is unknown:
+                return None
+            try:
+                return bool(value)
+            except Exception:
+                return None
+
+        if isinstance(node, (nodes.Getattr, nodes.Getitem, nodes.Call)):
+            value = resolved_value(node, local_names, local_values)
+            if value is unknown:
+                return None
+            try:
+                return bool(value)
+            except Exception:
+                return None
+
+        if isinstance(node, nodes.Filter) and node.name in {"default", "d"}:
+            fallback_value = default_missing_truth_value(node)
+            boolean_value = default_boolean_truth_value(node, local_names, local_values)
+            base_value = truth_value(node.node, local_names, local_values)
+            if base_value is True:
+                return True
+            if base_value is False:
+                if boolean_value is True:
+                    return fallback_value
+                if boolean_value is False:
+                    return False
+                return False if fallback_value is False else None
+            if (
+                isinstance(node.node, nodes.Name)
+                and node.node.ctx == "load"
+                and node.node.name not in local_names
+                and node.node.name not in known_vars
+            ):
+                return fallback_value
+            if boolean_value is True and fallback_value is True:
+                return True
+            return None
+
+        if isinstance(node, nodes.Test) and isinstance(node.node, nodes.Name) and node.node.ctx == "load":
+            if node.node.name in local_names:
+                return None
+            if node.name == "defined":
+                return node.node.name in known_vars
+            if node.name == "undefined":
+                return node.node.name not in known_vars
+            return None
+
+        if isinstance(node, nodes.Not):
+            value = truth_value(node.node, local_names, local_values)
+            return None if value is None else not value
+
+        if isinstance(node, nodes.And):
+            left_value = truth_value(node.left, local_names, local_values)
+            if left_value is False:
+                return False
+            right_value = truth_value(node.right, local_names, local_values)
+            if left_value is True:
+                return right_value
+            if right_value is False:
+                return False
+            return None
+
+        if isinstance(node, nodes.Or):
+            left_value = truth_value(node.left, local_names, local_values)
+            if left_value is True:
+                return True
+            right_value = truth_value(node.right, local_names, local_values)
+            if left_value is False:
+                return right_value
+            if right_value is True:
+                return True
+            return None
+
+        if isinstance(node, nodes.CondExpr):
+            test_value = truth_value(node.test, local_names, local_values)
+            if test_value is True:
+                return truth_value(node.expr1, local_names, local_values)
+            if test_value is False and node.expr2 is not None:
+                return truth_value(node.expr2, local_names, local_values)
+            return None
+
+        if isinstance(node, nodes.Compare):
+            left_value = resolved_value(node.expr, local_names, local_values)
+            if left_value is unknown:
+                return None
+
+            current = left_value
+            for op in node.ops:
+                right_value = resolved_value(op.expr, local_names, local_values)
+                if right_value is unknown:
+                    return None
+
+                try:
+                    if op.op == "eq":
+                        matches = current == right_value
+                    elif op.op == "ne":
+                        matches = current != right_value
+                    elif op.op == "gt":
+                        matches = current > right_value
+                    elif op.op == "gteq":
+                        matches = current >= right_value
+                    elif op.op == "lt":
+                        matches = current < right_value
+                    elif op.op == "lteq":
+                        matches = current <= right_value
+                    elif op.op == "in":
+                        matches = current in right_value
+                    elif op.op == "notin":
+                        matches = current not in right_value
+                    else:
+                        return None
+                except Exception:
+                    return None
+
+                if not matches:
+                    return False
+                current = right_value
+
+            return True
+
+        return None
+
+    def bind_loop_target_values(target: nodes.Node, value: object) -> dict[str, object] | None:
+        if isinstance(target, nodes.Name) and target.ctx == "store":
+            return {target.name: value}
+
+        if isinstance(target, (nodes.Tuple, nodes.List)):
+            if not isinstance(value, (list, tuple)) or len(value) != len(target.items):
+                return None
+            bound: dict[str, object] = {}
+            for child_target, child_value in zip(target.items, value):
+                child_bound = bind_loop_target_values(child_target, child_value)
+                if child_bound is None:
+                    return None
+                bound.update(child_bound)
+            return bound
+
+        return None
+
+    def filtered_loop_outcome(node: nodes.For, local_names: set[str], loop_locals: set[str]) -> bool | None:
+        iter_value = resolved_value(node.iter, local_names)
+        if iter_value is unknown:
+            return None
+
+        try:
+            items = list(iter_value)
+        except TypeError:
+            return None
+
+        if not items:
+            return False
+        if node.test is None:
+            return True
+
+        saw_unknown = False
+        for item in items:
+            bound_values = bind_loop_target_values(node.target, item)
+            if bound_values is None:
+                saw_unknown = True
+                continue
+            test_value = truth_value(node.test, loop_locals, bound_values)
+            if test_value is True:
+                return True
+            if test_value is None:
+                saw_unknown = True
+
+        if saw_unknown:
+            return None
+        return False
+
+    def visit(
+        node: nodes.Node,
+        optional: bool = False,
+        guarded: set[str] | None = None,
+        local_names: set[str] | None = None,
+    ) -> set[str]:
+        guarded = guarded or set()
+        local_names = local_names or set()
+
+        if isinstance(node, nodes.Template):
+            return visit_nodes(node.body, optional=optional, guarded=guarded, local_names=local_names)
+
+        if isinstance(node, nodes.Name) and node.ctx == "load":
+            if not optional and node.name not in guarded and node.name not in local_names:
+                required.add(node.name)
+            return local_names
+
+        if isinstance(node, nodes.Assign):
+            visit(node.node, optional=optional, guarded=guarded, local_names=local_names)
+            return local_names | _collect_store_names(node.target)
+
+        if isinstance(node, nodes.AssignBlock):
+            visit_nodes(node.body, optional=optional, guarded=guarded, local_names=local_names)
+            return local_names | _collect_store_names(node.target)
+
+        if isinstance(node, nodes.Filter) and node.name in {"default", "d"}:
+            visit(node.node, optional=True, guarded=guarded, local_names=local_names)
+            for arg in node.args:
+                visit(arg, optional=optional, guarded=guarded, local_names=local_names)
+            for kwarg in node.kwargs:
+                visit(kwarg.value, optional=optional, guarded=guarded, local_names=local_names)
+            if node.dyn_args is not None:
+                visit(node.dyn_args, optional=optional, guarded=guarded, local_names=local_names)
+            if node.dyn_kwargs is not None:
+                visit(node.dyn_kwargs, optional=optional, guarded=guarded, local_names=local_names)
+            return local_names
+
+        if isinstance(node, nodes.And):
+            visit(node.left, optional=optional, guarded=guarded, local_names=local_names)
+            if truth_value(node.left, local_names) is not False:
+                visit(
+                    node.right,
+                    optional=optional,
+                    guarded=guarded | short_circuit_guard_names(node.left, truthy=True),
+                    local_names=local_names,
+                )
+            return local_names
+
+        if isinstance(node, nodes.Or):
+            visit(node.left, optional=optional, guarded=guarded, local_names=local_names)
+            if truth_value(node.left, local_names) is not True:
+                visit(
+                    node.right,
+                    optional=optional,
+                    guarded=guarded | short_circuit_guard_names(node.left, truthy=False),
+                    local_names=local_names,
+                )
+            return local_names
+
+        if isinstance(node, nodes.CondExpr):
+            visit(node.test, optional=optional, guarded=guarded, local_names=local_names)
+            test_value = truth_value(node.test, local_names)
+            if test_value is not False:
+                visit(
+                    node.expr1,
+                    optional=optional,
+                    guarded=guarded | guard_names(node.test, truthy=True),
+                    local_names=local_names,
+                )
+            if node.expr2 is not None and test_value is not True:
+                visit(
+                    node.expr2,
+                    optional=optional,
+                    guarded=guarded | guard_names(node.test, truthy=False),
+                    local_names=local_names,
+                )
+            return local_names
+
+        if isinstance(node, nodes.Test) and node.name in {"defined", "undefined"}:
+            visit(node.node, optional=True, guarded=guarded, local_names=local_names)
+            for arg in node.args:
+                visit(arg, optional=optional, guarded=guarded, local_names=local_names)
+            for kwarg in node.kwargs:
+                visit(kwarg.value, optional=optional, guarded=guarded, local_names=local_names)
+            if node.dyn_args is not None:
+                visit(node.dyn_args, optional=optional, guarded=guarded, local_names=local_names)
+            if node.dyn_kwargs is not None:
+                visit(node.dyn_kwargs, optional=optional, guarded=guarded, local_names=local_names)
+            return local_names
+
+        if isinstance(node, nodes.If):
+            visit(node.test, optional=optional, guarded=guarded, local_names=local_names)
+            body_guarded = guarded | guard_names(node.test, truthy=True)
+            else_guarded = guarded | guard_names(node.test, truthy=False)
+            test_value = truth_value(node.test, local_names)
+            body_locals = set(local_names)
+            elif_locals = set(local_names)
+            else_locals = set(local_names)
+            if test_value is not False:
+                body_locals = visit_nodes(node.body, optional=optional, guarded=body_guarded, local_names=local_names)
+            if test_value is not True:
+                elif_locals = visit_nodes(node.elif_, optional=optional, guarded=else_guarded, local_names=local_names)
+                else_locals = visit_nodes(node.else_, optional=optional, guarded=else_guarded, local_names=local_names)
+            return body_locals | elif_locals | else_locals
+
+        if isinstance(node, nodes.For):
+            visit(node.iter, optional=optional, guarded=guarded, local_names=local_names)
+            loop_locals = local_names | _collect_store_names(node.target) | {"loop"}
+            iter_value = truth_value(node.iter, local_names)
+            loop_outcome = filtered_loop_outcome(node, local_names, loop_locals)
+
+            if node.test is not None and iter_value is not False:
+                visit(node.test, optional=optional, guarded=guarded, local_names=loop_locals)
+
+            if loop_outcome is not False:
+                visit_nodes(node.body, optional=optional, guarded=guarded, local_names=loop_locals)
+
+            if loop_outcome is not True:
+                visit_nodes(node.else_, optional=optional, guarded=guarded, local_names=local_names)
+
+            return local_names
+
+        for child in node.iter_child_nodes():
+            visit(child, optional=optional, guarded=guarded, local_names=local_names)
+        return local_names
+
+    visit(ast)
+    return required & undeclared
+
+
 def apply_vars(text: str, vars: Mapping[str, object] | None) -> str:
     """Render a Jinja2 template string with the provided variables.
 
@@ -261,12 +812,6 @@ def _render_known_template_vars(text: str, vars: Mapping[str, object] | None) ->
     if template_vars(text) <= set(vars):
         return apply_vars(text, vars)
     return text
-
-
-def _unresolved_template_vars(text: str, vars: Mapping[str, object]) -> set[str]:
-    """Return unresolved placeholder names after rendering with the supplied vars."""
-    rendered = apply_vars(text, vars)
-    return {match.group(1) for match in _UNRESOLVED_TEMPLATE_VAR_RE.finditer(rendered)}
 
 
 @dataclass
@@ -1236,29 +1781,31 @@ def validate_workflow(workflow: Workflow) -> list[str]:
         if not url.startswith(("http://", "https://")):
             errors.append(f"notify URL must start with http:// or https://, got {url!r}")
 
-    # Template validation: syntax must parse, render must succeed, and unresolved placeholders must be defined.
+    # Template validation: syntax must parse, required vars must be defined, and render must succeed.
     for phase in workflow.phases:
         try:
-            if phase.prompt:
-                template_vars(phase.prompt)
-            if phase.run:
-                template_vars(phase.run)
+            referenced_vars = required_template_vars(phase.prompt, workflow.vars)
+            referenced_vars.update(required_template_vars(phase.run or "", workflow.vars))
         except TemplateSyntaxError as exc:
             errors.append(f"Phase {phase.id!r}: invalid template syntax on line {exc.lineno}: {exc.message}")
             continue
-
-        try:
-            unresolved: set[str] = set()
-            if phase.prompt:
-                unresolved.update(_unresolved_template_vars(phase.prompt, workflow.vars))
-            if phase.run:
-                unresolved.update(_unresolved_template_vars(phase.run, workflow.vars))
         except TemplateRenderError as exc:
             errors.append(f"Phase {phase.id!r}: template render failed: {exc}")
             continue
 
-        for var_name in sorted(unresolved):
+        undefined = referenced_vars - set(workflow.vars)
+        for var_name in sorted(undefined):
             errors.append(f"Phase {phase.id!r}: template variable {{{{{var_name}}}}} has no value defined")
+        if undefined:
+            continue
+
+        try:
+            if phase.prompt:
+                apply_vars(phase.prompt, workflow.vars)
+            if phase.run:
+                apply_vars(phase.run, workflow.vars)
+        except TemplateRenderError as exc:
+            errors.append(f"Phase {phase.id!r}: template render failed: {exc}")
 
     return errors
 

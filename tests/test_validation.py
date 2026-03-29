@@ -409,6 +409,14 @@ class TestTemplateVarValidation:
         undefined = [e for e in errors if "no value defined" in e]
         assert len(undefined) == 1
 
+    def test_undefined_var_in_jinja_control_flow(self):
+        wf = Workflow(
+            name="test",
+            phases=[Phase(id="build", type="implement", prompt="{% if ENABLE_DEPLOY %}Deploy{% endif %}")],
+        )
+        errors = validate_workflow(wf)
+        assert any("ENABLE_DEPLOY" in e and "no value defined" in e for e in errors)
+
     def test_invalid_jinja_template_reports_error(self):
         wf = Workflow(
             name="test",
@@ -488,27 +496,403 @@ class TestTemplateVarValidation:
         )
         assert validate_workflow(wf) == []
 
-    def test_default_filter_can_supply_missing_var(self):
+    def test_default_filter_allows_optional_missing_var(self):
         wf = Workflow(
             name="test",
             phases=[Phase(id="build", type="implement", prompt="{{ MISSING|default('x') }}")],
         )
-        assert validate_workflow(wf) == []
+        errors = validate_workflow(wf)
+        assert not any("MISSING" in e and "no value defined" in e for e in errors)
 
-    def test_defined_test_can_guard_missing_var(self):
+    def test_defined_test_allows_optional_missing_var(self):
         wf = Workflow(
             name="test",
             phases=[Phase(id="build", type="implement", prompt="{% if MISSING is defined %}x{% endif %}")],
         )
-        assert validate_workflow(wf) == []
+        errors = validate_workflow(wf)
+        assert not any("MISSING" in e and "no value defined" in e for e in errors)
 
-    def test_skipped_branch_does_not_require_inner_var(self):
+    def test_defined_guard_allows_use_inside_branch(self):
         wf = Workflow(
             name="test",
-            phases=[Phase(id="build", type="implement", prompt="{% if ENABLE_DEPLOY %}Deploy {{ ENV }}{% endif %}")],
+            phases=[Phase(id="build", type="implement", prompt="{% if MISSING is defined %}{{ MISSING }}{% endif %}")],
+        )
+        errors = validate_workflow(wf)
+        assert not any("MISSING" in e and "no value defined" in e for e in errors)
+
+    def test_defined_guard_does_not_allow_use_inside_else_branch(self):
+        wf = Workflow(
+            name="test",
+            phases=[Phase(id="build", type="implement", prompt="{% if X is defined %}ok{% else %}{{ X }}{% endif %}")],
+        )
+        errors = validate_workflow(wf)
+        assert any("X" in e and "no value defined" in e for e in errors)
+
+    def test_undefined_guard_allows_use_inside_branch(self):
+        wf = Workflow(
+            name="test",
+            phases=[
+                Phase(id="build", type="implement", prompt="{% if MISSING is undefined %}{{ MISSING }}{% endif %}")
+            ],
+        )
+        errors = validate_workflow(wf)
+        assert not any("MISSING" in e and "no value defined" in e for e in errors)
+
+    def test_undefined_guard_allows_use_inside_else_branch_when_defined(self):
+        wf = Workflow(
+            name="test",
+            phases=[
+                Phase(id="build", type="implement", prompt="{% if X is undefined %}skip{% else %}{{ X }}{% endif %}")
+            ],
+            vars={"X": "hi"},
+        )
+        errors = validate_workflow(wf)
+        assert not any("X" in e and "no value defined" in e for e in errors)
+
+    def test_not_defined_guard_allows_use_inside_branch(self):
+        wf = Workflow(
+            name="test",
+            phases=[Phase(id="build", type="implement", prompt="{% if X is not defined %}{{ X }}{% endif %}")],
+        )
+        errors = validate_workflow(wf)
+        assert not any("X" in e and "no value defined" in e for e in errors)
+
+    def test_not_defined_guard_allows_use_inside_else_branch_when_defined(self):
+        wf = Workflow(
+            name="test",
+            phases=[
+                Phase(id="build", type="implement", prompt="{% if X is not defined %}skip{% else %}{{ X }}{% endif %}")
+            ],
+            vars={"X": "hi"},
+        )
+        errors = validate_workflow(wf)
+        assert not any("X" in e and "no value defined" in e for e in errors)
+
+    def test_not_undefined_guard_allows_use_inside_branch(self):
+        wf = Workflow(
+            name="test",
+            phases=[Phase(id="build", type="implement", prompt="{% if X is not undefined %}{{ X }}{% endif %}")],
+            vars={"X": "hi"},
+        )
+        errors = validate_workflow(wf)
+        assert not any("X" in e and "no value defined" in e for e in errors)
+
+    def test_known_false_condition_skips_branch_required_vars(self):
+        wf = Workflow(
+            name="test",
+            phases=[Phase(id="p", type="implement", prompt="{% if ENABLE_DEPLOY %}Deploy {{ ENV }}{% endif %}")],
             vars={"ENABLE_DEPLOY": False},
         )
-        assert validate_workflow(wf) == []
+        errors = validate_workflow(wf)
+        assert not any("ENV" in e and "no value defined" in e for e in errors)
+
+    def test_known_false_conditional_expression_skips_required_var(self):
+        wf = Workflow(
+            name="test",
+            phases=[Phase(id="p", type="implement", prompt="{{ ENV if ENABLE_DEPLOY else 'skip' }}")],
+            vars={"ENABLE_DEPLOY": False},
+        )
+        errors = validate_workflow(wf)
+        assert not any("ENV" in e and "no value defined" in e for e in errors)
+
+    def test_elif_branch_reports_missing_var_when_outer_guard_does_not_apply(self):
+        wf = Workflow(
+            name="test",
+            phases=[
+                Phase(id="build", type="implement", prompt="{% if X is defined %}{{ X }}{% elif Y %}{{ X }}{% endif %}")
+            ],
+            vars={"Y": "yes"},
+        )
+        errors = validate_workflow(wf)
+        assert any("X" in e and "no value defined" in e for e in errors)
+
+    def test_elif_branch_inherits_outer_undefined_false_guard(self):
+        wf = Workflow(
+            name="test",
+            phases=[
+                Phase(id="build", type="implement", prompt="{% if X is undefined %}skip{% elif X %}{{ X }}{% endif %}")
+            ],
+            vars={"X": "hi"},
+        )
+        errors = validate_workflow(wf)
+        assert not any("X" in e and "no value defined" in e for e in errors)
+
+    def test_short_circuit_defined_guard_allows_rhs_use(self):
+        wf = Workflow(
+            name="test",
+            phases=[Phase(id="build", type="implement", prompt="{% if X is defined and X %}{{ X }}{% endif %}")],
+        )
+        errors = validate_workflow(wf)
+        assert not any("X" in e and "no value defined" in e for e in errors)
+
+    def test_short_circuit_undefined_guard_allows_rhs_and_body_use(self):
+        wf = Workflow(
+            name="test",
+            phases=[Phase(id="build", type="implement", prompt="{% if X is undefined or X %}{{ X }}{% endif %}")],
+        )
+        errors = validate_workflow(wf)
+        assert not any("X" in e and "no value defined" in e for e in errors)
+
+    def test_short_circuit_or_does_not_guard_unrelated_body_use(self):
+        wf = Workflow(
+            name="test",
+            phases=[Phase(id="build", type="implement", prompt="{% if X is defined or Y %}{{ X }}{% endif %}")],
+            vars={"Y": "yes"},
+        )
+        errors = validate_workflow(wf)
+        assert any("X" in e and "no value defined" in e for e in errors)
+
+    def test_inline_conditional_defined_guard_allows_branch_use(self):
+        wf = Workflow(
+            name="test",
+            phases=[Phase(id="build", type="implement", prompt="{{ X if X is defined else 'n/a' }}")],
+        )
+        errors = validate_workflow(wf)
+        assert not any("X" in e and "no value defined" in e for e in errors)
+
+    def test_inline_conditional_defined_guard_does_not_allow_else_use(self):
+        wf = Workflow(
+            name="test",
+            phases=[Phase(id="build", type="implement", prompt="{{ 'yes' if X is defined else X }}")],
+        )
+        errors = validate_workflow(wf)
+        assert any("X" in e and "no value defined" in e for e in errors)
+
+    def test_comparison_false_skips_branch_required_var(self):
+        wf = Workflow(
+            name="test",
+            phases=[Phase(id="build", type="implement", prompt="{% if ENV == 'prod' %}{{ REGION }}{% endif %}")],
+            vars={"ENV": "staging"},
+        )
+        errors = validate_workflow(wf)
+        assert not any("REGION" in e and "no value defined" in e for e in errors)
+
+    def test_comparison_true_requires_branch_var(self):
+        wf = Workflow(
+            name="test",
+            phases=[Phase(id="build", type="implement", prompt="{% if ENV == 'prod' %}{{ REGION }}{% endif %}")],
+            vars={"ENV": "prod"},
+        )
+        errors = validate_workflow(wf)
+        assert any("REGION" in e and "no value defined" in e for e in errors)
+
+    def test_comparison_false_skips_inline_conditional_required_var(self):
+        wf = Workflow(
+            name="test",
+            phases=[Phase(id="build", type="implement", prompt="{{ REGION if ENV == 'prod' else 'skip' }}")],
+            vars={"ENV": "staging"},
+        )
+        errors = validate_workflow(wf)
+        assert not any("REGION" in e and "no value defined" in e for e in errors)
+
+    def test_default_filter_guard_allows_branch_use(self):
+        wf = Workflow(
+            name="test",
+            phases=[Phase(id="build", type="implement", prompt="{% if X|default(false) %}{{ X }}{% endif %}")],
+        )
+        errors = validate_workflow(wf)
+        assert not any("X" in e and "no value defined" in e for e in errors)
+
+    def test_truthy_default_filter_does_not_guard_branch_use(self):
+        wf = Workflow(
+            name="test",
+            phases=[Phase(id="build", type="implement", prompt="{% if X|default(true) %}{{ X }}{% endif %}")],
+        )
+        errors = validate_workflow(wf)
+        assert any("X" in e and "no value defined" in e for e in errors)
+
+    def test_truthy_default_filter_allows_else_branch_use(self):
+        wf = Workflow(
+            name="test",
+            phases=[
+                Phase(id="build", type="implement", prompt="{% if X|default(true) %}ok{% else %}{{ X }}{% endif %}")
+            ],
+        )
+        errors = validate_workflow(wf)
+        assert not any("X" in e and "no value defined" in e for e in errors)
+
+    def test_default_filter_without_argument_skips_missing_branch(self):
+        wf = Workflow(
+            name="test",
+            phases=[Phase(id="build", type="implement", prompt="{% if X|default %}Deploy {{ ENV }}{% endif %}")],
+        )
+        errors = validate_workflow(wf)
+        assert not any("ENV" in e and "no value defined" in e for e in errors)
+
+    def test_default_filter_boolean_mode_executes_branch_for_falsey_defined_value(self):
+        wf = Workflow(
+            name="test",
+            phases=[Phase(id="build", type="implement", prompt="{% if X|default(true, true) %}{{ Y }}{% endif %}")],
+            vars={"X": ""},
+        )
+        errors = validate_workflow(wf)
+        assert any("Y" in e and "no value defined" in e for e in errors)
+
+    def test_default_filter_boolean_mode_executes_inline_conditional_for_falsey_defined_value(self):
+        wf = Workflow(
+            name="test",
+            phases=[Phase(id="build", type="implement", prompt="{{ Y if X|default(true, true) else 'ok' }}")],
+            vars={"X": ""},
+        )
+        errors = validate_workflow(wf)
+        assert any("Y" in e and "no value defined" in e for e in errors)
+
+    def test_required_use_still_fails_when_same_var_is_optional_elsewhere(self):
+        wf = Workflow(
+            name="test",
+            phases=[Phase(id="build", type="implement", prompt="{{ MISSING|default('x') }} {{ MISSING }}")],
+        )
+        errors = validate_workflow(wf)
+        assert any("MISSING" in e and "no value defined" in e for e in errors)
+
+    def test_for_loop_local_var_is_not_reported_missing(self):
+        wf = Workflow(
+            name="test",
+            phases=[Phase(id="build", type="implement", prompt="{% for item in ITEMS %}{{ item }}{% endfor %}")],
+            vars={"ITEMS": ["a", "b"]},
+        )
+        errors = validate_workflow(wf)
+        assert not any("item" in e and "no value defined" in e for e in errors)
+
+    def test_for_loop_else_branch_is_skipped_for_known_non_empty_iterable(self):
+        wf = Workflow(
+            name="test",
+            phases=[
+                Phase(
+                    id="build",
+                    type="implement",
+                    prompt="{% for item in ITEMS %}{{ item }}{% else %}{{ FALLBACK }}{% endfor %}",
+                )
+            ],
+            vars={"ITEMS": ["a"]},
+        )
+        errors = validate_workflow(wf)
+        assert not any("FALLBACK" in e and "no value defined" in e for e in errors)
+
+    def test_for_loop_else_branch_is_required_for_known_empty_iterable(self):
+        wf = Workflow(
+            name="test",
+            phases=[
+                Phase(
+                    id="build",
+                    type="implement",
+                    prompt="{% for item in ITEMS %}{{ item }}{% else %}{{ FALLBACK }}{% endfor %}",
+                )
+            ],
+            vars={"ITEMS": []},
+        )
+        errors = validate_workflow(wf)
+        assert any("FALLBACK" in e and "no value defined" in e for e in errors)
+
+    def test_for_loop_else_branch_is_skipped_for_non_empty_mapping_items_call(self):
+        wf = Workflow(
+            name="test",
+            phases=[
+                Phase(
+                    id="build",
+                    type="implement",
+                    prompt="{% for key, value in D.items() %}{{ key }}={{ value }}{% else %}{{ FALLBACK }}{% endfor %}",
+                )
+            ],
+            vars={"D": {"a": 1}},
+        )
+        errors = validate_workflow(wf)
+        assert not any("FALLBACK" in e and "no value defined" in e for e in errors)
+
+    def test_for_loop_else_branch_is_required_for_empty_mapping_items_call(self):
+        wf = Workflow(
+            name="test",
+            phases=[
+                Phase(
+                    id="build",
+                    type="implement",
+                    prompt="{% for key, value in D.items() %}{{ key }}={{ value }}{% else %}{{ FALLBACK }}{% endfor %}",
+                )
+            ],
+            vars={"D": {}},
+        )
+        errors = validate_workflow(wf)
+        assert any("FALLBACK" in e and "no value defined" in e for e in errors)
+
+    @pytest.mark.parametrize("iterable", ["['a']", "('a',)", "{'a': 1}"])
+    def test_for_loop_else_branch_is_skipped_for_non_empty_literal_collection(self, iterable):
+        wf = Workflow(
+            name="test",
+            phases=[
+                Phase(
+                    id="build",
+                    type="implement",
+                    prompt=f"{{% for item in {iterable} %}}{{{{ item }}}}{{% else %}}{{{{ FALLBACK }}}}{{% endfor %}}",
+                )
+            ],
+            vars={"ITEMS": ["unused"]},
+        )
+        errors = validate_workflow(wf)
+        assert not any("FALLBACK" in e and "no value defined" in e for e in errors)
+
+    @pytest.mark.parametrize("iterable", ["[]", "()", "{}"])
+    def test_for_loop_else_branch_is_required_for_empty_literal_collection(self, iterable):
+        wf = Workflow(
+            name="test",
+            phases=[
+                Phase(
+                    id="build",
+                    type="implement",
+                    prompt=f"{{% for item in {iterable} %}}{{{{ item }}}}{{% else %}}{{{{ FALLBACK }}}}{{% endfor %}}",
+                )
+            ],
+        )
+        errors = validate_workflow(wf)
+        assert any("FALLBACK" in e and "no value defined" in e for e in errors)
+
+    def test_filtered_for_loop_else_branch_is_skipped_when_known_item_matches(self):
+        wf = Workflow(
+            name="test",
+            phases=[
+                Phase(
+                    id="build",
+                    type="implement",
+                    prompt="{% for item in ITEMS if item.enabled %}{{ item.name }}{% else %}{{ FALLBACK }}{% endfor %}",
+                )
+            ],
+            vars={"ITEMS": [{"enabled": True, "name": "alpha"}]},
+        )
+        errors = validate_workflow(wf)
+        assert not any("FALLBACK" in e and "no value defined" in e for e in errors)
+
+    def test_filtered_for_loop_else_branch_is_required_when_no_known_item_matches(self):
+        wf = Workflow(
+            name="test",
+            phases=[
+                Phase(
+                    id="build",
+                    type="implement",
+                    prompt="{% for item in ITEMS if item.enabled %}{{ item.name }}{% else %}{{ FALLBACK }}{% endfor %}",
+                )
+            ],
+            vars={"ITEMS": [{"enabled": False, "name": "alpha"}]},
+        )
+        errors = validate_workflow(wf)
+        assert any("FALLBACK" in e and "no value defined" in e for e in errors)
+
+    def test_set_local_var_is_not_reported_missing(self):
+        wf = Workflow(
+            name="test",
+            phases=[Phase(id="build", type="implement", prompt='{% set x = "hi" %}{{ x }}')],
+        )
+        errors = validate_workflow(wf)
+        assert not any("x" in e and "no value defined" in e for e in errors)
+
+    def test_conditional_set_local_var_is_not_reported_missing(self):
+        wf = Workflow(
+            name="test",
+            phases=[
+                Phase(id="build", type="implement", prompt="{% if X is defined %}{% set y = X %}{% endif %}{{ y }}")
+            ],
+            vars={"X": "hi"},
+        )
+        errors = validate_workflow(wf)
+        assert not any("y" in e and "no value defined" in e for e in errors)
 
 
 class TestLaneValidation:
