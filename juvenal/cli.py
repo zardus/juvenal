@@ -1,16 +1,14 @@
 """Juvenal CLI — orchestrate AI coding agents through verified phases."""
 
 import argparse
-import re
 import sys
+from contextlib import suppress
 
 import yaml
 
 from juvenal import __version__
 
 STANDARD_CHECKERS = ["tester", "senior-tester", "senior-engineer", "architect", "pm"]
-_INT_LITERAL_RE = re.compile(r"[-+]?(?:0|[1-9][0-9]*)$")
-_FLOAT_LITERAL_RE = re.compile(r"[-+]?(?:(?:[0-9]+\.[0-9]*|\.[0-9]+)(?:[eE][-+]?[0-9]+)?|[0-9]+[eE][-+]?[0-9]+)$")
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -60,7 +58,7 @@ def build_parser() -> argparse.ArgumentParser:
         help=argparse.SUPPRESS,  # deprecated no-op, kept for compatibility
     )
     run_p.add_argument(
-        "-D", action="append", default=[], metavar="VAR=VAL", dest="defines", help="Set Jinja2 template variable"
+        "-D", action="append", default=[], metavar="VAR=VAL", dest="defines", help="Set template variable"
     )
     run_p.add_argument("--serialize", action="store_true", help="Disable all parallelization")
 
@@ -107,7 +105,7 @@ def build_parser() -> argparse.ArgumentParser:
         help=argparse.SUPPRESS,  # deprecated no-op, kept for compatibility
     )
     do_p.add_argument(
-        "-D", action="append", default=[], metavar="VAR=VAL", dest="defines", help="Set Jinja2 template variable"
+        "-D", action="append", default=[], metavar="VAR=VAL", dest="defines", help="Set template variable"
     )
     do_p.add_argument("--serialize", action="store_true", help="Disable all parallelization")
 
@@ -137,35 +135,22 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def _parse_define_value(raw: str) -> object:
-    """Parse a CLI -D value into a native Jinja-friendly value."""
-    stripped = raw.strip()
-    lowered = stripped.lower()
-
-    if stripped == "":
+    if not raw:
         return raw
-    if lowered == "true":
-        return True
-    if lowered == "false":
-        return False
-    if lowered in {"null", "none", "~"}:
-        return None
-    if stripped[0] in "[{\"'":
+    if (lowered := raw.lower()) in {"true", "false", "null", "none", "~"} or raw[0] in "[{\"'":
         try:
-            return yaml.safe_load(stripped)
+            return yaml.safe_load("null" if lowered == "none" else raw)
         except yaml.YAMLError as exc:
-            print(f"Error: invalid -D value {raw!r}: {exc}")
-            sys.exit(1)
-
-    if _INT_LITERAL_RE.fullmatch(stripped):
-        return int(stripped)
-    if _FLOAT_LITERAL_RE.fullmatch(stripped):
-        return float(stripped)
+            raise SystemExit(f"Error: invalid -D value {raw!r}: {exc}") from exc
+    for cast in (int, float):
+        with suppress(ValueError):
+            return cast(raw)
     return raw
 
 
-def _parse_defines(defines: list[str]) -> dict[str, list[object]]:
+def _parse_defines(defines: list[str]) -> dict[str, list[str]]:
     """Parse -D VAR=VAL arguments, accumulating multiple values per key."""
-    result: dict[str, list[object]] = {}
+    result: dict[str, list[str]] = {}
     for d in defines:
         if "=" not in d:
             print(f"Error: invalid -D value {d!r}: must be VAR=VAL")
@@ -175,7 +160,7 @@ def _parse_defines(defines: list[str]) -> dict[str, list[object]]:
     return result
 
 
-def _apply_defines(workflow, all_vars: dict[str, list[object]]):
+def _apply_defines(workflow, all_vars: dict[str, list[str]]):
     """Apply parsed -D vars: single-value go into workflow.vars, multi-value expand phases."""
     from juvenal.workflow import expand_multi_vars
 
@@ -217,14 +202,7 @@ def _expand_standard_checkers(args: argparse.Namespace) -> None:
 
 def cmd_run(args: argparse.Namespace) -> int:
     from juvenal.engine import Engine
-    from juvenal.workflow import (
-        Phase,
-        TemplateRenderError,
-        Workflow,
-        inject_checkers,
-        inject_implementer,
-        validate_workflow,
-    )
+    from juvenal.workflow import Phase, Workflow, inject_checkers, inject_implementer, validate_workflow
 
     # Parse --implementer flags into role-only vs inline phases
     inline_phases: list[Phase] = []
@@ -265,12 +243,8 @@ def cmd_run(args: argparse.Namespace) -> int:
         print('Error: workflow path is required (or use --implementer role:"prompt")')
         return 1
 
-    try:
-        if args.defines:
-            workflow = _apply_defines(workflow, _parse_defines(args.defines))
-    except TemplateRenderError as e:
-        print(f"Error: {e}")
-        return 1
+    if args.defines:
+        workflow = _apply_defines(workflow, _parse_defines(args.defines))
     _expand_standard_checkers(args)
     if args.checker:
         workflow = inject_checkers(workflow, args.checker)
@@ -363,18 +337,14 @@ def cmd_do(args: argparse.Namespace) -> int:
     import tempfile
 
     from juvenal.engine import Engine, plan_workflow
-    from juvenal.workflow import TemplateRenderError, inject_checkers, inject_implementer
+    from juvenal.workflow import inject_checkers, inject_implementer
 
     with tempfile.NamedTemporaryFile(suffix=".yaml", delete=False, mode="w") as f:
         plan_workflow(args.goal, f.name, args.backend, plain=args.plain, interactive=args.interactive)
         workflow = _load_workflow_or_exit(f.name)
 
-    try:
-        if args.defines:
-            workflow = _apply_defines(workflow, _parse_defines(args.defines))
-    except TemplateRenderError as e:
-        print(f"Error: {e}")
-        return 1
+    if args.defines:
+        workflow = _apply_defines(workflow, _parse_defines(args.defines))
     if args.implementer:
         workflow = inject_implementer(workflow, args.implementer)
     _expand_standard_checkers(args)
@@ -413,15 +383,11 @@ def cmd_init(args: argparse.Namespace) -> int:
 
 def cmd_validate(args: argparse.Namespace) -> int:
     from juvenal.engine import Engine
-    from juvenal.workflow import TemplateRenderError, inject_checkers, inject_implementer
+    from juvenal.workflow import inject_checkers, inject_implementer
 
     workflow = _load_workflow_or_exit(args.workflow)
-    try:
-        if args.defines:
-            workflow = _apply_defines(workflow, _parse_defines(args.defines))
-    except TemplateRenderError as e:
-        print(f"Error: {e}")
-        return 1
+    if args.defines:
+        workflow = _apply_defines(workflow, _parse_defines(args.defines))
     if args.implementer:
         workflow = inject_implementer(workflow, args.implementer)
     _expand_standard_checkers(args)
