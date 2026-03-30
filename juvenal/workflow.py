@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import itertools
+import json
 import re
 import shutil
 from collections.abc import Mapping
@@ -968,7 +969,10 @@ def validate_workflow(workflow: Workflow) -> list[str]:
     all_ids = {p.id for p in workflow.phases}
 
     defined_vars = set(workflow.vars)
-    recursive_vars = any(marker in repr(workflow.vars) for marker in ("[[...]]", "{...}", "(...)"))
+    try:
+        recursive_vars = json.dumps(workflow.vars, default=repr) is None
+    except ValueError as exc:
+        recursive_vars = str(exc) == "Circular reference detected"
     for phase in workflow.phases:
         # Duplicate ID check
         if phase.id in phase_ids:
@@ -1072,9 +1076,7 @@ def validate_workflow(workflow: Workflow) -> list[str]:
     # Template validation: syntax must parse, render must succeed, and unresolved placeholders must be defined.
     for phase in workflow.phases:
         if recursive_vars and (phase.prompt or phase.run):
-            errors.append(
-                f"Phase {phase.id!r}: template render failed: template variables cannot contain recursive data"
-            )
+            errors.append("Phase %r: template render failed: template variables contain recursive data" % phase.id)
             continue
         try:
             if phase.prompt:
