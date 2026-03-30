@@ -7,6 +7,7 @@ import pytest
 from juvenal.workflow import (
     ParallelGroup,
     Phase,
+    TemplateRenderError,
     Workflow,
     apply_vars,
     expand_multi_vars,
@@ -15,6 +16,7 @@ from juvenal.workflow import (
     load_workflow,
     parse_checker_string,
     scaffold_workflow,
+    validate_workflow,
 )
 
 
@@ -1005,18 +1007,55 @@ class TestTemplateVars:
         result = apply_vars("{{A}} and {{B}}", {"A": "foo", "B": "bar"})
         assert result == "foo and bar"
 
+    def test_apply_vars_jinja_filter(self):
+        result = apply_vars("Hello {{ name|upper }}", {"name": "world"})
+        assert result == "Hello WORLD"
+
+    def test_apply_vars_jinja_condition(self):
+        result = apply_vars("{% if ENABLED %}ship it{% else %}skip it{% endif %}", {"ENABLED": True})
+        assert result == "ship it"
+
     def test_apply_vars_unrecognized_passthrough(self):
         assert apply_vars("Hello {{UNKNOWN}}", {"NAME": "world"}) == "Hello {{UNKNOWN}}"
 
     def test_apply_vars_empty_dict(self):
         assert apply_vars("Hello {{NAME}}", {}) == "Hello {{NAME}}"
 
+    def test_apply_vars_empty_dict_renders_jinja_expression(self):
+        assert apply_vars("{{ 'ok'|upper }}", {}) == "OK"
+
+    def test_apply_vars_empty_dict_renders_jinja_control_flow(self):
+        assert apply_vars("{% if true %}rendered{% endif %}", {}) == "rendered"
+
+    def test_apply_vars_sandbox_blocks_code_execution(self):
+        payload = "{{ cycler.__init__.__globals__.os.popen('printf checker-pwned').read() }}"
+        with pytest.raises(TemplateRenderError):
+            apply_vars(payload, {})
+
+    def test_apply_vars_blocks_method_calls_on_supplied_objects(self, tmp_path):
+        target = tmp_path / "secret.txt"
+        target.write_text("top secret")
+        with pytest.raises(TemplateRenderError):
+            apply_vars("{{ P.read_text() }}", {"P": target})
+
+    def test_apply_vars_does_not_mutate_supplied_lists(self):
+        items = ["a", "b"]
+        with pytest.raises(TemplateRenderError):
+            apply_vars("{{ ITEMS.pop() }}", {"ITEMS": items})
+        assert items == ["a", "b"]
+
+    def test_apply_vars_blocks_method_calls_on_mapping_keys(self, tmp_path):
+        target = tmp_path / "secret.txt"
+        target.write_text("top secret")
+        with pytest.raises(TemplateRenderError):
+            apply_vars("{% for key in D %}{{ key.read_text()[:5] }}{% endfor %}", {"D": {target: "x"}})
+
+    def test_apply_vars_allows_readonly_mapping_methods(self):
+        result = apply_vars("{% for key, value in D.items() %}{{ key }}={{ value }}{% endfor %}", {"D": {"a": "b"}})
+        assert result == "a=b"
+
     def test_apply_vars_no_placeholders(self):
         assert apply_vars("no vars here", {"NAME": "world"}) == "no vars here"
-
-    def test_apply_vars_jinja_rendering_and_sandbox(self):
-        assert apply_vars("{{NAME|upper}}", {"NAME": "svc"}) == "SVC" and apply_vars("{{ 'ok'|upper }}", {}) == "OK"  # noqa: E501  # fmt: skip
-        pytest.raises(ValueError, apply_vars, "{{P.read_text()}}", {"P": Path("README.md")})
 
     def test_render_prompt_with_vars(self):
         phase = Phase(id="build", prompt="Build {{PROJECT}} in {{LANG}}.")
@@ -1033,6 +1072,21 @@ class TestTemplateVars:
         phase = Phase(id="check", type="check", prompt="Verify {{COMPONENT}}.")
         result = phase.render_check_prompt(vars={"COMPONENT": "auth"})
         assert result == "Verify auth."
+
+    def test_render_prompt_with_jinja_expression(self):
+        phase = Phase(id="build", prompt="Build {{ project|upper }}.")
+        result = phase.render_prompt(vars={"project": "myapp"})
+        assert result == "Build MYAPP."
+
+    def test_render_prompt_empty_dict_renders_jinja_expression(self):
+        phase = Phase(id="build", prompt="{{ 'ok'|upper }}")
+        result = phase.render_prompt(vars={})
+        assert result == "OK"
+
+    def test_render_check_prompt_empty_dict_renders_jinja_expression(self):
+        phase = Phase(id="check", type="check", prompt="{% if true %}rendered{% endif %}")
+        result = phase.render_check_prompt(vars={})
+        assert result == "rendered"
 
     def test_render_prompt_none_vars(self):
         phase = Phase(id="build", prompt="Build {{PROJECT}}.")
@@ -1265,6 +1319,16 @@ class TestExpandMultiVars:
         prompts = {p.prompt for p in result.phases}
         assert prompts == {"Build x on 1.", "Build x on 2.", "Build y on 1.", "Build y on 2."}
 
+    def test_uses_existing_vars_during_expansion(self):
+        wf = Workflow(
+            name="test",
+            phases=[Phase(id="build", type="implement", prompt="Build {{ APP|upper }} for {{TARGET}}.")],
+            vars={"APP": "service"},
+        )
+        result = expand_multi_vars(wf, {"TARGET": ["linux", "windows"]})
+        prompts = [p.prompt for p in result.phases]
+        assert prompts == ["Build SERVICE for linux.", "Build SERVICE for windows."]
+
     def test_empty_multi_vars_is_noop(self):
         """Empty multi_vars returns workflow unchanged."""
         wf = Workflow(
@@ -1274,6 +1338,28 @@ class TestExpandMultiVars:
         result = expand_multi_vars(wf, {})
         assert len(result.phases) == 1
         assert result.phases[0].id == "build"
+
+    def test_preserves_unresolved_control_flow_during_expansion(self):
+        wf = Workflow(
+            name="test",
+            phases=[Phase(id="build", type="implement", prompt="{% if ENABLED %}Build {{TARGET}}{% endif %}")],
+        )
+        result = expand_multi_vars(wf, {"TARGET": ["linux", "windows"]})
+        assert [p.prompt for p in result.phases] == [
+            "{% if ENABLED %}Build {{'linux'}}{% endif %}",
+            "{% if ENABLED %}Build {{'windows'}}{% endif %}",
+        ]
+        errors = validate_workflow(result)
+        assert not any("has no prompt" in e for e in errors)
+
+    def test_boolean_multi_values_preserve_jinja_truthiness(self):
+        wf = Workflow(
+            name="test",
+            phases=[Phase(id="deploy", type="implement", prompt="{% if ENABLED %}ship it{% else %}skip it{% endif %}")],
+        )
+        result = expand_multi_vars(wf, {"ENABLED": [False, True]})
+        assert [p.id for p in result.phases] == ["deploy~ENABLED=false", "deploy~ENABLED=true"]
+        assert [p.prompt for p in result.phases] == ["skip it", "ship it"]
 
     def test_phases_in_existing_parallel_group_skipped(self):
         """Phases already in a parallel group are not expanded."""

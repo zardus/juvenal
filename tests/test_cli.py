@@ -4,8 +4,9 @@ import subprocess
 import sys
 import time
 
-from juvenal.cli import _parse_defines, build_parser, cmd_plan, cmd_status
+from juvenal.cli import _apply_defines, _parse_defines, build_parser, cmd_plan, cmd_status
 from juvenal.state import PipelineState
+from juvenal.workflow import Phase, Workflow
 
 
 class TestArgumentParsing:
@@ -314,7 +315,9 @@ class TestArgumentParsing:
 class TestParseDefines:
     def test_single_value(self):
         assert _parse_defines(["FOO=bar"]) == {"FOO": ["bar"]}
-        assert _parse_defines(["B=true", "N=3", "L=[1,2]"]) == {"B": [True], "N": [3], "L": [[1, 2]]}
+
+    def test_boolean_value(self):
+        assert _parse_defines(["ENABLED=false"]) == {"ENABLED": [False]}
 
     def test_multi_value_same_key(self):
         result = _parse_defines(["T=linux", "T=windows"])
@@ -327,6 +330,17 @@ class TestParseDefines:
     def test_equals_in_value(self):
         result = _parse_defines(["CMD=a=b=c"])
         assert result == {"CMD": ["a=b=c"]}
+
+    def test_apply_defines_preserves_boolean_control_flow(self):
+        workflow = Workflow(
+            name="test",
+            phases=[Phase(id="deploy", prompt="{% if ENABLED %}ship it{% else %}skip it{% endif %}")],
+        )
+
+        result = _apply_defines(workflow, _parse_defines(["ENABLED=false"]))
+
+        assert result.vars["ENABLED"] is False
+        assert result.phases[0].render_prompt(vars=result.vars) == "skip it"
 
 
 class TestStatusExitCode:
