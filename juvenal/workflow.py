@@ -17,9 +17,7 @@ _UNRESOLVED_TEMPLATE_VAR_RE = re.compile(r"\{\{\s*([A-Za-z_][A-Za-z0-9_]*)\b")
 _CONTROL_EXPR_RE = re.compile(
     r"{%\s*(?:if|elif)\s+(.+?)\s*%}|{%\s*for\s+(.+?)\s+in\s+(.+?)\s*%}|{{.*?\s+if\s+(.+?)\s+else\b", re.DOTALL
 )
-_SKIP_CONTROL_EXPR_RE = re.compile(
-    r"(?:\w+\s+is\s+(?:not\s+)?(?:defined|undefined)|\w+\|default(?:\(.*\))?(?:\b.*)?|\w+\s+is\s+defined\s+and\s+.+|\w+\s+is\s+(?:undefined|not\s+defined)\s+or\s+.+)"
-)
+_SKIP_CONTROL_EXPR_RE = re.compile(r"(?:\w+\s+is\s+(?:not\s+)?(?:defined|undefined)|\w+\|default(?:\(.*\))?(?:\b.*)?)")
 _OPTIONAL_OUTPUT_RE = re.compile(
     r"{%\s*if\s+([A-Za-z_][A-Za-z0-9_]*)\s+is\s+(?:undefined|not\s+defined)(?:\s+or\s+\1)?\s*%}.*?{{\s*\1\b", re.DOTALL
 )
@@ -77,11 +75,13 @@ def _sub_vars(text: str, vars: dict[str, str]) -> str:
 _unresolved_template_vars = lambda text, vars: template_vars(text) & set(_UNRESOLVED_TEMPLATE_VAR_RE.findall(apply_vars(text, vars)))  # noqa: E501,E731  # fmt: skip
 
 
-def _control_template_vars(text: str) -> set[str]:
+def _control_template_vars(text: str, defined_vars: set[str]) -> set[str]:
     found, guarded = set(), set(re.findall(r"{%\s*if\s+(\w+)\s+is\s+(?:undefined|not\s+defined)\s*%}", text))
     for if_expr, loop_var, loop_expr, cond_expr in _CONTROL_EXPR_RE.findall(text):
         expr = (if_expr or loop_expr or cond_expr).strip()
-        if not _SKIP_CONTROL_EXPR_RE.fullmatch(expr):
+        guard = re.fullmatch(r"(\w+)\s+is\s+(?:(?:not\s+)?undefined\s+or|defined\s+and)\s+(.+)", expr)
+        expr = "" if guard and guard.group(1) not in defined_vars else guard.group(2) if guard else expr
+        if expr and not _SKIP_CONTROL_EXPR_RE.fullmatch(expr):
             found.update(template_vars(f"{{{{ {expr} }}}}") - set(re.findall(r"\w+", loop_var)))
     return found - guarded
 
@@ -1055,7 +1055,7 @@ def validate_workflow(workflow: Workflow) -> list[str]:
             missing = set()
             for text in filter(None, (phase.prompt, phase.run)):
                 template_vars(text)
-                missing.update(_control_template_vars(text) - defined_vars)
+                missing.update(_control_template_vars(text, defined_vars) - defined_vars)
                 missing.update(_unresolved_template_vars(text, workflow.vars) - _optional_output_vars(text))
         except TemplateSyntaxError as exc:
             errors.append(f"Phase {phase.id!r}: invalid template syntax on line {exc.lineno}: {exc.message}")
