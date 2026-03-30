@@ -969,7 +969,7 @@ def validate_workflow(workflow: Workflow) -> list[str]:
     defined_vars = set(workflow.vars)
     try:
         recursive_vars = json.dumps(workflow.vars, default=repr) is None
-    except ValueError as exc:
+    except (TypeError, ValueError) as exc:
         recursive_vars = str(exc) == "Circular reference detected"
     for phase in workflow.phases:
         # Duplicate ID check
