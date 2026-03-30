@@ -984,6 +984,9 @@ class TestTemplateVars:
     def test_apply_vars_basic(self):
         assert apply_vars("Hello {{NAME}}", {"NAME": "world"}) == "Hello world"
 
+    def test_apply_vars_supports_jinja_filters(self):
+        assert apply_vars("Hello {{ NAME|upper }}", {"NAME": "world"}) == "Hello WORLD"
+
     def test_apply_vars_multiple(self):
         result = apply_vars("{{A}} and {{B}}", {"A": "foo", "B": "bar"})
         assert result == "foo and bar"
@@ -1268,6 +1271,16 @@ class TestExpandMultiVars:
         # Original phases unchanged, no new parallel groups
         assert [p.id for p in result.phases] == ["a", "b"]
         assert len(result.parallel_groups) == 1
+
+    def test_expand_multi_vars_renders_with_workflow_vars(self):
+        """Expansion evaluates Jinja2 expressions with existing workflow vars too."""
+        wf = Workflow(
+            name="test",
+            phases=[Phase(id="build", type="implement", prompt="{% if ENABLED %}Build {{ TARGET|upper }}.{% endif %}")],
+            vars={"ENABLED": "yes"},
+        )
+        result = expand_multi_vars(wf, {"TARGET": ["linux", "windows"]})
+        assert [p.prompt for p in result.phases] == ["Build LINUX.", "Build WINDOWS."]
 
     def test_preserves_workflow_fields(self):
         """expand_multi_vars preserves all workflow fields."""

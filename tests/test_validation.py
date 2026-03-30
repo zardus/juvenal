@@ -333,6 +333,21 @@ class TestTemplateVarValidation:
         errors = validate_workflow(wf)
         assert any("PROJECT" in e and "no value defined" in e for e in errors)
 
+    def test_undefined_var_in_jinja_expression(self):
+        wf = Workflow(
+            name="test",
+            phases=[
+                Phase(
+                    id="build",
+                    type="implement",
+                    prompt="{% if ENABLED %}Build {{ PROJECT|upper }}.{% endif %}",
+                )
+            ],
+            vars={"ENABLED": "yes"},
+        )
+        errors = validate_workflow(wf)
+        assert any("PROJECT" in e and "no value defined" in e for e in errors)
+
     def test_undefined_var_in_run(self):
         wf = Workflow(
             name="test",
