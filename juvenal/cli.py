@@ -135,25 +135,20 @@ def build_parser() -> argparse.ArgumentParser:
 
 def _parse_define_value(raw: str) -> object:
     """Parse simple scalar and collection values for Jinja templates."""
-    if raw == "":
-        return raw
-    lowered = raw.lower()
-    if lowered == "true":
-        return True
-    if lowered == "false":
-        return False
-    if lowered in {"null", "none", "~"}:
-        return None
-    if raw[0] in "[{\"'":
-        try:
-            return yaml.safe_load(raw)
-        except yaml.YAMLError:
-            return raw
-    for cast in (int, float):
-        try:
-            return cast(raw)
-        except ValueError:
-            pass
+    if raw:
+        lowered = raw.lower()
+        if lowered in {"true", "false", "null", "none", "~"}:
+            return {"true": True, "false": False}.get(lowered)
+        if raw[0] in "[{\"'":
+            try:
+                return yaml.safe_load(raw)
+            except yaml.YAMLError:
+                return raw
+        for cast in (int, float):
+            try:
+                return cast(raw)
+            except ValueError:
+                pass
     return raw
 
 

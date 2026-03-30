@@ -3,12 +3,17 @@
 from __future__ import annotations
 
 import itertools
+import re
 import shutil
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 
 import yaml
-from jinja2 import Environment, TemplateSyntaxError, Undefined, meta
+from jinja2 import TemplateSyntaxError, Undefined, meta
+from jinja2.sandbox import ImmutableSandboxedEnvironment
+
+_UNRESOLVED_TEMPLATE_VAR_RE = re.compile(r"\{\{\s*([A-Za-z_][A-Za-z0-9_]*)\b")
 
 
 class PreservePlaceholderUndefined(Undefined):
@@ -24,7 +29,16 @@ class TemplateRenderError(ValueError):
     """Raised when template rendering fails."""
 
 
-_JINJA_ENV = Environment(autoescape=False, keep_trailing_newline=True, undefined=PreservePlaceholderUndefined)
+class _Sandbox(ImmutableSandboxedEnvironment):
+    def is_safe_attribute(self, obj, attr, value):
+        return (
+            isinstance(obj, Mapping)
+            and attr in {"get", "items", "keys", "values"}
+            and super().is_safe_attribute(obj, attr, value)
+        )
+
+
+_JINJA_ENV = _Sandbox(autoescape=False, keep_trailing_newline=True, undefined=PreservePlaceholderUndefined)
 
 
 def template_vars(text: str) -> set[str]:
@@ -62,6 +76,10 @@ def _substitute_known_template_vars(text: str, vars: dict[str, object]) -> str:
         pass
 
     return substituted
+
+
+def _unresolved_template_vars(text: str, vars: dict[str, object]) -> set[str]:
+    return {m.group(1) for m in _UNRESOLVED_TEMPLATE_VAR_RE.finditer(apply_vars(text, vars))}
 
 
 @dataclass
@@ -1018,25 +1036,27 @@ def validate_workflow(workflow: Workflow) -> list[str]:
         if not url.startswith(("http://", "https://")):
             errors.append(f"notify URL must start with http:// or https://, got {url!r}")
 
-    # Template validation: syntax must parse, referenced vars must be defined, and rendering must succeed.
-    defined_vars = set(workflow.vars)
+    # Template validation: syntax must parse, render must succeed, and unresolved placeholders must be defined.
     for phase in workflow.phases:
-        for text in (phase.prompt, phase.run or ""):
-            if not text:
-                continue
-            try:
-                undefined = template_vars(text) - defined_vars
-            except TemplateSyntaxError as exc:
-                errors.append(f"Phase {phase.id!r}: invalid template syntax on line {exc.lineno}: {exc.message}")
-                continue
-            for var_name in sorted(undefined):
-                errors.append(f"Phase {phase.id!r}: template variable {{{{{var_name}}}}} has no value defined")
-            if undefined:
-                continue
-            try:
-                apply_vars(text, workflow.vars)
-            except TemplateRenderError as exc:
-                errors.append(f"Phase {phase.id!r}: template render failed: {exc}")
+        try:
+            if phase.prompt:
+                template_vars(phase.prompt)
+            if phase.run:
+                template_vars(phase.run)
+        except TemplateSyntaxError as exc:
+            errors.append(f"Phase {phase.id!r}: invalid template syntax on line {exc.lineno}: {exc.message}")
+            continue
+        try:
+            unresolved = set()
+            if phase.prompt:
+                unresolved.update(_unresolved_template_vars(phase.prompt, workflow.vars))
+            if phase.run:
+                unresolved.update(_unresolved_template_vars(phase.run, workflow.vars))
+        except TemplateRenderError as exc:
+            errors.append(f"Phase {phase.id!r}: template render failed: {exc}")
+            continue
+        for var_name in sorted(unresolved):
+            errors.append(f"Phase {phase.id!r}: template variable {{{{{var_name}}}}} has no value defined")
 
     return errors
 

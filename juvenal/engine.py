@@ -16,7 +16,7 @@ from juvenal.checkers import NO_VERDICT_REASON, parse_verdict, run_script
 from juvenal.display import Display
 from juvenal.notifications import build_notification_payload, send_webhook
 from juvenal.state import PhaseState, PipelineState
-from juvenal.workflow import ParallelGroup, Phase, Workflow, apply_vars
+from juvenal.workflow import ParallelGroup, Phase, TemplateRenderError, Workflow, apply_vars
 
 
 @dataclass
@@ -225,6 +225,16 @@ class Engine:
             self._send_notifications(False, bounces)
             return 1
 
+        except TemplateRenderError as e:
+            self.state.mark_failed(phases[min(phase_idx, len(phases) - 1)].id)
+            self.state.completed_at = time.time()
+            self.state.save()
+            self.display.step_fail(phases[min(phase_idx, len(phases) - 1)].id, str(e)[:500])
+            self.display.pipeline_done(False)
+            self.display.run_summary(self.state, bounces)
+            self._send_notifications(False, bounces)
+            return 1
+
         except KeyboardInterrupt:
             self.backend.kill_active()
             self.state.save()
@@ -316,10 +326,9 @@ class Engine:
 
     def _run_interactive_loop(self, phase: Phase, attempt: int, failure_context: str) -> PhaseResult:
         """Run an agent-driven Q&A loop. Agent asks questions, user answers, agent updates plan."""
+        self.display.step_start("interactive")
         prompt = phase.render_prompt(failure_context=failure_context, vars=self.workflow.vars)
         prompt = self._INTERACTIVE_PREAMBLE + prompt
-
-        self.display.step_start("interactive")
         result = self.backend.run_agent(
             prompt,
             working_dir=self.workflow.working_dir,
