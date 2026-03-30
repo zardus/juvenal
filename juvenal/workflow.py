@@ -62,9 +62,7 @@ _JINJA_ENV = _Sandbox(autoescape=False, keep_trailing_newline=True, undefined=Pr
 
 
 def template_vars(text: str) -> set[str]:
-    if not text:
-        return set()
-    return meta.find_undeclared_variables(_JINJA_ENV.parse(text))
+    return set() if not text else meta.find_undeclared_variables(_JINJA_ENV.parse(text))
 
 
 def apply_vars(text: str, vars: dict[str, str] | None) -> str:
@@ -82,18 +80,15 @@ def _sub_vars(text: str, vars: dict[str, str]) -> str:
     if not replaceable:
         return text
 
-    tokens: list[str] = []
-    for _, token_type, value in _JINJA_ENV.lex(text):
-        tokens.append(repr(vars[value]) if token_type == "name" and value in replaceable else value)
-    substituted = "".join(tokens)
+    substituted = "".join(
+        repr(vars[value]) if token_type == "name" and value in replaceable else value
+        for _, token_type, value in _JINJA_ENV.lex(text)
+    )
 
     try:
-        if template_vars(substituted) <= set(vars):
-            return apply_vars(substituted, vars)
+        return apply_vars(substituted, vars) if template_vars(substituted) <= set(vars) else substituted
     except (TemplateSyntaxError, TemplateRenderError):
-        pass
-
-    return substituted
+        return substituted
 
 
 def _unresolved_template_vars(text: str, vars: dict[str, str]) -> set[str]:
@@ -103,10 +98,7 @@ def _unresolved_template_vars(text: str, vars: dict[str, str]) -> set[str]:
 def _control_template_vars(text: str) -> set[str]:
     found = set()
     for if_expr, loop_var, loop_expr, cond_expr in _CONTROL_EXPR_RE.findall(text):
-        expr = if_expr or loop_expr or cond_expr
-        if not expr:
-            continue
-        expr = expr.strip()
+        expr = (if_expr or loop_expr or cond_expr).strip()
         if not _SKIP_CONTROL_EXPR_RE.fullmatch(expr):
             found.update(template_vars(f"{{{{ {expr} }}}}") - ({loop_var} if loop_expr else set()))
     return found
@@ -1077,23 +1069,14 @@ def validate_workflow(workflow: Workflow) -> list[str]:
             errors.append("Phase %r: template render failed: template variables contain recursive data" % phase.id)
             continue
         try:
-            if phase.prompt:
-                template_vars(phase.prompt)
-            if phase.run:
-                template_vars(phase.run)
+            missing = set()
+            for text in filter(None, (phase.prompt, phase.run)):
+                template_vars(text)
+                missing.update(_control_template_vars(text) - defined_vars)
+                missing.update(_unresolved_template_vars(text, workflow.vars) - _optional_output_vars(text))
         except TemplateSyntaxError as exc:
             errors.append(f"Phase {phase.id!r}: invalid template syntax on line {exc.lineno}: {exc.message}")
             continue
-        try:
-            missing = set()
-            if phase.prompt:
-                missing.update(_control_template_vars(phase.prompt) - defined_vars)
-                missing.update(
-                    _unresolved_template_vars(phase.prompt, workflow.vars) - _optional_output_vars(phase.prompt)
-                )
-            if phase.run:
-                missing.update(_control_template_vars(phase.run) - defined_vars)
-                missing.update(_unresolved_template_vars(phase.run, workflow.vars) - _optional_output_vars(phase.run))
         except TemplateRenderError as exc:
             errors.append(f"Phase {phase.id!r}: template render failed: {exc}")
             continue

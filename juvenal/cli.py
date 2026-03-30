@@ -136,11 +136,9 @@ def build_parser() -> argparse.ArgumentParser:
 def _parse_define_value(raw: str) -> object:
     if not raw:
         return raw
-    if (lowered := raw.lower()) in {"true", "false", "null", "none", "~"}:
-        return {"true": True, "false": False}.get(lowered)
-    if raw[0] in "[{\"'":
+    if (lowered := raw.lower()) in {"true", "false", "null", "none", "~"} or raw[0] in "[{\"'":
         try:
-            return yaml.safe_load(raw)
+            return yaml.safe_load("null" if lowered == "none" else raw)
         except yaml.YAMLError as exc:
             raise SystemExit(f"Error: invalid -D value {raw!r}: {exc}") from exc
     for cast in (int, float):

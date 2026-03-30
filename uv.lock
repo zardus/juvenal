@@ -33,10 +33,23 @@ wheels = [
 ]
 
 [[package]]
+name = "jinja2"
+version = "3.1.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "markupsafe" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/1f/93/99a76d0fa1a8fc14442a6421abee323f8d15964979336eabd2a1834e9118/Jinja2-3.1.0.tar.gz", hash = "sha256:a2f09a92f358b96b5f6ca6ecb4502669c4acb55d8733bbb2b2c9c4af5564c605", size = 266923, upload-time = "2022-03-24T14:14:03.573Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/7b/82/743248f82f147e54a404163c7e12969f4c2436bdfe7c39bf6b5c7a273f3f/Jinja2-3.1.0-py3-none-any.whl", hash = "sha256:da424924c069a4013730d8dd010cbecac7e7bb752be388db3741688bffb48dc6", size = 132565, upload-time = "2022-03-24T14:14:01.622Z" },
+]
+
+[[package]]
 name = "juvenal"
-version = "0.3.1"
+version = "0.28.9"
 source = { editable = "." }
 dependencies = [
+    { name = "jinja2" },
     { name = "pyyaml" },
     { name = "rich" },
 ]
@@ -49,6 +62,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
+    { name = "jinja2", specifier = ">=3.1" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0" },
     { name = "pyyaml", specifier = ">=6.0" },
     { name = "rich", specifier = ">=13.0" },
@@ -67,6 +81,12 @@ sdist = { url = "https://files.pythonhosted.org/packages/5b/f5/4ec618ed16cc4f8fb
 wheels = [
     { url = "https://files.pythonhosted.org/packages/94/54/e7d793b573f298e1c9013b8c4dade17d481164aa517d1d7148619c2cedbf/markdown_it_py-4.0.0-py3-none-any.whl", hash = "sha256:87327c59b172c5011896038353a81343b6754500a08cd7a4973bb48c6d578147", size = 87321, upload-time = "2025-08-11T12:57:51.923Z" },
 ]
+
+[[package]]
+name = "markupsafe"
+version = "2.0.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/67/6a/5b3ed5c122e20c33d2562df06faf895a6b91b0a6b96a4626440ffe1d5c8e/MarkupSafe-2.0.0.tar.gz", hash = "sha256:4fae0677f712ee090721d8b17f412f1cbceefbf0dc180fe91bab3232f38b4527", size = 18466, upload-time = "2021-05-11T19:47:18.499Z" }
 
 [[package]]
 name = "mdurl"

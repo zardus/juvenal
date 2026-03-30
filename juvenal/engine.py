@@ -216,20 +216,13 @@ class Engine:
             self._send_notifications(True, bounces)
             return 0
 
-        except PipelineExhausted as e:
-            self.state.mark_failed(e.phase_id)
+        except (PipelineExhausted, TemplateRenderError) as e:
+            phase_id = e.phase_id if isinstance(e, PipelineExhausted) else phases[min(phase_idx, len(phases) - 1)].id
+            self.state.mark_failed(phase_id)
             self.state.completed_at = time.time()
             self.state.save()
-            self.display.pipeline_done(False)
-            self.display.run_summary(self.state, bounces)
-            self._send_notifications(False, bounces)
-            return 1
-
-        except TemplateRenderError as e:
-            self.state.mark_failed(phases[min(phase_idx, len(phases) - 1)].id)
-            self.state.completed_at = time.time()
-            self.state.save()
-            self.display.step_fail(phases[min(phase_idx, len(phases) - 1)].id, str(e)[:500])
+            if isinstance(e, TemplateRenderError):
+                self.display.step_fail(phase_id, str(e)[:500])
             self.display.pipeline_done(False)
             self.display.run_summary(self.state, bounces)
             self._send_notifications(False, bounces)
