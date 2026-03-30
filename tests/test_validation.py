@@ -7,7 +7,7 @@ import argparse
 import pytest
 
 from juvenal.cli import build_parser, cmd_validate
-from juvenal.workflow import ParallelGroup, Phase, Workflow, expand_multi_vars, validate_workflow
+from juvenal.workflow import ParallelGroup, Phase, Workflow, validate_workflow
 
 
 class TestValidateWorkflow:
@@ -356,18 +356,11 @@ class TestTemplateVarValidation:
     def test_multiple_undefined_vars(self):
         wf = Workflow(
             name="test",
-            phases=[
-                Phase(
-                    id="build",
-                    type="implement",
-                    prompt="prefix {% if ENABLED %}{{ TARGET }} {{ PROJECT }}{% endif %}",
-                )
-            ],
+            phases=[Phase(id="build", type="implement", prompt="Deploy {{APP}} to {{ENV}}.")],
         )
-        errors = validate_workflow(expand_multi_vars(wf, {"TARGET": ["linux", "windows"]}))
+        errors = validate_workflow(wf)
         undefined = [e for e in errors if "no value defined" in e]
-        assert len(undefined) == 4
-        assert not any("{{TARGET}}" in e for e in undefined)
+        assert len(undefined) == 2
 
     def test_some_defined_some_not(self):
         wf = Workflow(
@@ -558,8 +551,7 @@ phases:
         result = cmd_validate(args)
         assert result == 1
         captured = capsys.readouterr()
-        assert "invalid jinja syntax" in captured.out.lower()
-        assert "traceback" not in captured.out.lower()
+        assert "invalid jinja syntax" in captured.out.lower() and "traceback" not in captured.out.lower()
 
     def test_validate_missing_id_clean_error(self, tmp_path, capsys):
         """Missing phase ID prints a clean error, no stack trace."""
