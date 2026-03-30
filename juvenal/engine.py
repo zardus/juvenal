@@ -328,6 +328,7 @@ class Engine:
         """Run an agent-driven Q&A loop. Agent asks questions, user answers, agent updates plan."""
         prompt = phase.render_prompt(failure_context=failure_context, vars=self.workflow.vars)
         prompt = self._INTERACTIVE_PREAMBLE + prompt
+
         self.display.step_start("interactive")
         result = self.backend.run_agent(
             prompt,

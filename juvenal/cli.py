@@ -134,7 +134,6 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def _parse_define_value(raw: str) -> object:
-    """Parse simple scalar and collection values for Jinja templates."""
     if not raw:
         return raw
     if (lowered := raw.lower()) in {"true", "false", "null", "none", "~"}:

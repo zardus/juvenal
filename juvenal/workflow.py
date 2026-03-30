@@ -78,7 +78,7 @@ def apply_vars(text: str, vars: dict[str, str] | None) -> str:
         raise TemplateRenderError(str(exc)) from exc
 
 
-def _substitute_known_template_vars(text: str, vars: dict[str, str]) -> str:
+def _sub_vars(text: str, vars: dict[str, str]) -> str:
     """Replace known vars with literals without evaluating remaining template logic."""
     replaceable = template_vars(text) & set(vars)
     if not replaceable:
@@ -903,7 +903,7 @@ def expand_multi_vars(workflow: Workflow, multi_vars: dict[str, list[str]]) -> W
         lanes: list[list[str]] = []
         for combo in combinations:
             combo_vars = dict(combo)
-            suffix = "~".join(f"{k}={v}" for k, v in combo)
+            suffix = "~".join(f"{k}={str(v).lower() if isinstance(v, bool) else v}" for k, v in combo)
             group_old_ids = {p.id for p in group}
             lane_ids: list[str] = []
 
@@ -919,8 +919,8 @@ def expand_multi_vars(workflow: Workflow, multi_vars: dict[str, list[str]]) -> W
                 new_phase = Phase(
                     id=new_id,
                     type=phase.type,
-                    prompt=_substitute_known_template_vars(phase.prompt, combo_vars) if phase.prompt else "",
-                    run=_substitute_known_template_vars(phase.run, combo_vars) if phase.run else phase.run,
+                    prompt=_sub_vars(phase.prompt, workflow.vars | combo_vars) if phase.prompt else "",
+                    run=_sub_vars(phase.run, workflow.vars | combo_vars) if phase.run else phase.run,
                     role=phase.role,
                     bounce_target=new_bounce,
                     bounce_targets=new_bounce_targets,
