@@ -3,24 +3,35 @@
 from __future__ import annotations
 
 import itertools
-import re
 import shutil
 from dataclasses import dataclass, field
 from pathlib import Path
 
 import yaml
+from jinja2 import ChainableUndefined, Environment, meta
 
-_VAR_RE = re.compile(r"\{\{(\w+)\}\}")
+
+class _PassthroughUndefined(ChainableUndefined):
+    """Keep unresolved vars readable for later renders during partial expansion."""
+
+    def __str__(self) -> str:
+        return f"{{{{{self._undefined_name}}}}}"
+
+
+_JINJA_ENV = Environment(undefined=_PassthroughUndefined, keep_trailing_newline=True)
+
+
+def _find_template_vars(text: str) -> set[str]:
+    """Return undeclared variable names referenced by a Jinja2 template string."""
+    return meta.find_undeclared_variables(_JINJA_ENV.parse(text))
 
 
 def apply_vars(text: str, vars: dict[str, str]) -> str:
-    """Replace {{VAR}} placeholders with values from vars dict.
+    """Render Jinja2 template text with the provided vars.
 
     Unrecognized variables pass through unchanged.
     """
-    if not vars:
-        return text
-    return _VAR_RE.sub(lambda m: vars.get(m.group(1), m.group(0)), text)
+    return _JINJA_ENV.from_string(text).render(vars)
 
 
 @dataclass
@@ -51,7 +62,7 @@ class Phase:
     def render_prompt(self, failure_context: str = "", vars: dict[str, str] | None = None) -> str:
         """Render the implementation prompt, injecting failure context on retry."""
         text = self.prompt
-        if vars:
+        if vars is not None:
             text = apply_vars(text, vars)
         if failure_context:
             text += (
@@ -65,7 +76,7 @@ class Phase:
         """Render the checker prompt for check phases."""
         if self.prompt:
             text = self.prompt
-            if vars:
+            if vars is not None:
                 text = apply_vars(text, vars)
             return text
         if self.role:
@@ -794,7 +805,7 @@ def expand_multi_vars(workflow: Workflow, multi_vars: dict[str, list[str]]) -> W
         all_text = parent.prompt + (parent.run or "")
         for child in group[1:]:
             all_text += child.prompt + (child.run or "")
-        used_vars = set(_VAR_RE.findall(all_text))
+        used_vars = _find_template_vars(all_text)
         referenced = [k for k in multi_vars if k in used_vars]
 
         if not referenced:
@@ -808,6 +819,8 @@ def expand_multi_vars(workflow: Workflow, multi_vars: dict[str, list[str]]) -> W
         lanes: list[list[str]] = []
         for combo in combinations:
             combo_vars = dict(combo)
+            render_vars = dict(workflow.vars)
+            render_vars.update(combo_vars)
             suffix = "~".join(f"{k}={v}" for k, v in combo)
             group_old_ids = {p.id for p in group}
             lane_ids: list[str] = []
@@ -824,8 +837,8 @@ def expand_multi_vars(workflow: Workflow, multi_vars: dict[str, list[str]]) -> W
                 new_phase = Phase(
                     id=new_id,
                     type=phase.type,
-                    prompt=apply_vars(phase.prompt, combo_vars) if phase.prompt else "",
-                    run=apply_vars(phase.run, combo_vars) if phase.run else phase.run,
+                    prompt=apply_vars(phase.prompt, render_vars) if phase.prompt else "",
+                    run=apply_vars(phase.run, render_vars) if phase.run else phase.run,
                     role=phase.role,
                     bounce_target=new_bounce,
                     bounce_targets=new_bounce_targets,
@@ -977,7 +990,7 @@ def validate_workflow(workflow: Workflow) -> list[str]:
     defined_vars = set(workflow.vars.keys())
     for phase in workflow.phases:
         all_text = phase.prompt + (phase.run or "")
-        undefined = set(_VAR_RE.findall(all_text)) - defined_vars
+        undefined = _find_template_vars(all_text) - defined_vars
         for var_name in sorted(undefined):
             errors.append(f"Phase {phase.id!r}: template variable {{{{{var_name}}}}} has no value defined")
 
