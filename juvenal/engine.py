@@ -221,8 +221,7 @@ class Engine:
             self.state.mark_failed(phase_id)
             self.state.completed_at = time.time()
             self.state.save()
-            if isinstance(e, TemplateRenderError):
-                self.display.step_fail(phase_id, str(e)[:500])
+            isinstance(e, TemplateRenderError) and self.display.step_fail(phase_id, str(e)[:500])
             self.display.pipeline_done(False)
             self.display.run_summary(self.state, bounces)
             self._send_notifications(False, bounces)
@@ -249,6 +248,7 @@ class Engine:
 
         # Interactive mode: agent-driven Q&A loop
         if phase.interactive and self.interactive:
+            self.display.step_start("interactive")
             return self._run_interactive_loop(phase, attempt, failure_context)
 
         # When preserve_context_on_bounce is enabled and we're bouncing back to this
@@ -322,7 +322,6 @@ class Engine:
         prompt = phase.render_prompt(failure_context=failure_context, vars=self.workflow.vars)
         prompt = self._INTERACTIVE_PREAMBLE + prompt
 
-        self.display.step_start("interactive")
         result = self.backend.run_agent(
             prompt,
             working_dir=self.workflow.working_dir,

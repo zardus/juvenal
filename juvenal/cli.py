@@ -2,6 +2,7 @@
 
 import argparse
 import sys
+from contextlib import suppress
 
 import yaml
 
@@ -142,10 +143,8 @@ def _parse_define_value(raw: str) -> object:
         except yaml.YAMLError as exc:
             raise SystemExit(f"Error: invalid -D value {raw!r}: {exc}") from exc
     for cast in (int, float):
-        try:
+        with suppress(ValueError):
             return cast(raw)
-        except ValueError:
-            pass
     return raw
 
 
