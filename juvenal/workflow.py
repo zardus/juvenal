@@ -74,7 +74,7 @@ def _sub_vars(text: str, vars: dict[str, str]) -> str:
         return substituted
 
 
-_unresolved_template_vars = lambda text, vars: set(_UNRESOLVED_TEMPLATE_VAR_RE.findall(apply_vars(text, vars)))  # noqa: E731
+_unresolved_template_vars = lambda text, vars: template_vars(text) & set(_UNRESOLVED_TEMPLATE_VAR_RE.findall(apply_vars(text, vars)))  # noqa: E501,E731  # fmt: skip
 
 
 def _control_template_vars(text: str) -> set[str]:
