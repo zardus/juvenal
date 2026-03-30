@@ -6,7 +6,6 @@ import itertools
 import json
 import re
 import shutil
-from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -42,7 +41,7 @@ class _Sandbox(ImmutableSandboxedEnvironment):
         else super(_Sandbox, self).getattr(obj, attr)
     )
     is_safe_attribute = lambda self, obj, attr, value: (  # noqa: E731
-        isinstance(obj, Mapping)
+        isinstance(obj, dict)
         and attr in {"get", "items", "keys", "values"}
         and super(_Sandbox, self).is_safe_attribute(obj, attr, value)
     )
@@ -892,8 +891,8 @@ def expand_multi_vars(workflow: Workflow, multi_vars: dict[str, list[str]]) -> W
                 new_phase = Phase(
                     id=new_id,
                     type=phase.type,
-                    prompt=_sub_vars(phase.prompt, workflow.vars | combo_vars) if phase.prompt else "",
-                    run=_sub_vars(phase.run, workflow.vars | combo_vars) if phase.run else phase.run,
+                    prompt=(prompt := _sub_vars(phase.prompt, workflow.vars | combo_vars) if phase.prompt else ""),
+                    run=(run := _sub_vars(phase.run, workflow.vars | combo_vars) if phase.run else phase.run),
                     role=phase.role,
                     bounce_target=new_bounce,
                     bounce_targets=new_bounce_targets,
@@ -904,10 +903,11 @@ def expand_multi_vars(workflow: Workflow, multi_vars: dict[str, list[str]]) -> W
                     workflow_file=phase.workflow_file,
                     workflow_dir=phase.workflow_dir,
                 )
+                if phase is parent and not f"{prompt}{run or ''}".strip(): break  # noqa: E701  # fmt: skip
                 new_phases.append(new_phase)
                 lane_ids.append(new_id)
 
-            lanes.append(lane_ids)
+            lane_ids and lanes.append(lane_ids)
 
         new_parallel_groups.append(ParallelGroup(lanes=lanes))
 

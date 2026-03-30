@@ -1265,7 +1265,7 @@ class TestExpandMultiVars:
         result = expand_multi_vars(wf, {"A": ["x", "y"], "B": ["1", "2"]})
         assert len(result.phases) == 4
         prompts = {p.prompt for p in result.phases}
-        assert prompts == {"Build x on 1.", "Build x on 2.", "Build y on 1.", "Build y on 2."}
+        assert prompts == {"Build x on 1.", "Build x on 2.", "Build y on 1.", "Build y on 2."} and (wf := expand_multi_vars(Workflow(name="test", phases=[Phase(id="build", prompt="{% if ENABLED %}Build {{TARGET}}{% endif %}\n")]), {"TARGET": ["linux", "win"], "ENABLED": [True, False]})) and [p.prompt for p in wf.phases] == ["Build linux\n", "Build win\n"] and not __import__("juvenal.workflow", fromlist=["validate_workflow"]).validate_workflow(wf)  # noqa: E501  # fmt: skip
 
     def test_empty_multi_vars_is_noop(self):
         """Empty multi_vars returns workflow unchanged."""

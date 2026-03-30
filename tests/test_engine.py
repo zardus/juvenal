@@ -1930,8 +1930,7 @@ class TestTemplateVarsEngine:
             engine.run()
             mock_run.assert_called_once()
             assert mock_run.call_args[0][0] == "pytest tests/unit -x"
-        err = Engine(Workflow(name="test", phases=[Phase(id="test", type="script", run="{{ 1 / 0 }}")], vars={}), state_file=str(tmp_path / "err.json"), plain=True)  # noqa: E501  # fmt: skip
-        assert err.run() == 1
+        assert Engine(Workflow(name="test", phases=[Phase(id="test", type="script", run="{{ 1 / 0 }}")], vars={}), state_file=str(tmp_path / "err.json"), plain=True).run() == 1  # noqa: E501  # fmt: skip
         assert "division by zero" in (out := capsys.readouterr().out) and "Traceback" not in out
 
     def test_vars_unrecognized_passthrough(self, mock_backend, tmp_path):
