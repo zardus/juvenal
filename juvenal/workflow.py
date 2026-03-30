@@ -19,7 +19,7 @@ _CONTROL_EXPR_RE = re.compile(
     r"{%\s*(?:if|elif)\s+(.+?)\s*%}|{%\s*for\s+(\w+)\s+in\s+(.+?)\s*%}|{{.*?\s+if\s+(.+?)\s+else\b", re.DOTALL
 )
 _SKIP_CONTROL_EXPR_RE = re.compile(
-    r"(?:\w+\s+is\s+(?:not\s+)?(?:defined|undefined)|\w+\|default(?:\(.*\))?|(\w+)\s+is\s+defined\s+and\s+\1|(\w+)\s+is\s+(?:undefined|not\s+defined)\s+or\s+\2)"
+    r"(?:\w+\s+is\s+(?:not\s+)?(?:defined|undefined)|\w+\|default(?:\(.*\))?|(\w+)\s+is\s+defined\s+and\s+\1(?:\b.*)?|(\w+)\s+is\s+(?:undefined|not\s+defined)\s+or\s+\2)"
 )
 _OPTIONAL_OUTPUT_RE = re.compile(
     r"{%\s*if\s+([A-Za-z_][A-Za-z0-9_]*)\s+is\s+(?:undefined|not\s+defined)(?:\s+or\s+\1)?\s*%}.*?{{\s*\1\b", re.DOTALL
@@ -96,12 +96,12 @@ def _unresolved_template_vars(text: str, vars: dict[str, str]) -> set[str]:
 
 
 def _control_template_vars(text: str) -> set[str]:
-    found = set()
+    found, guarded = set(), set(re.findall(r"{%\s*if\s+(\w+)\s+is\s+(?:undefined|not\s+defined)\s*%}", text))
     for if_expr, loop_var, loop_expr, cond_expr in _CONTROL_EXPR_RE.findall(text):
         expr = (if_expr or loop_expr or cond_expr).strip()
         if not _SKIP_CONTROL_EXPR_RE.fullmatch(expr):
             found.update(template_vars(f"{{{{ {expr} }}}}") - ({loop_var} if loop_expr else set()))
-    return found
+    return found - guarded
 
 
 def _optional_output_vars(text: str) -> set[str]:
