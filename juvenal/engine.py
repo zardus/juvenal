@@ -397,7 +397,7 @@ class Engine:
         self.display.step_start(f"script: {phase.id}")
 
         timeout = phase.timeout or 600
-        run_cmd = apply_vars(phase.run, self.workflow.vars) if self.workflow.vars else phase.run
+        run_cmd = apply_vars(phase.run or "", self.workflow.vars)
         result = run_script(run_cmd, self.workflow.working_dir, timeout=timeout, env=phase.env or None)
         self.state.log_step(phase.id, attempt, "script", result.output, input=phase.run)
 
