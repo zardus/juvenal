@@ -142,8 +142,8 @@ def _parse_define_value(raw: str) -> object:
     if raw[0] in "[{\"'":
         try:
             return yaml.safe_load(raw)
-        except yaml.YAMLError:
-            return raw
+        except yaml.YAMLError as exc:
+            raise SystemExit(f"Error: invalid -D value {raw!r}: {exc}") from exc
     for cast in (int, float):
         try:
             return cast(raw)
