@@ -436,7 +436,7 @@ class Engine:
         # Inject the parent implement phase's directions so the checker knows what to verify
         parent_prompt = self._get_parent_prompt(phase, phases, phase_idx)
         if parent_prompt:
-            if self.workflow.vars:
+            if self.workflow.vars is not None:
                 parent_prompt = apply_vars(parent_prompt, self.workflow.vars)
             prompt = (
                 f"You are a CHECKER. You must NOT write any code or implement anything. "

@@ -62,7 +62,6 @@ _JINJA_ENV = _Sandbox(autoescape=False, keep_trailing_newline=True, undefined=Pr
 
 
 def template_vars(text: str) -> set[str]:
-    """Return Jinja variables referenced by a template."""
     if not text:
         return set()
     return meta.find_undeclared_variables(_JINJA_ENV.parse(text))
@@ -79,7 +78,6 @@ def apply_vars(text: str, vars: dict[str, str] | None) -> str:
 
 
 def _sub_vars(text: str, vars: dict[str, str]) -> str:
-    """Replace known vars with literals without evaluating remaining template logic."""
     replaceable = template_vars(text) & set(vars)
     if not replaceable:
         return text
