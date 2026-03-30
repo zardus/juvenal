@@ -1,7 +1,6 @@
 """Juvenal CLI — orchestrate AI coding agents through verified phases."""
 
 import argparse
-import re
 import sys
 
 import yaml
@@ -9,8 +8,6 @@ import yaml
 from juvenal import __version__
 
 STANDARD_CHECKERS = ["tester", "senior-tester", "senior-engineer", "architect", "pm"]
-_INT_LITERAL_RE = re.compile(r"[-+]?(?:0|[1-9][0-9]*)$")
-_FLOAT_LITERAL_RE = re.compile(r"[-+]?(?:(?:[0-9]+\.[0-9]*|\.[0-9]+)(?:[eE][-+]?[0-9]+)?|[0-9]+[eE][-+]?[0-9]+)$")
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -60,7 +57,7 @@ def build_parser() -> argparse.ArgumentParser:
         help=argparse.SUPPRESS,  # deprecated no-op, kept for compatibility
     )
     run_p.add_argument(
-        "-D", action="append", default=[], metavar="VAR=VAL", dest="defines", help="Set Jinja2 template variable"
+        "-D", action="append", default=[], metavar="VAR=VAL", dest="defines", help="Set template variable"
     )
     run_p.add_argument("--serialize", action="store_true", help="Disable all parallelization")
 
@@ -107,7 +104,7 @@ def build_parser() -> argparse.ArgumentParser:
         help=argparse.SUPPRESS,  # deprecated no-op, kept for compatibility
     )
     do_p.add_argument(
-        "-D", action="append", default=[], metavar="VAR=VAL", dest="defines", help="Set Jinja2 template variable"
+        "-D", action="append", default=[], metavar="VAR=VAL", dest="defines", help="Set template variable"
     )
     do_p.add_argument("--serialize", action="store_true", help="Disable all parallelization")
 
@@ -137,29 +134,26 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def _parse_define_value(raw: str) -> object:
-    """Parse a CLI -D value into a native Jinja-friendly value."""
-    stripped = raw.strip()
-    lowered = stripped.lower()
-
-    if stripped == "":
+    """Parse simple scalar and collection values for Jinja templates."""
+    if raw == "":
         return raw
+    lowered = raw.lower()
     if lowered == "true":
         return True
     if lowered == "false":
         return False
     if lowered in {"null", "none", "~"}:
         return None
-    if stripped[0] in "[{\"'":
+    if raw[0] in "[{\"'":
         try:
-            return yaml.safe_load(stripped)
-        except yaml.YAMLError as exc:
-            print(f"Error: invalid -D value {raw!r}: {exc}")
-            sys.exit(1)
-
-    if _INT_LITERAL_RE.fullmatch(stripped):
-        return int(stripped)
-    if _FLOAT_LITERAL_RE.fullmatch(stripped):
-        return float(stripped)
+            return yaml.safe_load(raw)
+        except yaml.YAMLError:
+            return raw
+    for cast in (int, float):
+        try:
+            return cast(raw)
+        except ValueError:
+            pass
     return raw
 
 
@@ -217,14 +211,7 @@ def _expand_standard_checkers(args: argparse.Namespace) -> None:
 
 def cmd_run(args: argparse.Namespace) -> int:
     from juvenal.engine import Engine
-    from juvenal.workflow import (
-        Phase,
-        TemplateRenderError,
-        Workflow,
-        inject_checkers,
-        inject_implementer,
-        validate_workflow,
-    )
+    from juvenal.workflow import Phase, Workflow, inject_checkers, inject_implementer, validate_workflow
 
     # Parse --implementer flags into role-only vs inline phases
     inline_phases: list[Phase] = []
@@ -265,12 +252,8 @@ def cmd_run(args: argparse.Namespace) -> int:
         print('Error: workflow path is required (or use --implementer role:"prompt")')
         return 1
 
-    try:
-        if args.defines:
-            workflow = _apply_defines(workflow, _parse_defines(args.defines))
-    except TemplateRenderError as e:
-        print(f"Error: {e}")
-        return 1
+    if args.defines:
+        workflow = _apply_defines(workflow, _parse_defines(args.defines))
     _expand_standard_checkers(args)
     if args.checker:
         workflow = inject_checkers(workflow, args.checker)
@@ -363,18 +346,14 @@ def cmd_do(args: argparse.Namespace) -> int:
     import tempfile
 
     from juvenal.engine import Engine, plan_workflow
-    from juvenal.workflow import TemplateRenderError, inject_checkers, inject_implementer
+    from juvenal.workflow import inject_checkers, inject_implementer
 
     with tempfile.NamedTemporaryFile(suffix=".yaml", delete=False, mode="w") as f:
         plan_workflow(args.goal, f.name, args.backend, plain=args.plain, interactive=args.interactive)
         workflow = _load_workflow_or_exit(f.name)
 
-    try:
-        if args.defines:
-            workflow = _apply_defines(workflow, _parse_defines(args.defines))
-    except TemplateRenderError as e:
-        print(f"Error: {e}")
-        return 1
+    if args.defines:
+        workflow = _apply_defines(workflow, _parse_defines(args.defines))
     if args.implementer:
         workflow = inject_implementer(workflow, args.implementer)
     _expand_standard_checkers(args)
@@ -413,15 +392,11 @@ def cmd_init(args: argparse.Namespace) -> int:
 
 def cmd_validate(args: argparse.Namespace) -> int:
     from juvenal.engine import Engine
-    from juvenal.workflow import TemplateRenderError, inject_checkers, inject_implementer
+    from juvenal.workflow import inject_checkers, inject_implementer
 
     workflow = _load_workflow_or_exit(args.workflow)
-    try:
-        if args.defines:
-            workflow = _apply_defines(workflow, _parse_defines(args.defines))
-    except TemplateRenderError as e:
-        print(f"Error: {e}")
-        return 1
+    if args.defines:
+        workflow = _apply_defines(workflow, _parse_defines(args.defines))
     if args.implementer:
         workflow = inject_implementer(workflow, args.implementer)
     _expand_standard_checkers(args)
