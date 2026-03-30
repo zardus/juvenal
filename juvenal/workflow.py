@@ -16,7 +16,7 @@ from jinja2.sandbox import ImmutableSandboxedEnvironment
 
 _UNRESOLVED_TEMPLATE_VAR_RE = re.compile(r"\{\{\s*([A-Za-z_][A-Za-z0-9_]*)\b")
 _CONTROL_EXPR_RE = re.compile(
-    r"{%\s*(?:if|elif)\s+(.+?)\s*%}|{%\s*for\s+(\w+)\s+in\s+(.+?)\s*%}|{{.*?\s+if\s+(.+?)\s+else\b", re.DOTALL
+    r"{%\s*(?:if|elif)\s+(.+?)\s*%}|{%\s*for\s+(.+?)\s+in\s+(.+?)\s*%}|{{.*?\s+if\s+(.+?)\s+else\b", re.DOTALL
 )
 _SKIP_CONTROL_EXPR_RE = re.compile(
     r"(?:\w+\s+is\s+(?:not\s+)?(?:defined|undefined)|\w+\|default(?:\(.*\))?|(\w+)\s+is\s+defined\s+and\s+\1(?:\b.*)?|(\w+)\s+is\s+(?:undefined|not\s+defined)\s+or\s+\2)"
@@ -100,7 +100,7 @@ def _control_template_vars(text: str) -> set[str]:
     for if_expr, loop_var, loop_expr, cond_expr in _CONTROL_EXPR_RE.findall(text):
         expr = (if_expr or loop_expr or cond_expr).strip()
         if not _SKIP_CONTROL_EXPR_RE.fullmatch(expr):
-            found.update(template_vars(f"{{{{ {expr} }}}}") - ({loop_var} if loop_expr else set()))
+            found.update(template_vars(f"{{{{ {expr} }}}}") - set(re.findall(r"\w+", loop_var)))
     return found - guarded
 
 
