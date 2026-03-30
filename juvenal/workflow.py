@@ -38,11 +38,8 @@ class _Sandbox(ImmutableSandboxedEnvironment):
         if isinstance(obj, Undefined)
         else super(_Sandbox, self).getattr(obj, attr)
     )
-    is_safe_attribute = lambda self, obj, attr, value: (  # noqa: E731
-        isinstance(obj, dict)
-        and attr in {"get", "items", "keys", "values"}
-        and super(_Sandbox, self).is_safe_attribute(obj, attr, value)
-    )
+    is_safe_attribute = lambda self, obj, attr, value: isinstance(obj, dict) and attr in {"get", "items", "keys", "values"} and super(_Sandbox, self).is_safe_attribute(obj, attr, value)  # noqa: E501,E731  # fmt: skip
+    is_safe_callable = lambda self, obj: False  # noqa: E731
 
 
 _JINJA_ENV = _Sandbox(autoescape=False, keep_trailing_newline=True, undefined=PreservePlaceholderUndefined)
