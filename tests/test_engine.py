@@ -1896,7 +1896,11 @@ class TestTemplateVarsEngine:
 
     def test_empty_vars_still_render_implement_prompt(self, mock_backend, tmp_path):
         mock_backend.add_response(exit_code=0, output="done")
-        workflow = Workflow(name="test", phases=[Phase(id="build", type="implement", prompt="{{ 'ok'|upper }}")], vars={})
+        workflow = Workflow(
+            name="test",
+            phases=[Phase(id="build", type="implement", prompt="{{ 'ok'|upper }}")],
+            vars={},
+        )
         engine = Engine(workflow, state_file=str(tmp_path / "state.json"), plain=True)
         engine.backend = mock_backend
         engine.run()
