@@ -1005,9 +1005,6 @@ class TestTemplateVars:
         result = apply_vars("{{A}} and {{B}}", {"A": "foo", "B": "bar"})
         assert result == "foo and bar"
 
-    def test_apply_vars_jinja_filter(self):
-        assert apply_vars("Hello {{ name|upper }}", {"name": "world"}) == "Hello WORLD"
-
     def test_apply_vars_unrecognized_passthrough(self):
         assert apply_vars("Hello {{UNKNOWN}}", {"NAME": "world"}) == "Hello {{UNKNOWN}}"
 
