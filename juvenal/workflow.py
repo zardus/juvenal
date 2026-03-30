@@ -32,8 +32,7 @@ class PreservePlaceholderUndefined(Undefined):
     __getitem__ = lambda self, key: type(self)(name=f"{self._undefined_name or 'undefined'}[{key!r}]")  # noqa: E731
 
 
-class TemplateRenderError(ValueError):
-    pass
+class TemplateRenderError(ValueError): ...
 
 
 class _Sandbox(ImmutableSandboxedEnvironment):
@@ -861,10 +860,11 @@ def expand_multi_vars(workflow: Workflow, multi_vars: dict[str, list[str]]) -> W
             continue
 
         # Find which multi-value vars this group references
-        used_vars: set[str] = set()
-        for phase in group:
-            used_vars.update(template_vars(phase.prompt))
-            used_vars.update(template_vars(phase.run or ""))
+        try:
+            used_vars = {v for phase in group for text in (phase.prompt, phase.run or "") for v in template_vars(text)}
+        except TemplateSyntaxError:
+            new_phases.extend(group)
+            continue
         referenced = [k for k in multi_vars if k in used_vars]
 
         if not referenced:
