@@ -88,8 +88,8 @@ def _sub_vars(text: str, vars: dict[str, str]) -> str:
     substituted = "".join(tokens)
 
     try:
-        if "{%" not in substituted and not template_vars(substituted):
-            return apply_vars(substituted, {})
+        if template_vars(substituted) <= set(vars):
+            return apply_vars(substituted, vars)
     except (TemplateSyntaxError, TemplateRenderError):
         pass
 
