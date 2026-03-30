@@ -8,7 +8,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 import yaml
-from jinja2 import ChainableUndefined, Environment, meta
+from jinja2 import ChainableUndefined, Environment, TemplateSyntaxError, meta
 
 
 class _PassthroughUndefined(ChainableUndefined):
@@ -23,7 +23,10 @@ _JINJA_ENV = Environment(undefined=_PassthroughUndefined, keep_trailing_newline=
 
 def _find_template_vars(text: str) -> set[str]:
     """Return undeclared variable names referenced by a Jinja2 template string."""
-    return meta.find_undeclared_variables(_JINJA_ENV.parse(text))
+    try:
+        return meta.find_undeclared_variables(_JINJA_ENV.parse(text))
+    except TemplateSyntaxError as e:
+        raise ValueError(f"invalid Jinja syntax on line {e.lineno}: {e.message}") from e
 
 
 def apply_vars(text: str, vars: dict[str, str]) -> str:
@@ -728,6 +731,7 @@ def inject_implementer(workflow: Workflow, role: str) -> Workflow:
     new_phases = []
     for phase in workflow.phases:
         if phase.type == "implement":
+            unresolved = getattr(phase, "_unresolved_template_vars", None)
             phase = Phase(
                 id=phase.id,
                 type=phase.type,
@@ -743,6 +747,8 @@ def inject_implementer(workflow: Workflow, role: str) -> Workflow:
                 workflow_file=phase.workflow_file,
                 workflow_dir=phase.workflow_dir,
             )
+            if unresolved:
+                setattr(phase, "_unresolved_template_vars", set(unresolved))
         new_phases.append(phase)
 
     return Workflow(
@@ -805,7 +811,11 @@ def expand_multi_vars(workflow: Workflow, multi_vars: dict[str, list[str]]) -> W
         all_text = parent.prompt + (parent.run or "")
         for child in group[1:]:
             all_text += child.prompt + (child.run or "")
-        used_vars = _find_template_vars(all_text)
+        try:
+            used_vars = _find_template_vars(all_text)
+        except ValueError:
+            new_phases.extend(group)
+            continue
         referenced = [k for k in multi_vars if k in used_vars]
 
         if not referenced:
@@ -819,14 +829,14 @@ def expand_multi_vars(workflow: Workflow, multi_vars: dict[str, list[str]]) -> W
         lanes: list[list[str]] = []
         for combo in combinations:
             combo_vars = dict(combo)
-            render_vars = dict(workflow.vars)
-            render_vars.update(combo_vars)
+            render_vars = dict(workflow.vars, **combo_vars)
             suffix = "~".join(f"{k}={v}" for k, v in combo)
             group_old_ids = {p.id for p in group}
             lane_ids: list[str] = []
 
             for phase in group:
                 new_id = f"{phase.id}~{suffix}"
+                unresolved = _find_template_vars(phase.prompt + (phase.run or "")) - set(render_vars)
 
                 # Update bounce_target if it points within the same group
                 new_bounce = phase.bounce_target
@@ -849,6 +859,8 @@ def expand_multi_vars(workflow: Workflow, multi_vars: dict[str, list[str]]) -> W
                     workflow_file=phase.workflow_file,
                     workflow_dir=phase.workflow_dir,
                 )
+                if unresolved:
+                    setattr(new_phase, "_unresolved_template_vars", unresolved)
                 new_phases.append(new_phase)
                 lane_ids.append(new_id)
 
@@ -990,7 +1002,12 @@ def validate_workflow(workflow: Workflow) -> list[str]:
     defined_vars = set(workflow.vars.keys())
     for phase in workflow.phases:
         all_text = phase.prompt + (phase.run or "")
-        undefined = _find_template_vars(all_text) - defined_vars
+        try:
+            undefined = _find_template_vars(all_text)
+        except ValueError as e:
+            errors.append(f"Phase {phase.id!r}: {e}")
+            continue
+        undefined = (undefined | set(getattr(phase, "_unresolved_template_vars", set()))) - defined_vars
         for var_name in sorted(undefined):
             errors.append(f"Phase {phase.id!r}: template variable {{{{{var_name}}}}} has no value defined")
 

@@ -7,7 +7,7 @@ import argparse
 import pytest
 
 from juvenal.cli import build_parser, cmd_validate
-from juvenal.workflow import ParallelGroup, Phase, Workflow, validate_workflow
+from juvenal.workflow import ParallelGroup, Phase, Workflow, expand_multi_vars, validate_workflow
 
 
 class TestValidateWorkflow:
@@ -333,21 +333,6 @@ class TestTemplateVarValidation:
         errors = validate_workflow(wf)
         assert any("PROJECT" in e and "no value defined" in e for e in errors)
 
-    def test_undefined_var_in_jinja_expression(self):
-        wf = Workflow(
-            name="test",
-            phases=[
-                Phase(
-                    id="build",
-                    type="implement",
-                    prompt="{% if ENABLED %}Build {{ PROJECT|upper }}.{% endif %}",
-                )
-            ],
-            vars={"ENABLED": "yes"},
-        )
-        errors = validate_workflow(wf)
-        assert any("PROJECT" in e and "no value defined" in e for e in errors)
-
     def test_undefined_var_in_run(self):
         wf = Workflow(
             name="test",
@@ -371,11 +356,18 @@ class TestTemplateVarValidation:
     def test_multiple_undefined_vars(self):
         wf = Workflow(
             name="test",
-            phases=[Phase(id="build", type="implement", prompt="Deploy {{APP}} to {{ENV}}.")],
+            phases=[
+                Phase(
+                    id="build",
+                    type="implement",
+                    prompt="prefix {% if ENABLED %}{{ TARGET }} {{ PROJECT }}{% endif %}",
+                )
+            ],
         )
-        errors = validate_workflow(wf)
+        errors = validate_workflow(expand_multi_vars(wf, {"TARGET": ["linux", "windows"]}))
         undefined = [e for e in errors if "no value defined" in e]
-        assert len(undefined) == 2
+        assert len(undefined) == 4
+        assert not any("{{TARGET}}" in e for e in undefined)
 
     def test_some_defined_some_not(self):
         wf = Workflow(
@@ -556,8 +548,7 @@ phases:
 name: bad
 phases:
   - id: a
-    type: invalid
-    prompt: "whatever"
+    prompt: "{% if broken %"
 """
         yaml_path = tmp_path / "bad.yaml"
         yaml_path.write_text(yaml_content)
@@ -567,7 +558,8 @@ phases:
         result = cmd_validate(args)
         assert result == 1
         captured = capsys.readouterr()
-        assert "error" in captured.out
+        assert "invalid jinja syntax" in captured.out.lower()
+        assert "traceback" not in captured.out.lower()
 
     def test_validate_missing_id_clean_error(self, tmp_path, capsys):
         """Missing phase ID prints a clean error, no stack trace."""
