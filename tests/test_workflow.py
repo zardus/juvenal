@@ -1016,7 +1016,9 @@ class TestTemplateVars:
 
     def test_apply_vars_jinja_rendering_and_sandbox(self):
         assert apply_vars("{{NAME|upper}}", {"NAME": "svc"}) == "SVC" and apply_vars("{{ 'ok'|upper }}", {}) == "OK"  # noqa: E501  # fmt: skip
-        pytest.raises(ValueError, apply_vars, "{{P.read_text()}}", {"P": Path("README.md")})
+        assert "unsafe" in str(pytest.raises(ValueError, apply_vars, "{{P.read_text()}}", {"P": Path("README.md")}).value)  # noqa: E501  # fmt: skip
+        assert "undefined" in str(pytest.raises(ValueError, apply_vars, "{{ cycler.__init__.__globals__.os.popen('echo pwned').read() }}", {}).value)  # noqa: E501  # fmt: skip
+        assert (vars := {"L": [1]}) and "unsafe" in str(pytest.raises(ValueError, apply_vars, "{{ L.append(2) }}", vars).value) and vars == {"L": [1]}  # noqa: E501  # fmt: skip
 
     def test_render_prompt_with_vars(self):
         phase = Phase(id="build", prompt="Build {{PROJECT}} in {{LANG}}.")

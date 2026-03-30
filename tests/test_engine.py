@@ -1932,8 +1932,7 @@ class TestTemplateVarsEngine:
             assert mock_run.call_args[0][0] == "pytest tests/unit -x"
         err = Engine(Workflow(name="test", phases=[Phase(id="test", type="script", run="{{ 1 / 0 }}")], vars={}), state_file=str(tmp_path / "err.json"), plain=True)  # noqa: E501  # fmt: skip
         assert err.run() == 1
-        out = capsys.readouterr().out
-        assert "division by zero" in out and "Traceback" not in out
+        assert "division by zero" in (out := capsys.readouterr().out) and "Traceback" not in out
 
     def test_vars_unrecognized_passthrough(self, mock_backend, tmp_path):
         """Unrecognized {{VAR}} placeholders pass through unchanged."""
