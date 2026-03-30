@@ -15,7 +15,7 @@ from jinja2.sandbox import ImmutableSandboxedEnvironment
 
 _UNRESOLVED_TEMPLATE_VAR_RE = re.compile(r"\{\{\s*([A-Za-z_][A-Za-z0-9_]*)\b")
 _CONTROL_EXPR_RE = re.compile(
-    r"{%\s*(?:if|elif)\s+(.+?)\s*%}|{%\s*for\s+\w+\s+in\s+(.+?)\s*%}|{{.*?\s+if\s+(.+?)\s+else\b", re.DOTALL
+    r"{%\s*(?:if|elif)\s+(.+?)\s*%}|{%\s*for\s+(\w+)\s+in\s+(.+?)\s*%}|{{.*?\s+if\s+(.+?)\s+else\b", re.DOTALL
 )
 _SKIP_CONTROL_EXPR_RE = re.compile(
     r"(?:\w+\s+is\s+(?:not\s+)?(?:defined|undefined)|\w+\|default(?:\(.*\))?|(\w+)\s+is\s+defined\s+and\s+\1|(\w+)\s+is\s+(?:undefined|not\s+defined)\s+or\s+\2)"
@@ -89,7 +89,7 @@ def _substitute_known_template_vars(text: str, vars: dict[str, str]) -> str:
     substituted = "".join(tokens)
 
     try:
-        if "{%" not in substituted or not template_vars(substituted):
+        if "{%" not in substituted and not template_vars(substituted):
             return apply_vars(substituted, {})
     except (TemplateSyntaxError, TemplateRenderError):
         pass
@@ -103,10 +103,13 @@ def _unresolved_template_vars(text: str, vars: dict[str, str]) -> set[str]:
 
 def _control_template_vars(text: str) -> set[str]:
     found = set()
-    for expr in filter(None, (part for groups in _CONTROL_EXPR_RE.findall(text) for part in groups)):
+    for if_expr, loop_var, loop_expr, cond_expr in _CONTROL_EXPR_RE.findall(text):
+        expr = if_expr or loop_expr or cond_expr
+        if not expr:
+            continue
         expr = expr.strip()
         if not _SKIP_CONTROL_EXPR_RE.fullmatch(expr):
-            found.update(template_vars(f"{{{{ {expr} }}}}"))
+            found.update(template_vars(f"{{{{ {expr} }}}}") - ({loop_var} if loop_expr else set()))
     return found
 
 
