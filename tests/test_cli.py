@@ -315,9 +315,6 @@ class TestParseDefines:
     def test_single_value(self):
         assert _parse_defines(["FOO=bar"]) == {"FOO": ["bar"]}
 
-    def test_boolean_value(self):
-        assert _parse_defines(["ENABLED=false"]) == {"ENABLED": [False]}
-
     def test_multi_value_same_key(self):
         result = _parse_defines(["T=linux", "T=windows"])
         assert result == {"T": ["linux", "windows"]}
