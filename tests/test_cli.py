@@ -314,6 +314,7 @@ class TestArgumentParsing:
 class TestParseDefines:
     def test_single_value(self):
         assert _parse_defines(["FOO=bar"]) == {"FOO": ["bar"]}
+        assert _parse_defines(["B=true", "N=3", "L=[1,2]"]) == {"B": [True], "N": [3], "L": [[1, 2]]}
 
     def test_multi_value_same_key(self):
         result = _parse_defines(["T=linux", "T=windows"])

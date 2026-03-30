@@ -351,6 +351,8 @@ class TestTemplateVarValidation:
         )
         errors = validate_workflow(wf)
         assert any("PROJECT" in e and "no value defined" in e for e in errors)
+        wf.phases[0].prompt = "{% for a, b in PAIRS %}{{ a }}{{ b }}{% endfor %}"
+        assert any("PAIRS" in e and "no value defined" in e for e in validate_workflow(wf))
 
     def test_undefined_var_in_run(self):
         wf = Workflow(
@@ -371,6 +373,10 @@ class TestTemplateVarValidation:
         )
         errors = validate_workflow(wf)
         assert not any("no value defined" in e for e in errors)
+        wf.phases[0].prompt = "{% if X is defined and Y == 'a' %}ok{% endif %}"
+        assert validate_workflow(wf) == []
+        wf.phases[0].prompt = "{% if X|default('a') == 'a' %}ok{% endif %}"
+        assert validate_workflow(wf) == []
 
     def test_multiple_undefined_vars(self):
         wf = Workflow(

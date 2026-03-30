@@ -1930,6 +1930,7 @@ class TestTemplateVarsEngine:
             engine.run()
             mock_run.assert_called_once()
             assert mock_run.call_args[0][0] == "pytest tests/unit -x"
+        assert Engine(Workflow(name="test", phases=[Phase(id="test", type="script", run="{{ 1 / 0 }}")], vars={}), state_file=str(tmp_path / "err.json"), plain=True).run() == 1  # noqa: E501  # fmt: skip
 
     def test_vars_unrecognized_passthrough(self, mock_backend, tmp_path):
         """Unrecognized {{VAR}} placeholders pass through unchanged."""
