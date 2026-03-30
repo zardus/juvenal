@@ -225,6 +225,16 @@ class Engine:
             self._send_notifications(False, bounces)
             return 1
 
+        except TemplateRenderError as e:
+            self.state.mark_failed(phases[min(phase_idx, len(phases) - 1)].id)
+            self.state.completed_at = time.time()
+            self.state.save()
+            self.display.step_fail(phases[min(phase_idx, len(phases) - 1)].id, str(e)[:500])
+            self.display.pipeline_done(False)
+            self.display.run_summary(self.state, bounces)
+            self._send_notifications(False, bounces)
+            return 1
+
         except KeyboardInterrupt:
             self.backend.kill_active()
             self.state.save()
@@ -272,10 +282,7 @@ class Engine:
                 env=phase.env or None,
             )
         else:
-            try:
-                prompt = phase.render_prompt(failure_context=failure_context, vars=self.workflow.vars)
-            except TemplateRenderError as exc:
-                return self._template_failure(phase, "implement", exc)
+            prompt = phase.render_prompt(failure_context=failure_context, vars=self.workflow.vars)
             result = self.backend.run_agent(
                 prompt,
                 working_dir=self.workflow.working_dir,
@@ -319,13 +326,9 @@ class Engine:
 
     def _run_interactive_loop(self, phase: Phase, attempt: int, failure_context: str) -> PhaseResult:
         """Run an agent-driven Q&A loop. Agent asks questions, user answers, agent updates plan."""
-        self.display.step_start("interactive")
-        try:
-            prompt = phase.render_prompt(failure_context=failure_context, vars=self.workflow.vars)
-        except TemplateRenderError as exc:
-            return self._template_failure(phase, "interactive", exc)
+        prompt = phase.render_prompt(failure_context=failure_context, vars=self.workflow.vars)
         prompt = self._INTERACTIVE_PREAMBLE + prompt
-
+        self.display.step_start("interactive")
         result = self.backend.run_agent(
             prompt,
             working_dir=self.workflow.working_dir,
@@ -385,12 +388,6 @@ class Engine:
         self.display.step_pass("interactive")
         return PhaseResult(success=True)
 
-    def _template_failure(self, phase: Phase, step: str, exc: Exception) -> PhaseResult:
-        """Convert a template rendering error into a normal phase failure."""
-        failure_context = f"Template rendering failed for phase '{phase.id}': {exc}"
-        self.display.step_fail(step, failure_context[:500])
-        return PhaseResult(success=False, failure_context=failure_context)
-
     def _run_script(self, phase: Phase, phases: list[Phase], phase_idx: int) -> PhaseResult:
         """Run a script phase. Exit 0 = advance. Nonzero = bounce back."""
         ps = self.state.phases.get(phase.id)
@@ -400,10 +397,7 @@ class Engine:
         self.display.step_start(f"script: {phase.id}")
 
         timeout = phase.timeout or 600
-        try:
-            run_cmd = apply_vars(phase.run, self.workflow.vars)
-        except TemplateRenderError as exc:
-            return self._template_failure(phase, phase.id, exc)
+        run_cmd = apply_vars(phase.run, self.workflow.vars) if self.workflow.vars else phase.run
         result = run_script(run_cmd, self.workflow.working_dir, timeout=timeout, env=phase.env or None)
         self.state.log_step(phase.id, attempt, "script", result.output, input=phase.run)
 
@@ -436,18 +430,13 @@ class Engine:
         self.display.phase_start(phase.id, attempt)
         self.display.step_start(f"check: {phase.id}")
 
-        try:
-            prompt = phase.render_check_prompt(vars=self.workflow.vars)
-        except TemplateRenderError as exc:
-            return self._template_failure(phase, phase.id, exc)
+        prompt = phase.render_check_prompt(vars=self.workflow.vars)
 
         # Inject the parent implement phase's directions so the checker knows what to verify
         parent_prompt = self._get_parent_prompt(phase, phases, phase_idx)
         if parent_prompt:
-            try:
+            if self.workflow.vars:
                 parent_prompt = apply_vars(parent_prompt, self.workflow.vars)
-            except TemplateRenderError as exc:
-                return self._template_failure(phase, phase.id, exc)
             prompt = (
                 f"You are a CHECKER. You must NOT write any code or implement anything. "
                 f"Another agent has already attempted the task below. "
@@ -605,10 +594,7 @@ class Engine:
 
         # Step 1: Plan the sub-workflow
         self.display.step_start(f"workflow-plan: {phase.id}")
-        try:
-            prompt = phase.render_prompt(failure_context=failure_context, vars=self.workflow.vars)
-        except TemplateRenderError as exc:
-            return self._template_failure(phase, phase.id, exc)
+        prompt = phase.render_prompt(failure_context=failure_context, vars=self.workflow.vars)
         plan_result = _plan_workflow_internal(
             goal=prompt,
             backend_instance=self.backend,
