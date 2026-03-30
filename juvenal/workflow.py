@@ -885,14 +885,10 @@ def expand_multi_vars(workflow: Workflow, multi_vars: dict[str, list[str]]) -> W
             continue
 
         # Find which multi-value vars this group references
-        try:
-            used_vars: set[str] = set()
-            for phase in group:
-                used_vars.update(template_vars(phase.prompt))
-                used_vars.update(template_vars(phase.run or ""))
-        except TemplateSyntaxError:
-            new_phases.extend(group)
-            continue
+        used_vars: set[str] = set()
+        for phase in group:
+            used_vars.update(template_vars(phase.prompt))
+            used_vars.update(template_vars(phase.run or ""))
         referenced = [k for k in multi_vars if k in used_vars]
 
         if not referenced:
@@ -972,6 +968,7 @@ def validate_workflow(workflow: Workflow) -> list[str]:
     all_ids = {p.id for p in workflow.phases}
 
     defined_vars = set(workflow.vars)
+    recursive_vars = any(marker in repr(workflow.vars) for marker in ("[[...]]", "{...}", "(...)"))
     for phase in workflow.phases:
         # Duplicate ID check
         if phase.id in phase_ids:
@@ -1074,6 +1071,11 @@ def validate_workflow(workflow: Workflow) -> list[str]:
 
     # Template validation: syntax must parse, render must succeed, and unresolved placeholders must be defined.
     for phase in workflow.phases:
+        if recursive_vars and (phase.prompt or phase.run):
+            errors.append(
+                f"Phase {phase.id!r}: template render failed: template variables cannot contain recursive data"
+            )
+            continue
         try:
             if phase.prompt:
                 template_vars(phase.prompt)
