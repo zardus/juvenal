@@ -49,8 +49,6 @@ class _Sandbox(ImmutableSandboxedEnvironment):
 
 
 _JINJA_ENV = _Sandbox(autoescape=False, keep_trailing_newline=True, undefined=PreservePlaceholderUndefined)
-
-
 template_vars = lambda text: set() if not text else meta.find_undeclared_variables(_JINJA_ENV.parse(text))  # noqa: E731
 
 

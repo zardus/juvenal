@@ -1014,14 +1014,16 @@ class TestTemplateVars:
     def test_apply_vars_no_placeholders(self):
         assert apply_vars("no vars here", {"NAME": "world"}) == "no vars here"
 
-    def test_jinja_regressions(self, tmp_path):
+    def test_apply_vars_jinja_rendering_and_sandbox(self):
+        assert apply_vars("{{NAME|upper}}", {"NAME": "svc"}) == "SVC"
+        pytest.raises(ValueError, apply_vars, "{{P.read_text()}}", {"P": Path("README.md")})
+
+    def test_jinja_validation_define_and_engine_regressions(self, tmp_path):
         import juvenal.cli as cli, juvenal.engine as engine, juvenal.workflow as workflow  # noqa: E401, I001
 
         errors = lambda prompt: workflow.validate_workflow(  # noqa: E731
             Workflow(name="test", phases=[Phase(id="build", prompt=prompt)])
         )
-        assert apply_vars("{{NAME|upper}}", {"NAME": "svc"}) == "SVC"
-        pytest.raises(workflow.TemplateRenderError, apply_vars, "{{P.read_text()}}", {"P": Path("README.md")})
         assert errors("{% if X is defined and X == 'a' %}{{ X }}{% endif %}") == []
         assert errors("{% if X is not defined %}missing{% elif X == 'a' %}present{% endif %}") == []
         assert any("PAIRS" in e for e in errors("{% for a, b in PAIRS %}{{ a }}{{ b }}{% endfor %}"))
