@@ -953,6 +953,14 @@ def validate_workflow(workflow: Workflow) -> list[str]:
             if pid not in all_ids:
                 errors.append(f"Parallel group {i}: phase ID {pid!r} does not match any phase")
 
+        if not group.is_lane_group():
+            for pid in group.phases:
+                if pid in all_ids and (phase := next(p for p in workflow.phases if p.id == pid)).type == "implement":
+                    if phase.interactive:
+                        errors.append(
+                            f"Parallel group {i}: interactive implement phase {pid!r} is unsupported in parallel groups"
+                        )
+
         if group.is_lane_group():
             # Lane-specific validation
             for li, lane in enumerate(group.lanes):
@@ -964,6 +972,11 @@ def validate_workflow(workflow: Workflow) -> list[str]:
                         if phase.type == "workflow":
                             errors.append(
                                 f"Parallel group {i}, lane {li}: workflow-type phase {pid!r} not allowed in lanes"
+                            )
+                        if phase.type == "implement" and phase.interactive:
+                            errors.append(
+                                f"Parallel group {i}, lane {li}: interactive implement phase {pid!r} "
+                                "is unsupported in parallel groups"
                             )
 
             # Check for phases appearing in multiple lanes

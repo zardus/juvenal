@@ -2362,18 +2362,22 @@ class TestInteractiveMode:
 
 
 class TestPlanWorkflowInternal:
+    @pytest.fixture(autouse=True)
+    def _stub_run(self):
+        with patch.object(Engine, "run", return_value=1):
+            yield
+
     def test_project_dir_creates_plan_directory(self, tmp_path):
         """When project_dir is set, .plan/ is created there with goal.md."""
         backend = MockBackend()
         # Plan pipeline will fail immediately since mock doesn't produce artifacts,
         # but we can verify .plan/ directory creation
-        with patch.object(Engine, "run", return_value=1):
-            _plan_workflow_internal(
-                goal="test goal",
-                backend_instance=backend,
-                plain=True,
-                project_dir=str(tmp_path),
-            )
+        _plan_workflow_internal(
+            goal="test goal",
+            backend_instance=backend,
+            plain=True,
+            project_dir=str(tmp_path),
+        )
         plan_dir = tmp_path / ".plan"
         assert plan_dir.exists()
         assert (plan_dir / "goal.md").exists()
@@ -2382,12 +2386,11 @@ class TestPlanWorkflowInternal:
     def test_temp_dir_used_without_project_dir(self):
         """When project_dir is None, a temp dir is used."""
         backend = MockBackend()
-        with patch.object(Engine, "run", return_value=1):
-            result = _plan_workflow_internal(
-                goal="test goal",
-                backend_instance=backend,
-                plain=True,
-            )
+        result = _plan_workflow_internal(
+            goal="test goal",
+            backend_instance=backend,
+            plain=True,
+        )
         # temp_dir should be set when no project_dir
         assert result.temp_dir is not None
         # Clean up
@@ -2406,7 +2409,7 @@ class TestPlanWorkflowInternal:
             original_init(self, *args, **kwargs)
             engines_created.append(self)
 
-        with patch.object(Engine, "__init__", tracking_init), patch.object(Engine, "run", return_value=1):
+        with patch.object(Engine, "__init__", tracking_init):
             _plan_workflow_internal(
                 goal="test goal",
                 backend_instance=backend,
@@ -2428,7 +2431,7 @@ class TestPlanWorkflowInternal:
             original_init(self, *args, **kwargs)
             engines_created.append(self)
 
-        with patch.object(Engine, "__init__", tracking_init), patch.object(Engine, "run", return_value=1):
+        with patch.object(Engine, "__init__", tracking_init):
             _plan_workflow_internal(
                 goal="test goal",
                 backend_instance=backend,

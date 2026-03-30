@@ -46,6 +46,7 @@ def build_parser() -> argparse.ArgumentParser:
         "-D", action="append", default=[], metavar="VAR=VAL", dest="defines", help="Set template variable"
     )
     run_p.add_argument("--serialize", action="store_true", help="Disable all parallelization")
+    run_p.add_argument("-w", "--web-interactive", action="store_true", help="Enable interactive runtime")
 
     # plan
     plan_p = sub.add_parser("plan", help="Generate a workflow from a goal description")
@@ -183,6 +184,7 @@ def cmd_run(args: argparse.Namespace) -> int:
         plain=args.plain,
         clear_context_on_bounce=args.clear_context_on_bounce,
         serialize=args.serialize,
+        interactive=args.web_interactive,
     )
     return engine.run()
 
@@ -261,7 +263,10 @@ def cmd_do(args: argparse.Namespace) -> int:
         workflow.max_bounces = args.max_bounces
 
     engine = Engine(
-        workflow, plain=args.plain, clear_context_on_bounce=args.clear_context_on_bounce, serialize=args.serialize
+        workflow,
+        plain=args.plain,
+        clear_context_on_bounce=args.clear_context_on_bounce,
+        serialize=args.serialize,
     )
     return engine.run()
 
