@@ -27,46 +27,35 @@ _OPTIONAL_OUTPUT_RE = re.compile(
 
 
 class PreservePlaceholderUndefined(Undefined):
-    """Render unknown variables back to their placeholder form."""
-
     __slots__ = ()
-
-    def __str__(self) -> str:
-        return f"{{{{{self._undefined_name or 'undefined'}}}}}"
-
-    def __getitem__(self, key: object) -> PreservePlaceholderUndefined:
-        return type(self)(name=f"{self._undefined_name or 'undefined'}[{key!r}]")
+    __str__ = lambda self: f"{{{{{self._undefined_name or 'undefined'}}}}}"  # noqa: E731
+    __getitem__ = lambda self, key: type(self)(name=f"{self._undefined_name or 'undefined'}[{key!r}]")  # noqa: E731
 
 
 class TemplateRenderError(ValueError):
-    """Raised when template rendering fails."""
+    pass
 
 
 class _Sandbox(ImmutableSandboxedEnvironment):
-    def getattr(self, obj, attr):
-        return (
-            type(obj)(name=f"{obj._undefined_name or 'undefined'}.{attr}")
-            if isinstance(obj, Undefined)
-            else super().getattr(obj, attr)
-        )
-
-    def is_safe_attribute(self, obj, attr, value):
-        return (
-            isinstance(obj, Mapping)
-            and attr in {"get", "items", "keys", "values"}
-            and super().is_safe_attribute(obj, attr, value)
-        )
+    getattr = lambda self, obj, attr: (  # noqa: E731
+        type(obj)(name=f"{obj._undefined_name or 'undefined'}.{attr}")
+        if isinstance(obj, Undefined)
+        else super(_Sandbox, self).getattr(obj, attr)
+    )
+    is_safe_attribute = lambda self, obj, attr, value: (  # noqa: E731
+        isinstance(obj, Mapping)
+        and attr in {"get", "items", "keys", "values"}
+        and super(_Sandbox, self).is_safe_attribute(obj, attr, value)
+    )
 
 
 _JINJA_ENV = _Sandbox(autoescape=False, keep_trailing_newline=True, undefined=PreservePlaceholderUndefined)
 
 
-def template_vars(text: str) -> set[str]:
-    return set() if not text else meta.find_undeclared_variables(_JINJA_ENV.parse(text))
+template_vars = lambda text: set() if not text else meta.find_undeclared_variables(_JINJA_ENV.parse(text))  # noqa: E731
 
 
 def apply_vars(text: str, vars: dict[str, str] | None) -> str:
-    """Render a Jinja2 template string with the provided variables."""
     if vars is None:
         return text
     try:
@@ -79,20 +68,17 @@ def _sub_vars(text: str, vars: dict[str, str]) -> str:
     replaceable = template_vars(text) & set(vars)
     if not replaceable:
         return text
-
     substituted = "".join(
         repr(vars[value]) if token_type == "name" and value in replaceable else value
         for _, token_type, value in _JINJA_ENV.lex(text)
     )
-
     try:
         return apply_vars(substituted, vars) if template_vars(substituted) <= set(vars) else substituted
     except (TemplateSyntaxError, TemplateRenderError):
         return substituted
 
 
-def _unresolved_template_vars(text: str, vars: dict[str, str]) -> set[str]:
-    return {m.group(1) for m in _UNRESOLVED_TEMPLATE_VAR_RE.finditer(apply_vars(text, vars))}
+_unresolved_template_vars = lambda text, vars: set(_UNRESOLVED_TEMPLATE_VAR_RE.findall(apply_vars(text, vars)))  # noqa: E731
 
 
 def _control_template_vars(text: str) -> set[str]:
@@ -104,8 +90,7 @@ def _control_template_vars(text: str) -> set[str]:
     return found - guarded
 
 
-def _optional_output_vars(text: str) -> set[str]:
-    return {m.group(1) for m in _OPTIONAL_OUTPUT_RE.finditer(text)}
+_optional_output_vars = lambda text: {m.group(1) for m in _OPTIONAL_OUTPUT_RE.finditer(text)}  # noqa: E731
 
 
 @dataclass
