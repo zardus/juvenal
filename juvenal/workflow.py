@@ -19,7 +19,7 @@ _CONTROL_EXPR_RE = re.compile(
     r"{%\s*(?:if|elif)\s+(.+?)\s*%}|{%\s*for\s+(.+?)\s+in\s+(.+?)\s*%}|{{.*?\s+if\s+(.+?)\s+else\b", re.DOTALL
 )
 _SKIP_CONTROL_EXPR_RE = re.compile(
-    r"(?:\w+\s+is\s+(?:not\s+)?(?:defined|undefined)|\w+\|default(?:\(.*\))?|(\w+)\s+is\s+defined\s+and\s+\1(?:\b.*)?|(\w+)\s+is\s+(?:undefined|not\s+defined)\s+or\s+\2)"
+    r"(?:\w+\s+is\s+(?:not\s+)?(?:defined|undefined)|\w+\|default(?:\(.*\))?(?:\b.*)?|\w+\s+is\s+defined\s+and\s+.+|\w+\s+is\s+(?:undefined|not\s+defined)\s+or\s+.+)"
 )
 _OPTIONAL_OUTPUT_RE = re.compile(
     r"{%\s*if\s+([A-Za-z_][A-Za-z0-9_]*)\s+is\s+(?:undefined|not\s+defined)(?:\s+or\s+\1)?\s*%}.*?{{\s*\1\b", re.DOTALL
