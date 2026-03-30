@@ -373,10 +373,9 @@ class TestTemplateVarValidation:
         )
         errors = validate_workflow(wf)
         assert not any("no value defined" in e for e in errors)
-        wf.phases[0].prompt = "{% if X is defined and Y == 'a' %}ok{% endif %}"
-        assert validate_workflow(wf) == []
-        wf.phases[0].prompt = "{% if X|default('a') == 'a' %}ok{% endif %}"
-        assert validate_workflow(wf) == []
+        assert all(validate_workflow(Workflow(name="test", phases=[Phase(id="build", type="implement", prompt=prompt)], vars={"PROJECT": "myapp"})) == [] for prompt in ("{% if X is defined and Y == 'a' %}ok{% endif %}", "{% if X|default('a') == 'a' %}ok{% endif %}"))  # noqa: E501  # fmt: skip
+        data = (lambda d: d.update(self=d) or d)({})
+        assert any("recursive data" in e for e in validate_workflow(Workflow(name="test", phases=[Phase(id="build", prompt="{{DATA}}")], vars={"DATA": data})))  # noqa: E501  # fmt: skip
 
     def test_multiple_undefined_vars(self):
         wf = Workflow(

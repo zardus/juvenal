@@ -1015,7 +1015,7 @@ class TestTemplateVars:
         assert apply_vars("no vars here", {"NAME": "world"}) == "no vars here"
 
     def test_apply_vars_jinja_rendering_and_sandbox(self):
-        assert apply_vars("{{NAME|upper}}", {"NAME": "svc"}) == "SVC"
+        assert apply_vars("{{NAME|upper}}", {"NAME": "svc"}) == "SVC" and apply_vars("{{ 'ok'|upper }}", {}) == "OK"  # noqa: E501  # fmt: skip
         pytest.raises(ValueError, apply_vars, "{{P.read_text()}}", {"P": Path("README.md")})
 
     def test_render_prompt_with_vars(self):
