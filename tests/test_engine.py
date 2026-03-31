@@ -1912,6 +1912,10 @@ class TestTemplateVarsEngine:
         # Check phase prompt should contain the substituted var
         assert "Verify myservice works." in mock_backend.calls[1]
 
+    def test_empty_vars_still_render_in_engine(self, tmp_path):
+        with patch("juvenal.engine.run_script", return_value=type("R", (), {"exit_code": 0, "output": "ok"})()) as mock_run:  # noqa: E501  # fmt: skip
+            assert Engine(Workflow(name="test", phases=[Phase(id="build", type="implement", prompt="{{ 'ok'|upper }}"), Phase(id="review", type="check", prompt="{{ 'ok'|upper }}", bounce_target="build"), Phase(id="test", type="script", run="echo {{ 'ok'|upper }}", bounce_target="build")], vars={}), state_file=str(tmp_path / "state-empty.json"), plain=True, backend_instance=(b := MockBackend())).run() == 0 and b.calls[0] == "OK" and "OK" in b.calls[1] and mock_run.call_args[0][0] == "echo OK"  # noqa: E501  # fmt: skip
+
     def test_vars_substituted_in_script_run(self, mock_backend, tmp_path, capsys):
         """Vars are substituted in script phase run commands."""
         mock_backend.add_response(exit_code=0, output="done")
@@ -1930,8 +1934,7 @@ class TestTemplateVarsEngine:
             engine.run()
             mock_run.assert_called_once()
             assert mock_run.call_args[0][0] == "pytest tests/unit -x"
-        assert Engine(Workflow(name="test", phases=[Phase(id="test", type="script", run="{{ 1 / 0 }}")], vars={}), state_file=str(tmp_path / "err.json"), plain=True).run() == 1  # noqa: E501  # fmt: skip
-        assert "division by zero" in (out := capsys.readouterr().out) and "Traceback" not in out
+        assert Engine(Workflow(name="test", phases=[Phase(id="build", type="implement", prompt="{{ 1 / 0 }}")], vars={}), state_file=str(tmp_path / "err-impl.json"), plain=True, backend_instance=(impl := MockBackend())).run() == 1 and impl.calls == [] and Engine(Workflow(name="test", phases=[Phase(id="build", type="implement", prompt="Build it."), Phase(id="review", type="check", prompt="{{ 1 / 0 }}", bounce_target="build")], vars={}), state_file=str(tmp_path / "err-check.json"), plain=True, backend_instance=(chk := MockBackend())).run() == 1 and len(chk.calls) == 1 and Engine(Workflow(name="test", phases=[Phase(id="test", type="script", run="{{ 1 / 0 }}")], vars={}), state_file=str(tmp_path / "err-script.json"), plain=True).run() == 1 and Engine(Workflow(name="test", phases=[Phase(id="refine", prompt="{{ 1 / 0 }}", interactive=True)], vars={}), state_file=str(tmp_path / "err-int.json"), plain=True, interactive=True, backend_instance=MockBackend()).run() == 1 and "division by zero" in (out := capsys.readouterr().out) and "Traceback" not in out and __import__("re").search(r"FAIL refine \(\d{6,}m", out) is None  # noqa: E501  # fmt: skip
 
     def test_vars_unrecognized_passthrough(self, mock_backend, tmp_path):
         """Unrecognized {{VAR}} placeholders pass through unchanged."""
