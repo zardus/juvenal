@@ -166,6 +166,28 @@ def _load_workflow_or_exit(path: str):
         sys.exit(1)
 
 
+def _inject_checkers_or_exit(workflow, checker_specs: list[str]):
+    """Inject checkers, printing a clean error and exiting on invalid specs."""
+    from juvenal.workflow import inject_checkers
+
+    try:
+        return inject_checkers(workflow, checker_specs)
+    except ValueError as e:
+        print(f"Error: {e}")
+        sys.exit(1)
+
+
+def _parse_checker_specs_or_exit(checker_specs: list[str]) -> list[dict | str]:
+    """Parse checker specs, printing a clean error and exiting on invalid input."""
+    from juvenal.workflow import parse_checker_string
+
+    try:
+        return [parse_checker_string(s) for s in checker_specs]
+    except ValueError as e:
+        print(f"Error: {e}")
+        sys.exit(1)
+
+
 def _parse_implementer(spec: str) -> tuple[str, str | None]:
     """Parse --implementer value into (role, inline_prompt | None).
 
@@ -185,7 +207,7 @@ def _expand_standard_checkers(args: argparse.Namespace) -> None:
 
 def cmd_run(args: argparse.Namespace) -> int:
     from juvenal.engine import Engine
-    from juvenal.workflow import Phase, Workflow, inject_checkers, inject_implementer, validate_workflow
+    from juvenal.workflow import Phase, Workflow, inject_implementer, validate_workflow
 
     # Parse --implementer flags into role-only vs inline phases
     inline_phases: list[Phase] = []
@@ -230,7 +252,7 @@ def cmd_run(args: argparse.Namespace) -> int:
         workflow = _apply_defines(workflow, _parse_defines(args.defines))
     _expand_standard_checkers(args)
     if args.checker:
-        workflow = inject_checkers(workflow, args.checker)
+        workflow = _inject_checkers_or_exit(workflow, args.checker)
     errors = validate_workflow(workflow)
     if errors:
         print(f"Workflow validation failed with {len(errors)} error(s):")
@@ -281,12 +303,10 @@ def _inject_checkers_into_yaml(yaml_path: str, checker_specs: list[str]) -> None
     """Post-process a generated YAML file to append checkers: entries to each implement phase."""
     import yaml
 
-    from juvenal.workflow import parse_checker_string
-
     with open(yaml_path) as f:
         data = yaml.safe_load(f)
 
-    parsed = [parse_checker_string(s) for s in checker_specs]
+    parsed = _parse_checker_specs_or_exit(checker_specs)
 
     for phase in data.get("phases", []):
         if phase.get("type", "implement") == "implement":
@@ -320,7 +340,7 @@ def cmd_do(args: argparse.Namespace) -> int:
     import tempfile
 
     from juvenal.engine import Engine, plan_workflow
-    from juvenal.workflow import inject_checkers, inject_implementer
+    from juvenal.workflow import inject_implementer
 
     with tempfile.NamedTemporaryFile(suffix=".yaml", delete=False, mode="w") as f:
         plan_workflow(args.goal, f.name, args.backend, plain=args.plain, interactive=args.interactive)
@@ -332,7 +352,7 @@ def cmd_do(args: argparse.Namespace) -> int:
         workflow = inject_implementer(workflow, args.implementer)
     _expand_standard_checkers(args)
     if args.checker:
-        workflow = inject_checkers(workflow, args.checker)
+        workflow = _inject_checkers_or_exit(workflow, args.checker)
     if args.backend:
         workflow.backend = args.backend
     if args.max_bounces:
@@ -366,7 +386,7 @@ def cmd_init(args: argparse.Namespace) -> int:
 
 def cmd_validate(args: argparse.Namespace) -> int:
     from juvenal.engine import Engine
-    from juvenal.workflow import inject_checkers, inject_implementer
+    from juvenal.workflow import inject_implementer
 
     workflow = _load_workflow_or_exit(args.workflow)
     if args.defines:
@@ -375,7 +395,7 @@ def cmd_validate(args: argparse.Namespace) -> int:
         workflow = inject_implementer(workflow, args.implementer)
     _expand_standard_checkers(args)
     if args.checker:
-        workflow = inject_checkers(workflow, args.checker)
+        workflow = _inject_checkers_or_exit(workflow, args.checker)
     if args.backend:
         workflow.backend = args.backend
     if args.max_bounces:

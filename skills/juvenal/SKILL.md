@@ -49,7 +49,10 @@ phases:
     env:
       NODE_ENV: development
     checks:
-      - run: "pytest tests/ -x"  # checker tells the agent to run this command
+      - prompt: |
+          Run `pytest tests/ -x` from the working directory and verify the result.
+          Do not modify code while checking.
+          Emit `VERDICT: FAIL: <reason>` on failure, otherwise emit `VERDICT: PASS`.
       - tester                    # built-in role shorthand
       - role: senior-engineer     # role as dict
       - prompt: "Review the code for security issues."  # inline prompt
@@ -58,7 +61,7 @@ phases:
     prompt_file: phases/implement/prompt.md
     bounce_target: setup  # on failure, bounce back to setup
     checks:
-      - run: "make test"
+      - prompt: "Run `make test` and emit `VERDICT: PASS` only if it succeeds."
       - role: senior-engineer
 
 parallel_groups:
@@ -79,7 +82,6 @@ my-workflow/
     01-setup/
       prompt.md            # implement phase
       check.md             # check phase (auto-bounces to 01-setup)
-      tests.sh             # check phase that tells the agent to run tests.sh
     02-parallel/           # "parallel" in name → parallel lane group
       feature-a/           #   each subdir is a lane
         prompt.md          #     implement phase
@@ -91,7 +93,7 @@ my-workflow/
       prompt.md
 ```
 
-In any phase directory, extra `.md` files (besides `prompt.md`) become check phases and `.sh` files become run-based check phases, all with `bounce_target` set to the implement phase. Directories with `check-` prefix or `-check-` in the name are standalone check phases (only `prompt.md` is used).
+In any phase directory, extra `.md` files (besides `prompt.md`) become check phases with `bounce_target` set to the implement phase. If a checker needs to run a command, write that command into the markdown prompt. Directories with `check-` prefix or `-check-` in the name are standalone check phases (only `prompt.md` is used).
 
 Lanes can also use subdirectories: `02-parallel/a/01-implement/prompt.md`, `02-parallel/a/02-check-review/prompt.md`.
 
@@ -137,7 +139,6 @@ Static sub-workflows skip the LLM planning step. Paths resolve relative to the d
 Checks are defined inline on implement phases. Each entry can be:
 
 - **Bare string** — built-in role shorthand: `tester`, `architect`, `pm`, `senior-tester`, `senior-engineer`, `security-engineer`, `technical-writer`, `professor`, `grant-reviewer`
-- **`run: CMD`** — checker shorthand that tells the agent to run `CMD`
 - **`role: NAME`** — agent checker with built-in role
 - **`prompt: TEXT`** — agent checker with inline prompt
 - **`prompt_file: PATH`** — agent checker with prompt from file
@@ -200,7 +201,7 @@ Included phases, parallel groups, and other settings are merged. Circular includ
 
 ## Template Variables
 
-Use `{{VAR}}` placeholders in prompts and check `run` commands. Variables are resolved at runtime.
+Use `{{VAR}}` placeholders in prompts. Variables are resolved at runtime.
 
 ```yaml
 vars:
@@ -211,7 +212,9 @@ phases:
   - id: deploy
     prompt: "Deploy {{PROJECT}} to {{ENV}}."
     checks:
-      - run: "curl -f https://{{ENV}}.example.com/health"
+      - prompt: |
+          Run `curl -f https://{{ENV}}.example.com/health` and verify the deployment health check.
+          Emit `VERDICT: FAIL: <reason>` if it fails; otherwise emit `VERDICT: PASS`.
 ```
 
 ```bash
@@ -242,10 +245,10 @@ juvenal validate <workflow>
 
 ### Key flags
 
-- **`--checker SPEC`**: Inject a checker on every implement phase. SPEC is a role name (`tester`), `run:CMD`, or `prompt:TEXT`. Repeatable.
+- **`--checker SPEC`**: Inject a checker on every implement phase. SPEC is a role name (`tester`) or `prompt:TEXT`. Repeatable.
 - **`--implementer ROLE`**: Prepend an implementer role prompt to every implement phase (e.g., `software-engineer`, `professor-writer`).
 - **`--clear-context-on-bounce`**: Start a fresh agent session on bounce instead of resuming (default: resume session, preserving conversation context).
-- **`-D VAR=VAL`**: Set a template variable. Use `{{VAR}}` in prompts and check `run` commands. Repeatable. Overrides `vars:` defaults in YAML. Multiple values for the same key (`-D T=a -D T=b`) duplicate phases into parallel lanes.
+- **`-D VAR=VAL`**: Set a template variable. Use `{{VAR}}` in prompts. Repeatable. Overrides `vars:` defaults in YAML. Multiple values for the same key (`-D T=a -D T=b`) duplicate phases into parallel lanes.
 - **`--serialize`**: Disable all parallelization (run parallel groups and lanes sequentially).
 - **`--backoff SECONDS`**: Exponential backoff between bounces (base delay, doubles each bounce, capped at `--max-backoff` or workflow's `max_backoff`).
 - **`--notify URL`**: Webhook URL for JSON notifications on completion/failure. Repeatable.
