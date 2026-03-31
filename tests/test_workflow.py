@@ -86,6 +86,17 @@ class TestDirectoryLoading:
         assert wf.phases[2].prompt == "Implement the feature."
         assert wf.phases[3].prompt == "Review the implementation.\nVERDICT: PASS or FAIL"
 
+    def test_top_level_sh_phase_rejected(self, tmp_path):
+        """Top-level .sh phases in directory workflows are rejected."""
+        phases_dir = tmp_path / "phases"
+        phases_dir.mkdir()
+        script = phases_dir / "01-check-build.sh"
+        script.write_text("#!/bin/bash\npytest -x\n")
+        script.chmod(0o755)
+
+        with pytest.raises(ValueError, match="Run-based \\.sh phases are no longer supported"):
+            load_workflow(tmp_path)
+
 
 class TestDirectoryInlineCheckers:
     def test_check_md_in_phase_dir(self, tmp_path):
@@ -645,6 +656,15 @@ class TestErrors:
         bad_yaml = tmp_path / "bad.yaml"
         bad_yaml.write_text("name: test\nphases:\n  - id: ok\n    prompt: fine\n  - prompt: 'no id'\n")
         with pytest.raises(ValueError, match="Phase 1"):
+            load_workflow(bad_yaml)
+
+    def test_yaml_phase_script_type_rejected(self, tmp_path):
+        """Legacy script phases in YAML workflows are rejected."""
+        bad_yaml = tmp_path / "bad.yaml"
+        bad_yaml.write_text(
+            "name: test\n" "phases:\n" "  - id: verify\n" "    type: script\n" "    prompt: 'Run tests'\n"
+        )
+        with pytest.raises(ValueError, match="type 'script' is no longer supported"):
             load_workflow(bad_yaml)
 
     def test_yaml_phase_not_a_dict(self, tmp_path):
