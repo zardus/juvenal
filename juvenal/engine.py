@@ -16,7 +16,7 @@ from juvenal.checkers import NO_VERDICT_REASON, parse_verdict, run_script
 from juvenal.display import Display
 from juvenal.notifications import build_notification_payload, send_webhook
 from juvenal.state import PhaseState, PipelineState
-from juvenal.workflow import ParallelGroup, Phase, Workflow, apply_vars
+from juvenal.workflow import ParallelGroup, Phase, Workflow
 
 
 @dataclass
@@ -388,7 +388,7 @@ class Engine:
         self.display.step_start(f"script: {phase.id}")
 
         timeout = phase.timeout or 600
-        run_cmd = apply_vars(phase.run, self.workflow.vars)
+        run_cmd = phase.render_run(vars=self.workflow.vars)
         result = run_script(run_cmd, self.workflow.working_dir, timeout=timeout, env=phase.env or None)
         self.state.log_step(phase.id, attempt, "script", result.output, input=phase.run)
 
@@ -426,7 +426,6 @@ class Engine:
         # Inject the parent implement phase's directions so the checker knows what to verify
         parent_prompt = self._get_parent_prompt(phase, phases, phase_idx)
         if parent_prompt:
-            parent_prompt = apply_vars(parent_prompt, self.workflow.vars)
             prompt = (
                 f"You are a CHECKER. You must NOT write any code or implement anything. "
                 f"Another agent has already attempted the task below. "
@@ -871,7 +870,7 @@ class Engine:
         if target_id:
             for p in phases:
                 if p.id == target_id and p.type == "implement":
-                    return p.prompt or None
+                    return p.render_prompt(vars=self.workflow.vars) or None
         return None
 
     def _get_baseline_sha(self, phase: Phase, phases: list[Phase], phase_idx: int) -> str | None:
@@ -969,13 +968,13 @@ class Engine:
                 extras.append(f"max_depth={phase.max_depth}")
             extra_str = f" [{', '.join(extras)}]" if extras else ""
             if phase.type == "implement":
-                prompt_preview = phase.prompt[:80].replace("\n", " ")
+                prompt_preview = phase.render_prompt(vars=self.workflow.vars)[:80].replace("\n", " ")
                 print(f"{prefix} [{phase.type}] {phase.id}{extra_str}")
                 print(f"     prompt: {prompt_preview}...")
             elif phase.type == "script":
-                print(f"{prefix} [{phase.type}] {phase.id}: {phase.run}{extra_str}")
+                print(f"{prefix} [{phase.type}] {phase.id}: {phase.render_run(vars=self.workflow.vars)}{extra_str}")
             elif phase.type == "check":
-                target = phase.role or phase.prompt[:60].replace("\n", " ")
+                target = phase.role or phase.render_check_prompt(vars=self.workflow.vars)[:60].replace("\n", " ")
                 print(f"{prefix} [{phase.type}] {phase.id}: {target}{extra_str}")
             elif phase.type == "workflow":
                 print(f"{prefix} [{phase.type}] {phase.id}{extra_str}")

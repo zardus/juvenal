@@ -7,7 +7,7 @@ import argparse
 import pytest
 
 from juvenal.cli import build_parser, cmd_validate
-from juvenal.workflow import ParallelGroup, Phase, Workflow, validate_workflow
+from juvenal.workflow import ParallelGroup, Phase, Workflow, expand_multi_vars, validate_workflow
 
 
 class TestValidateWorkflow:
@@ -424,6 +424,16 @@ class TestTemplateVarValidation:
         )
         errors = validate_workflow(wf)
         assert any("invalid Jinja2 prompt" in e for e in errors)
+
+    def test_expand_multi_vars_preserves_filtered_var_name_for_validation(self):
+        wf = Workflow(
+            name="test",
+            phases=[Phase(id="deploy", type="implement", prompt="Deploy {{ app|title }} to {{ ENV }}.")],
+            vars={"App": "svc"},
+        )
+        expanded = expand_multi_vars(wf, {"ENV": ["prod"]})
+        errors = validate_workflow(expanded)
+        assert any("{{app}}" in e and "no value defined" in e for e in errors)
 
 
 class TestLaneValidation:

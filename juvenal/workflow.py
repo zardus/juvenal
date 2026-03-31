@@ -69,10 +69,16 @@ class Phase:
     max_depth: int | None = None  # recursion depth limit for workflow phases
     workflow_file: str | None = None  # path to static sub-workflow YAML (resolved at load time)
     workflow_dir: str | None = None  # path to static sub-workflow directory (resolved at load time)
+    template_vars: dict[str, str] = field(default_factory=dict)  # per-phase Jinja2 variables from expansion
+
+    def _render_text(self, text: str, vars: dict[str, str] | None = None) -> str:
+        context = dict(vars or {})
+        context.update(self.template_vars)
+        return apply_vars(text, context)
 
     def render_prompt(self, failure_context: str = "", vars: dict[str, str] | None = None) -> str:
         """Render the implementation prompt, injecting failure context on retry."""
-        text = apply_vars(self.prompt, vars)
+        text = self._render_text(self.prompt, vars)
         if failure_context:
             text += (
                 "\n\nIMPORTANT: A previous attempt failed verification.\n"
@@ -84,10 +90,16 @@ class Phase:
     def render_check_prompt(self, vars: dict[str, str] | None = None) -> str:
         """Render the checker prompt for check phases."""
         if self.prompt:
-            return apply_vars(self.prompt, vars)
+            return self._render_text(self.prompt, vars)
         if self.role:
             return _load_role_prompt(self.role)
         return ""
+
+    def render_run(self, vars: dict[str, str] | None = None) -> str | None:
+        """Render the script command for script phases."""
+        if self.run is None:
+            return None
+        return self._render_text(self.run, vars)
 
 
 @dataclass
@@ -504,6 +516,7 @@ def _expand_checkers(
     base_path: Path | None = None,
     check_offset: int = 0,
     script_offset: int = 0,
+    template_vars: dict[str, str] | None = None,
 ) -> list[Phase]:
     """Expand inline checkers on an implement phase into synthetic check/script phases.
 
@@ -534,6 +547,7 @@ def _expand_checkers(
                     type="check",
                     role=entry,
                     bounce_target=parent_id,
+                    template_vars=dict(template_vars or {}),
                 )
             )
         elif isinstance(entry, dict):
@@ -550,6 +564,7 @@ def _expand_checkers(
                         bounce_target=parent_id,
                         timeout=timeout,
                         env=env,
+                        template_vars=dict(template_vars or {}),
                     )
                 )
             elif "role" in entry:
@@ -567,6 +582,7 @@ def _expand_checkers(
                         bounce_target=parent_id,
                         timeout=timeout,
                         env=env,
+                        template_vars=dict(template_vars or {}),
                     )
                 )
             elif "prompt" in entry or "prompt_file" in entry:
@@ -582,6 +598,7 @@ def _expand_checkers(
                         bounce_target=parent_id,
                         timeout=timeout,
                         env=env,
+                        template_vars=dict(template_vars or {}),
                     )
                 )
             else:
@@ -695,7 +712,13 @@ def inject_checkers(workflow: Workflow, checker_specs: list[str]) -> Workflow:
             i += 1
 
         # Expand CLI checkers with proper offsets
-        expanded = _expand_checkers(parent_id, parsed, check_offset=existing_checks, script_offset=existing_scripts)
+        expanded = _expand_checkers(
+            parent_id,
+            parsed,
+            check_offset=existing_checks,
+            script_offset=existing_scripts,
+            template_vars=phase.template_vars,
+        )
         new_phases.extend(expanded)
 
     return Workflow(
@@ -748,6 +771,7 @@ def inject_implementer(workflow: Workflow, role: str) -> Workflow:
                 max_depth=phase.max_depth,
                 workflow_file=phase.workflow_file,
                 workflow_dir=phase.workflow_dir,
+                template_vars=dict(phase.template_vars),
             )
         new_phases.append(phase)
 
@@ -825,8 +849,6 @@ def expand_multi_vars(workflow: Workflow, multi_vars: dict[str, list[str]]) -> W
         lanes: list[list[str]] = []
         for combo in combinations:
             combo_vars = dict(combo)
-            render_vars = dict(workflow.vars)
-            render_vars.update(combo_vars)
             suffix = "~".join(f"{k}={v}" for k, v in combo)
             group_old_ids = {p.id for p in group}
             lane_ids: list[str] = []
@@ -839,12 +861,14 @@ def expand_multi_vars(workflow: Workflow, multi_vars: dict[str, list[str]]) -> W
                 if new_bounce in group_old_ids:
                     new_bounce = f"{new_bounce}~{suffix}"
                 new_bounce_targets = [f"{bt}~{suffix}" if bt in group_old_ids else bt for bt in phase.bounce_targets]
+                new_template_vars = dict(phase.template_vars)
+                new_template_vars.update(combo_vars)
 
                 new_phase = Phase(
                     id=new_id,
                     type=phase.type,
-                    prompt=apply_vars(phase.prompt, render_vars) if phase.prompt else "",
-                    run=apply_vars(phase.run, render_vars) if phase.run else phase.run,
+                    prompt=phase.prompt,
+                    run=phase.run,
                     role=phase.role,
                     bounce_target=new_bounce,
                     bounce_targets=new_bounce_targets,
@@ -854,6 +878,7 @@ def expand_multi_vars(workflow: Workflow, multi_vars: dict[str, list[str]]) -> W
                     max_depth=phase.max_depth,
                     workflow_file=phase.workflow_file,
                     workflow_dir=phase.workflow_dir,
+                    template_vars=new_template_vars,
                 )
                 new_phases.append(new_phase)
                 lane_ids.append(new_id)
@@ -993,8 +1018,8 @@ def validate_workflow(workflow: Workflow) -> list[str]:
             errors.append(f"notify URL must start with http:// or https://, got {url!r}")
 
     # Template validation: referenced Jinja2 variables must have values
-    defined_vars = set(workflow.vars.keys())
     for phase in workflow.phases:
+        defined_vars = set(workflow.vars.keys()) | set(phase.template_vars.keys())
         undefined: set[str] = set()
         for field_name, text in (("prompt", phase.prompt), ("run", phase.run or "")):
             if not text:
