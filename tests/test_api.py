@@ -1256,6 +1256,26 @@ phases:
     assert "{{missing}}" in str(exc_info.value)
 
 
+def test_staged_plan_and_do_rejects_render_error_template(tmp_path):
+    planned_yaml = """\
+name: planned
+phases:
+  - id: execute
+    prompt: "{{ 1 / 0 }}"
+"""
+
+    def fake_plan(**kwargs):
+        workflow_path = _write_planned_workflow(Path(kwargs["project_dir"]), planned_yaml)
+        return PlanResult(success=True, workflow_yaml_path=str(workflow_path), temp_dir=None)
+
+    with goal("Ship the API", working_dir=tmp_path, backend=MockBackend(), session_name="example"):
+        with patch("juvenal.api._plan_workflow_internal", side_effect=fake_plan):
+            with pytest.raises(JuvenalExecutionError, match="Planned workflow validation failed") as exc_info:
+                plan_and_do("Break the work into phases.", stage_id="plan-stage")
+
+    assert "Jinja2 render error in prompt for phase 'execute'" in str(exc_info.value)
+
+
 def test_staged_plan_and_do_completion_checkpoint_persists_status_and_history_together(tmp_path):
     snapshots: list[tuple[str | None, tuple[str, ...]]] = []
     real_save = api_module._save_session_manifest

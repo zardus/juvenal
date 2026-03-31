@@ -955,13 +955,10 @@ class Engine:
                 self.display.notify_failed(url)
 
     def _collect_validation_errors(self) -> list[str]:
-        """Validate the workflow and collect render-time errors."""
+        """Validate the workflow."""
         from juvenal.workflow import validate_workflow
 
-        errors = validate_workflow(self.workflow)
-        if not errors:
-            errors.extend(self._collect_dry_run_render_errors())
-        return errors
+        return validate_workflow(self.workflow)
 
     @staticmethod
     def _print_validation_errors(errors: list[str]) -> None:
@@ -1054,26 +1051,6 @@ class Engine:
                 else:
                     print(f"  Group {gi + 1} (flat): {', '.join(group.phases)}")
         return 1 if has_errors else 0
-
-    def _collect_dry_run_render_errors(self) -> list[str]:
-        """Catch render-time Jinja errors that parse-only validation misses."""
-        errors: list[str] = []
-        for phase in self.workflow.phases:
-            try:
-                if phase.type == "implement":
-                    phase.render_prompt(vars=self.workflow.vars)
-                elif phase.type == "script":
-                    phase.render_run(vars=self.workflow.vars)
-                elif phase.type == "check" and not phase.role:
-                    phase.render_check_prompt(vars=self.workflow.vars)
-                elif phase.type == "workflow" and phase.prompt:
-                    phase.render_prompt(vars=self.workflow.vars)
-            except Exception as exc:
-                field_name = "script command" if phase.type == "script" else "prompt"
-                if phase.type == "check":
-                    field_name = "checker prompt"
-                errors.append(self._describe_template_render_error(phase.id, field_name, exc))
-        return errors
 
 
 def _plan_workflow_internal(

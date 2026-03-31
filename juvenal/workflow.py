@@ -151,6 +151,11 @@ def apply_vars(text: str, vars: dict[str, str] | None) -> str:
     return _JINJA_ENV.from_string(text).render(context)
 
 
+def _describe_template_render_error(phase_id: str, field_name: str, exc: Exception) -> str:
+    """Format a Jinja2 render failure for validation and dry-run output."""
+    return f"Jinja2 render error in {field_name} for phase '{phase_id}': {type(exc).__name__}: {exc}"
+
+
 @dataclass
 class Phase:
     """A single phase in the workflow pipeline.
@@ -1127,6 +1132,7 @@ def validate_workflow(workflow: Workflow) -> list[str]:
     for phase in workflow.phases:
         defined_vars = set(workflow.vars.keys()) | set(phase.template_vars.keys())
         undefined: set[str] = set()
+        phase_has_template_errors = False
         for field_name, text in (("prompt", phase.prompt), ("run", phase.run or "")):
             if not text:
                 continue
@@ -1134,11 +1140,29 @@ def validate_workflow(workflow: Workflow) -> list[str]:
                 ast = _JINJA_ENV.parse(text)
             except TemplateSyntaxError as exc:
                 errors.append(f"Phase {phase.id!r}: invalid Jinja2 {field_name}: {exc.message} (line {exc.lineno})")
+                phase_has_template_errors = True
                 continue
             missing_vars = set(meta.find_undeclared_variables(ast)) - defined_vars
             undefined.update(_find_vars_requiring_values(ast, missing_vars, allow_passthrough=False))
         for var_name in sorted(undefined):
             errors.append(f"Phase {phase.id!r}: template variable {{{{{var_name}}}}} has no value defined")
+        if undefined or phase_has_template_errors:
+            continue
+
+        try:
+            if phase.type == "implement":
+                phase.render_prompt(vars=workflow.vars)
+            elif phase.type == "script":
+                phase.render_run(vars=workflow.vars)
+            elif phase.type == "check" and not phase.role:
+                phase.render_check_prompt(vars=workflow.vars)
+            elif phase.type == "workflow" and phase.prompt:
+                phase.render_prompt(vars=workflow.vars)
+        except Exception as exc:
+            field_name = "script command" if phase.type == "script" else "prompt"
+            if phase.type == "check":
+                field_name = "checker prompt"
+            errors.append(_describe_template_render_error(phase.id, field_name, exc))
 
     return errors
 

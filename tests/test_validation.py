@@ -465,6 +465,14 @@ class TestTemplateVarValidation:
         errors = validate_workflow(wf)
         assert any("{{missing}}" in e and "no value defined" in e for e in errors)
 
+    def test_validate_workflow_reports_render_error(self):
+        wf = Workflow(
+            name="test",
+            phases=[Phase(id="build", type="implement", prompt="{{ 1 / 0 }}")],
+        )
+        errors = validate_workflow(wf)
+        assert any("Jinja2 render error in prompt for phase 'build'" in e for e in errors)
+
     def test_expand_multi_vars_preserves_filtered_var_name_for_validation(self):
         wf = Workflow(
             name="test",
