@@ -7,7 +7,7 @@ import shutil
 import pytest
 
 from juvenal.backends import AgentResult, Backend, InteractiveResult
-from juvenal.workflow import Phase, Workflow
+from juvenal.workflow import Phase, Workflow, make_command_check_prompt
 
 
 @pytest.fixture
@@ -17,7 +17,6 @@ def tmp_workflow(tmp_path):
     New convention:
     - Subdirectory with prompt.md and NO check- prefix -> implement
     - Subdirectory with prompt.md and check- prefix -> check
-    - .sh file at top level -> check that tells an agent to run the script
     """
     phases_dir = tmp_path / "phases"
     phases_dir.mkdir()
@@ -27,10 +26,10 @@ def tmp_workflow(tmp_path):
     p1.mkdir()
     (p1 / "prompt.md").write_text("Set up the project.")
 
-    # Phase 2: command-based check
-    build_script = phases_dir / "02-check-build.sh"
-    build_script.write_text("#!/bin/bash\nexit 0\n")
-    build_script.chmod(0o755)
+    # Phase 2: check
+    p2 = phases_dir / "02-check-build"
+    p2.mkdir()
+    (p2 / "prompt.md").write_text("Run the project's verification command and emit VERDICT.")
 
     # Phase 3: implement (feature)
     p3 = phases_dir / "03-implement"
@@ -59,13 +58,13 @@ phases:
     prompt: "Set up the project scaffolding."
   - id: setup-check
     type: check
-    run: "echo ok"
+    prompt: "Run `echo ok` and emit `VERDICT: PASS` if it succeeds."
   - id: implement
     prompt: "Implement the feature."
     bounce_target: setup
   - id: implement-script
     type: check
-    run: "echo ok"
+    prompt: "Run `echo ok` and emit `VERDICT: PASS` if it succeeds."
   - id: implement-review
     type: check
     role: tester
@@ -154,12 +153,12 @@ def mock_backend():
 
 @pytest.fixture
 def simple_workflow():
-    """A simple workflow with an implement phase and a run-based check."""
+    """A simple workflow with an implement phase and an agentic check."""
     return Workflow(
         name="test",
         phases=[
             Phase(id="setup", type="implement", prompt="Do the thing."),
-            Phase(id="setup-check", type="check", run="exit 0"),
+            Phase(id="setup-check", type="check", prompt=make_command_check_prompt("exit 0")),
         ],
         backend="claude",
         max_bounces=3,

@@ -7,7 +7,15 @@ import pytest
 
 from juvenal.checkers import parse_verdict
 from juvenal.engine import BounceCounter, Engine, _extract_yaml, _plan_workflow_internal
-from juvenal.workflow import ParallelGroup, Phase, Workflow, expand_multi_vars, inject_checkers, inject_implementer
+from juvenal.workflow import (
+    ParallelGroup,
+    Phase,
+    Workflow,
+    expand_multi_vars,
+    inject_checkers,
+    inject_implementer,
+    make_command_check_prompt,
+)
 from tests.conftest import MockBackend
 
 
@@ -82,7 +90,7 @@ class TestEngineWithMockedBackend:
             name="test",
             phases=[
                 Phase(id="setup", type="implement", prompt="Do it."),
-                Phase(id="setup-check", type="check", run="true"),
+                Phase(id="setup-check", type="check", prompt=make_command_check_prompt("true")),
             ],
             max_bounces=3,
         )
@@ -98,7 +106,7 @@ class TestEngineWithMockedBackend:
             name="test",
             phases=[
                 Phase(id="setup", type="implement", prompt="Do it."),
-                Phase(id="setup-check", type="check", run="true"),
+                Phase(id="setup-check", type="check", prompt=make_command_check_prompt("true")),
             ],
             max_bounces=3,
         )
@@ -116,7 +124,7 @@ class TestEngineWithMockedBackend:
             name="test",
             phases=[
                 Phase(id="setup", type="implement", prompt="Do it."),
-                Phase(id="setup-check", type="check", run="false"),
+                Phase(id="setup-check", type="check", prompt=make_command_check_prompt("false")),
             ],
             max_bounces=2,
         )
@@ -167,9 +175,9 @@ class TestEngineWithMockedBackend:
             name="test",
             phases=[
                 Phase(id="phase1", type="implement", prompt="Do phase 1."),
-                Phase(id="phase1-check", type="check", run="true"),
+                Phase(id="phase1-check", type="check", prompt=make_command_check_prompt("true")),
                 Phase(id="phase2", type="implement", prompt="Do phase 2."),
-                Phase(id="phase2-check", type="check", run="true"),
+                Phase(id="phase2-check", type="check", prompt=make_command_check_prompt("true")),
             ],
             max_bounces=3,
         )
@@ -311,7 +319,7 @@ class TestEngineWithMockedBackend:
             name="test",
             phases=[
                 Phase(id="setup", type="implement", prompt="Do the thing."),
-                Phase(id="setup-check", type="check", run="true"),
+                Phase(id="setup-check", type="check", prompt=make_command_check_prompt("true")),
             ],
         )
         engine = self._make_engine(workflow, MockBackend(), tmp_path, dry_run=True)
@@ -330,7 +338,7 @@ class TestEngineWithMockedBackend:
             name="test",
             phases=[
                 Phase(id="setup", type="implement", prompt="Do it."),
-                Phase(id="setup-check", type="check", run="true"),
+                Phase(id="setup-check", type="check", prompt=make_command_check_prompt("true")),
             ],
             max_bounces=3,
         )
@@ -350,7 +358,7 @@ class TestEngineWithMockedBackend:
             name="test",
             phases=[
                 Phase(id="setup", type="implement", prompt="Do it."),
-                Phase(id="setup-check", type="check", run="false"),
+                Phase(id="setup-check", type="check", prompt=make_command_check_prompt("false")),
             ],
             max_bounces=1,
         )
@@ -368,7 +376,7 @@ class TestEngineWithMockedBackend:
             name="test",
             phases=[
                 Phase(id="setup", type="implement", prompt="Do it."),
-                Phase(id="setup-check", type="check", run="true"),
+                Phase(id="setup-check", type="check", prompt=make_command_check_prompt("true")),
             ],
             max_bounces=3,
         )
@@ -605,7 +613,7 @@ class TestPreserveContextOnBounce:
             name="test",
             phases=[
                 Phase(id="build", type="implement", prompt="Build it."),
-                Phase(id="build-check", type="check", run="false", bounce_target="build"),
+                Phase(id="build-check", type="check", prompt=make_command_check_prompt("false"), bounce_target="build"),
             ],
             max_bounces=2,
         )
@@ -649,7 +657,7 @@ class TestPreserveContextOnBounce:
             name="test",
             phases=[
                 Phase(id="setup", type="implement", prompt="Do it."),
-                Phase(id="check", type="check", run="true"),
+                Phase(id="check", type="check", prompt=make_command_check_prompt("true")),
             ],
             max_bounces=3,
         )
@@ -949,7 +957,12 @@ class TestCheckersShorthandEngine:
             name="test",
             phases=[
                 Phase(id="build", type="implement", prompt="Build it."),
-                Phase(id="build~check-1", type="check", run="false", bounce_target="build"),
+                Phase(
+                    id="build~check-1",
+                    type="check",
+                    prompt=make_command_check_prompt("false"),
+                    bounce_target="build",
+                ),
             ],
             max_bounces=2,
         )
@@ -1329,7 +1342,7 @@ class TestBaselineSha:
             name="test",
             phases=[
                 Phase(id="setup", type="implement", prompt="Do it."),
-                Phase(id="check", type="check", run="true"),
+                Phase(id="check", type="check", prompt=make_command_check_prompt("true")),
             ],
             max_bounces=3,
         )
@@ -1664,7 +1677,7 @@ class TestResumeWithParallelPhases:
                 Phase(id="a", type="implement", prompt="A."),
                 Phase(id="b", type="implement", prompt="B."),
                 Phase(id="c", type="implement", prompt="C."),
-                Phase(id="final", type="check", run="true"),
+                Phase(id="final", type="check", prompt=make_command_check_prompt("true")),
             ],
             parallel_groups=[ParallelGroup(phases=["a", "b", "c"])],
             max_bounces=3,
@@ -1722,7 +1735,7 @@ class TestResumeWithParallelPhases:
             phases=[
                 Phase(id="a", type="implement", prompt="A."),
                 Phase(id="b", type="implement", prompt="B."),
-                Phase(id="post", type="check", run="true"),
+                Phase(id="post", type="check", prompt=make_command_check_prompt("true")),
             ],
             parallel_groups=[ParallelGroup(phases=["a", "b"])],
             max_bounces=3,
@@ -1955,7 +1968,12 @@ class TestTemplateVarsEngine:
             name="test",
             phases=[
                 Phase(id="build", type="implement", prompt="Build it."),
-                Phase(id="test", type="check", run="pytest {{TEST_DIR}} -x", bounce_target="build"),
+                Phase(
+                    id="test",
+                    type="check",
+                    prompt=make_command_check_prompt("pytest {{TEST_DIR}} -x"),
+                    bounce_target="build",
+                ),
             ],
             vars={"TEST_DIR": "tests/unit"},
         )

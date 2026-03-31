@@ -23,10 +23,15 @@ phases:
   - id: ensure-tests
     prompt_file: research-paper-phases/05-ensure-tests.md
 
-  # Phase 5b: Run tests
+  # Phase 5b: Review test execution
   - id: run-tests
     type: check
-    run: "bash run-tests.sh"
+    prompt: |
+      Run `bash run-tests.sh` from the repository root to verify the implementation.
+
+      Do not modify code while checking.
+      If the command fails, or if the test suite still misses obvious required coverage for this stage, emit `VERDICT: FAIL: <reason>`.
+      If the command succeeds and the phase looks adequately tested, emit `VERDICT: PASS`.
     bounce_target: ensure-tests
 
   # Phase 6: Graduate researcher implements experiments

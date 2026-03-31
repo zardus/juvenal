@@ -3,7 +3,7 @@
 import pytest
 
 from juvenal.engine import Engine
-from juvenal.workflow import Phase, Workflow
+from juvenal.workflow import Phase, Workflow, make_command_check_prompt
 from tests.conftest import claude_available
 
 
@@ -24,7 +24,7 @@ def test_trivial_workflow_claude(tmp_path):
             Phase(
                 id="check-hello",
                 type="check",
-                run="test -f hello.txt && grep -q 'hello world' hello.txt",
+                prompt=make_command_check_prompt("test -f hello.txt && grep -q 'hello world' hello.txt"),
             ),
         ],
         backend="claude",

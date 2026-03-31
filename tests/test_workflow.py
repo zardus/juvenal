@@ -14,6 +14,7 @@ from juvenal.workflow import (
     inject_checkers,
     inject_implementer,
     load_workflow,
+    make_command_check_prompt,
     parse_checker_string,
     scaffold_workflow,
 )
@@ -37,7 +38,7 @@ class TestYAMLLoading:
         wf = load_workflow(sample_yaml)
         assert wf.phases[0].type == "implement"
         assert wf.phases[1].type == "check"
-        assert wf.phases[1].run == "echo ok"
+        assert "echo ok" in wf.phases[1].prompt
         assert wf.phases[2].type == "implement"
         assert wf.phases[3].type == "check"
         assert wf.phases[4].type == "check"
@@ -107,8 +108,8 @@ class TestDirectoryInlineCheckers:
         assert wf.phases[1].prompt == "Verify the feature.\nVERDICT: PASS or FAIL"
         assert wf.phases[1].bounce_target == "01-build"
 
-    def test_sh_in_phase_dir(self, tmp_path):
-        """.sh file alongside prompt.md creates a run-based check with bounce_target."""
+    def test_sh_in_phase_dir_rejected(self, tmp_path):
+        """.sh file alongside prompt.md is rejected."""
         phases_dir = tmp_path / "phases"
         phases_dir.mkdir()
 
@@ -119,15 +120,11 @@ class TestDirectoryInlineCheckers:
         script.write_text("#!/bin/bash\npytest -x\n")
         script.chmod(0o755)
 
-        wf = load_workflow(tmp_path)
-        assert len(wf.phases) == 2
-        assert wf.phases[1].id == "01-build~check-1"
-        assert wf.phases[1].type == "check"
-        assert "tests.sh" in wf.phases[1].run
-        assert wf.phases[1].bounce_target == "01-build"
+        with pytest.raises(ValueError, match="Run-based \\.sh checkers are no longer supported"):
+            load_workflow(tmp_path)
 
-    def test_multiple_checkers_in_phase_dir(self, tmp_path):
-        """Multiple .md and .sh files create numbered check phases."""
+    def test_multiple_checkers_in_phase_dir_rejects_sh_files(self, tmp_path):
+        """Mixed .md and .sh files are rejected."""
         phases_dir = tmp_path / "phases"
         phases_dir.mkdir()
 
@@ -140,18 +137,8 @@ class TestDirectoryInlineCheckers:
         script.write_text("#!/bin/bash\nruff check\n")
         script.chmod(0o755)
 
-        wf = load_workflow(tmp_path)
-        assert len(wf.phases) == 4
-        assert wf.phases[0].id == "01-build"
-        assert wf.phases[0].type == "implement"
-        # Sorted: check-quality.md, check-tests.md, lint.sh
-        assert wf.phases[1].id == "01-build~check-1"
-        assert wf.phases[1].prompt == "Quality review."
-        assert wf.phases[2].id == "01-build~check-2"
-        assert wf.phases[2].prompt == "Test review."
-        assert wf.phases[3].id == "01-build~check-3"
-        assert wf.phases[3].type == "check"
-        assert "lint.sh" in wf.phases[3].run
+        with pytest.raises(ValueError, match="Run-based \\.sh checkers are no longer supported"):
+            load_workflow(tmp_path)
 
     def test_check_dir_ignores_extra_files(self, tmp_path):
         """check- prefixed dirs only use prompt.md, extra files are ignored."""
@@ -387,8 +374,8 @@ phases:
         assert wf.phases[1].type == "check"
         assert wf.phases[1].prompt == "Verify REST endpoints work."
 
-    def test_checkers_script(self, tmp_path):
-        """run checker expands to a run-based check phase."""
+    def test_checkers_run_rejected(self, tmp_path):
+        """run checker syntax is rejected."""
         yaml_content = """\
 name: test
 phases:
@@ -399,11 +386,8 @@ phases:
 """
         yaml_path = tmp_path / "workflow.yaml"
         yaml_path.write_text(yaml_content)
-        wf = load_workflow(yaml_path)
-        assert len(wf.phases) == 2
-        assert wf.phases[1].id == "build~check-1"
-        assert wf.phases[1].type == "check"
-        assert wf.phases[1].run == "pytest tests/ -x"
+        with pytest.raises(ValueError, match="'run' is no longer supported"):
+            load_workflow(yaml_path)
 
     def test_checkers_bare_string(self, tmp_path):
         """bare string role shorthand."""
@@ -433,21 +417,18 @@ phases:
     checks:
       - role: tester
       - prompt: "Verify REST endpoints."
-      - run: "pytest tests/ -x"
       - tester
 """
         yaml_path = tmp_path / "workflow.yaml"
         yaml_path.write_text(yaml_content)
         wf = load_workflow(yaml_path)
-        assert len(wf.phases) == 5
+        assert len(wf.phases) == 4
         assert wf.phases[1].id == "build-feature~check-1"
         assert wf.phases[1].role == "tester"
         assert wf.phases[2].id == "build-feature~check-2"
         assert wf.phases[2].prompt == "Verify REST endpoints."
         assert wf.phases[3].id == "build-feature~check-3"
-        assert wf.phases[3].run == "pytest tests/ -x"
-        assert wf.phases[4].id == "build-feature~check-4"
-        assert wf.phases[4].role == "tester"
+        assert wf.phases[3].role == "tester"
 
     def test_checkers_bounce_target(self, tmp_path):
         """all synthetic phases bounce to parent."""
@@ -458,7 +439,6 @@ phases:
     prompt: "Build it."
     checks:
       - role: tester
-      - run: "make test"
       - prompt: "Check it."
 """
         yaml_path = tmp_path / "workflow.yaml"
@@ -479,7 +459,7 @@ phases:
         timeout: 120
         env:
           CI: "true"
-      - run: "pytest"
+      - prompt: "Run pytest and verify the result."
         timeout: 60
         env:
           FAST: "1"
@@ -489,6 +469,8 @@ phases:
         wf = load_workflow(yaml_path)
         assert wf.phases[1].timeout == 120
         assert wf.phases[1].env == {"CI": "true"}
+        assert wf.phases[2].timeout == 60
+        assert wf.phases[2].env == {"FAST": "1"}
         assert wf.phases[2].timeout == 60
         assert wf.phases[2].env == {"FAST": "1"}
 
@@ -581,14 +563,14 @@ class TestInjectImplementer:
             phases=[
                 Phase(id="build", type="implement", prompt="Build it."),
                 Phase(id="verify", type="check", role="tester"),
-                Phase(id="lint", type="check", run="ruff check"),
+                Phase(id="lint", type="check", prompt=make_command_check_prompt("ruff check")),
             ],
         )
         result = inject_implementer(wf, "software-engineer")
         assert "expert software engineer" in result.phases[0].prompt
         assert result.phases[1].role == "tester"
         assert result.phases[1].prompt == ""
-        assert result.phases[2].run == "ruff check"
+        assert "ruff check" in result.phases[2].prompt
 
     def test_multiple_implement_phases(self):
         """All implement phases get the preamble."""
@@ -708,8 +690,9 @@ class TestParseCheckerString:
     def test_role_senior(self):
         assert parse_checker_string("senior-tester") == "senior-tester"
 
-    def test_run(self):
-        assert parse_checker_string("run:pytest -x") == {"run": "pytest -x"}
+    def test_run_rejected(self):
+        with pytest.raises(ValueError, match="'run:' is no longer supported"):
+            parse_checker_string("run:pytest -x")
 
     def test_prompt(self):
         assert parse_checker_string("prompt:Verify the API") == {"prompt": "Verify the API"}
@@ -766,18 +749,14 @@ class TestInjectCheckers:
         assert result.phases[1].role == "professor"
         assert result.phases[1].bounce_target == "build"
 
-    def test_single_implement_run_checker(self):
-        """Inject a run-based checker onto a single implement phase."""
+    def test_single_implement_run_checker_rejected(self):
+        """run-based checker specs are rejected."""
         wf = Workflow(
             name="test",
             phases=[Phase(id="build", type="implement", prompt="Build it.")],
         )
-        result = inject_checkers(wf, ["run:pytest -x"])
-        assert len(result.phases) == 2
-        assert result.phases[1].id == "build~check-1"
-        assert result.phases[1].type == "check"
-        assert result.phases[1].run == "pytest -x"
-        assert result.phases[1].bounce_target == "build"
+        with pytest.raises(ValueError, match="'run:' is no longer supported"):
+            inject_checkers(wf, ["run:pytest -x"])
 
     def test_single_implement_prompt_checker(self):
         """Inject a prompt checker onto a single implement phase."""
@@ -798,10 +777,15 @@ class TestInjectCheckers:
             phases=[
                 Phase(id="build", type="implement", prompt="Build it."),
                 Phase(id="build~check-1", type="check", role="tester", bounce_target="build"),
-                Phase(id="build~check-2", type="check", run="make test", bounce_target="build"),
+                Phase(
+                    id="build~check-2",
+                    type="check",
+                    prompt=make_command_check_prompt("make test"),
+                    bounce_target="build",
+                ),
             ],
         )
-        result = inject_checkers(wf, ["senior-tester", "run:pytest"])
+        result = inject_checkers(wf, ["senior-tester", "prompt:Run pytest and verify the result."])
         assert len(result.phases) == 5
         # Existing checkers preserved
         assert result.phases[1].id == "build~check-1"
@@ -810,7 +794,7 @@ class TestInjectCheckers:
         assert result.phases[3].id == "build~check-3"
         assert result.phases[3].role == "senior-tester"
         assert result.phases[4].id == "build~check-4"
-        assert result.phases[4].run == "pytest"
+        assert result.phases[4].prompt == "Run pytest and verify the result."
 
     def test_multiple_implement_phases(self):
         """Checkers are injected after each implement phase."""
@@ -837,7 +821,7 @@ class TestInjectCheckers:
             phases=[
                 Phase(id="build", type="implement", prompt="Build it."),
                 Phase(id="verify", type="check", role="tester"),
-                Phase(id="lint", type="check", run="ruff check"),
+                Phase(id="lint", type="check", prompt=make_command_check_prompt("ruff check")),
             ],
         )
         result = inject_checkers(wf, ["senior-tester"])
@@ -853,12 +837,12 @@ class TestInjectCheckers:
             name="test",
             phases=[Phase(id="build", type="implement", prompt="Build it.")],
         )
-        result = inject_checkers(wf, ["tester", "run:pytest -x", "prompt:Check it"])
+        result = inject_checkers(wf, ["tester", "prompt:Run pytest -x and verify the result.", "prompt:Check it"])
         assert len(result.phases) == 4
         assert result.phases[1].id == "build~check-1"
         assert result.phases[1].role == "tester"
         assert result.phases[2].id == "build~check-2"
-        assert result.phases[2].run == "pytest -x"
+        assert result.phases[2].prompt == "Run pytest -x and verify the result."
         assert result.phases[3].id == "build~check-3"
         assert result.phases[3].prompt == "Check it"
 
@@ -916,8 +900,8 @@ class TestDirectoryParallelLanes:
         phase_map = {p.id: p for p in wf.phases}
         assert phase_map["feat~check-1"].bounce_target == "feat"
 
-    def test_lane_with_script_checker(self, tmp_path):
-        """Lane with a .sh-based run checker."""
+    def test_lane_with_script_checker_rejected(self, tmp_path):
+        """Lane with a .sh checker is rejected."""
         phases_dir = tmp_path / "phases"
         phases_dir.mkdir()
 
@@ -931,14 +915,8 @@ class TestDirectoryParallelLanes:
         script.write_text("#!/bin/bash\nexit 0\n")
         script.chmod(0o755)
 
-        wf = load_workflow(tmp_path)
-        pg = wf.parallel_groups[0]
-        assert pg.lanes == [["x", "x~check-1"]]
-
-        phase_map = {p.id: p for p in wf.phases}
-        assert phase_map["x~check-1"].type == "check"
-        assert phase_map["x~check-1"].bounce_target == "x"
-        assert "tests.sh" in phase_map["x~check-1"].run
+        with pytest.raises(ValueError, match="Run-based \\.sh checkers are no longer supported"):
+            load_workflow(tmp_path)
 
     def test_complex_lane_subdirectories(self, tmp_path):
         """Lane with subdirectories instead of root prompt.md."""
@@ -1246,8 +1224,8 @@ class TestExpandMultiVars:
         return phase.render_prompt(vars=workflow.vars)
 
     @staticmethod
-    def _render_run(phase: Phase, workflow: Workflow) -> str | None:
-        return phase.render_run(vars=workflow.vars)
+    def _render_check_prompt(phase: Phase, workflow: Workflow) -> str:
+        return phase.render_check_prompt(vars=workflow.vars)
 
     def test_single_var_two_values(self):
         """Phase with {{TARGET}} and TARGET=[linux, windows] creates two parallel lanes."""
@@ -1301,19 +1279,24 @@ class TestExpandMultiVars:
         ids = [p.id for p in result.phases]
         assert ids == ["setup", "build~TARGET=a", "build~TARGET=b", "finish"]
 
-    def test_check_run_templated(self):
-        """Run-based check commands are also expanded."""
+    def test_check_prompt_templated(self):
+        """Templated check prompts are also expanded."""
         wf = Workflow(
             name="test",
             phases=[
                 Phase(id="test", type="implement", prompt="Build."),
-                Phase(id="test~check-1", type="check", run="pytest {{DIR}} -x", bounce_target="test"),
+                Phase(
+                    id="test~check-1",
+                    type="check",
+                    prompt=make_command_check_prompt("pytest {{DIR}} -x"),
+                    bounce_target="test",
+                ),
             ],
         )
         result = expand_multi_vars(wf, {"DIR": ["tests/a", "tests/b"]})
         checks = [p for p in result.phases if p.type == "check"]
-        assert self._render_run(checks[0], result) == "pytest tests/a -x"
-        assert self._render_run(checks[1], result) == "pytest tests/b -x"
+        assert "pytest tests/a -x" in self._render_check_prompt(checks[0], result)
+        assert "pytest tests/b -x" in self._render_check_prompt(checks[1], result)
 
     def test_cartesian_product(self):
         """Multiple multi-value vars produce cartesian product."""
@@ -1506,7 +1489,7 @@ phases:
         wf = load_workflow(tmp_path / "workflow.yaml")
         assert wf.phases[1].prompt == "Verify the build."
 
-    def test_checks_with_run(self, tmp_path):
+    def test_checks_with_run_rejected(self, tmp_path):
         yaml_content = """\
 name: test
 phases:
@@ -1516,9 +1499,8 @@ phases:
       - run: "pytest -x"
 """
         (tmp_path / "workflow.yaml").write_text(yaml_content)
-        wf = load_workflow(tmp_path / "workflow.yaml")
-        assert wf.phases[1].type == "check"
-        assert wf.phases[1].run == "pytest -x"
+        with pytest.raises(ValueError, match="'run' is no longer supported"):
+            load_workflow(tmp_path / "workflow.yaml")
 
 
 class TestInteractiveField:
@@ -1622,8 +1604,8 @@ class TestPlannerWorkflowAssets:
         assert phases["planned-workflow-validate"].type == "check"
         assert phases["planned-workflow-validate"].bounce_target == "write-workflow"
         assert (
-            phases["planned-workflow-validate"].run
-            == "python -m juvenal.plan_validation .plan/workflow-structure.yaml workflow.yaml"
+            "python -m juvenal.plan_validation .plan/workflow-structure.yaml workflow.yaml"
+            in phases["planned-workflow-validate"].prompt
         )
         assert phases["workflow-review"].bounce_target == "write-workflow"
 

@@ -45,12 +45,30 @@ phases:
   - id: yaml-validate
     type: check
     bounce_target: write-workflow
-    run: "python -c \"import yaml, sys; d=yaml.safe_load(open('workflow.yaml')); assert isinstance(d,dict) and 'phases' in d, 'missing phases key'\""
+    prompt: |
+      Run this command from the working directory to verify that `workflow.yaml` is valid YAML with a top-level `phases` key:
+
+      ```bash
+      python -c "import yaml, sys; d=yaml.safe_load(open('workflow.yaml')); assert isinstance(d,dict) and 'phases' in d, 'missing phases key'"
+      ```
+
+      Do not modify any files while checking.
+      If the command fails or reveals an invalid workflow shape, emit `VERDICT: FAIL: <reason>`.
+      If it succeeds and the file looks structurally correct, emit `VERDICT: PASS`.
 
   - id: planned-workflow-validate
     type: check
     bounce_target: write-workflow
-    run: "python -m juvenal.plan_validation .plan/workflow-structure.yaml workflow.yaml"
+    prompt: |
+      Run this command from the working directory to validate `workflow.yaml` against `.plan/workflow-structure.yaml`:
+
+      ```bash
+      python -m juvenal.plan_validation .plan/workflow-structure.yaml workflow.yaml
+      ```
+
+      Do not modify any files while checking.
+      If the command fails or reports any topology or structure mismatch, emit `VERDICT: FAIL: <reason>`.
+      If it succeeds and the generated workflow matches the plan contract, emit `VERDICT: PASS`.
 
   - id: workflow-review
     type: check

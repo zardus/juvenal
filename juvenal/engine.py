@@ -1,7 +1,8 @@
-"""Core non-agentic execution loop."""
+"""Core workflow execution loop."""
 
 from __future__ import annotations
 
+import re
 import shutil
 import subprocess
 import tempfile
@@ -19,6 +20,8 @@ from juvenal.display import Display
 from juvenal.notifications import build_notification_payload, send_webhook
 from juvenal.state import PhaseState, PipelineState
 from juvenal.workflow import ParallelGroup, Phase, Workflow
+
+_BASH_CODE_BLOCK_RE = re.compile(r"```bash\n(.*?)\n```", re.DOTALL)
 
 
 @dataclass
@@ -73,10 +76,10 @@ class PipelineExhausted(Exception):
 
 
 class Engine:
-    """Non-agentic, deterministic execution loop.
+    """Deterministic execution loop.
 
-    This engine deliberately does NOT use an LLM to decide flow control.
-    All decisions (retry, bounce, advance) are made programmatically.
+    Agents handle phase work, while flow control remains programmatic:
+    retry, bounce, and advance decisions are all made by the engine.
     """
 
     def __init__(
@@ -190,8 +193,6 @@ class Engine:
                 if phase.type == "implement":
                     result = self._run_implement(phase)
                 elif phase.type == "check":
-                    result = self._run_check(phase, phases, phase_idx)
-                elif phase.type == "script":
                     result = self._run_check(phase, phases, phase_idx)
                 elif phase.type == "workflow":
                     result = self._run_workflow(phase)
@@ -773,8 +774,6 @@ class Engine:
                 result = self._run_implement(phase)
             elif phase.type == "check":
                 result = self._run_check(phase, lane_phases, phase_idx)
-            elif phase.type == "script":
-                result = self._run_check(phase, lane_phases, phase_idx)
             else:
                 raise ValueError(f"Unsupported phase type in lane: {phase.type!r}")
 
@@ -991,17 +990,8 @@ class Engine:
                 print(f"{prefix} [{phase.type}] {phase.id}{extra_str}")
                 print(f"     prompt: {prompt_preview}...")
             elif phase.type == "check":
-                if phase.role:
-                    target = phase.role
-                elif phase.run:
-                    target = phase.run if has_errors else phase.render_run(vars=self.workflow.vars)
-                else:
-                    check_preview = phase.prompt if has_errors else phase.render_check_prompt(vars=self.workflow.vars)
-                    target = check_preview[:60].replace("\n", " ")
+                target = phase.role or _preview_check_target(phase.prompt)
                 print(f"{prefix} [{phase.type}] {phase.id}: {target}{extra_str}")
-            elif phase.type == "script":
-                run_preview = phase.run if has_errors else phase.render_run(vars=self.workflow.vars)
-                print(f"{prefix} [check] {phase.id}: {run_preview}{extra_str}")
             elif phase.type == "workflow":
                 print(f"{prefix} [{phase.type}] {phase.id}{extra_str}")
                 if phase.workflow_file:
@@ -1024,6 +1014,16 @@ class Engine:
                 else:
                     print(f"  Group {gi + 1} (flat): {', '.join(group.phases)}")
         return 1 if has_errors else 0
+
+
+def _preview_check_target(prompt: str) -> str:
+    """Summarize a check prompt for dry-run output."""
+    match = _BASH_CODE_BLOCK_RE.search(prompt)
+    if match:
+        command = " ".join(line.strip() for line in match.group(1).strip().splitlines() if line.strip())
+        if command:
+            return command
+    return prompt[:60].replace("\n", " ")
 
 
 def _plan_workflow_internal(

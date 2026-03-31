@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import itertools
-import shlex
 import shutil
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -170,7 +169,6 @@ class Phase:
     id: str
     type: str = "implement"  # "implement", "check", "workflow"
     prompt: str = ""  # for implement, check, and workflow (dynamic)
-    run: str | None = None  # optional command for an agentic checker to run
     role: str | None = None  # built-in role name for check
     bounce_target: str | None = None  # fixed phase to bounce back to on failure
     bounce_targets: list[str] = field(default_factory=list)  # agent-guided: checker picks from this list
@@ -205,15 +203,7 @@ class Phase:
             parts.append(self._render_text(self.prompt, vars))
         if self.role:
             parts.append(_load_role_prompt(self.role))
-        if self.run:
-            parts.append(_render_run_checker_prompt(self._render_text(self.run, vars)))
         return "\n\n".join(part for part in parts if part)
-
-    def render_run(self, vars: dict[str, str] | None = None) -> str | None:
-        """Render the script command for script phases."""
-        if self.run is None:
-            return None
-        return self._render_text(self.run, vars)
 
 
 @dataclass
@@ -341,7 +331,6 @@ def _load_yaml_with_includes(path: Path, seen: set[str]) -> Workflow:
         "type",
         "prompt",
         "prompt_file",
-        "run",
         "role",
         "bounce_target",
         "bounce_targets",
@@ -358,6 +347,10 @@ def _load_yaml_with_includes(path: Path, seen: set[str]) -> Workflow:
     for i, phase_data in enumerate(data.get("phases", [])):
         if "id" not in phase_data:
             raise ValueError(f"Phase {i} in {path}: missing required 'id' field")
+        if "run" in phase_data:
+            raise ValueError(
+                f"Phase '{phase_data['id']}': 'run' is no longer supported; use an agentic check prompt instead"
+            )
         unknown = set(phase_data.keys()) - _VALID_PHASE_KEYS
         if unknown:
             import warnings
@@ -382,13 +375,14 @@ def _load_yaml_with_includes(path: Path, seen: set[str]) -> Workflow:
             wf_dir = str((path.parent / wf_dir).resolve())
         phase_type = phase_data.get("type", "implement")
         if phase_type == "script":
-            phase_type = "check"
+            raise ValueError(
+                f"Phase '{phase_data['id']}': type 'script' is no longer supported; use type 'check' with a prompt"
+            )
 
         phase = Phase(
             id=phase_data["id"],
             type=phase_type,
             prompt=prompt,
-            run=phase_data.get("run"),
             role=phase_data.get("role"),
             bounce_target=bounce_target,
             bounce_targets=bounce_targets,
@@ -436,7 +430,6 @@ def _load_directory(root: Path, phases_dir: Path) -> Workflow:
     - Subdirectory with prompt.md and NO check- prefix -> implement
     - Subdirectory with prompt.md and check- prefix -> check
     - Subdirectory with "parallel" in name -> parallel lane group
-    - .sh file at top level -> check that instructs an agent to run the script
     - Bare .md file at top level -> implement + auto check phase
     """
     phases = []
@@ -447,9 +440,10 @@ def _load_directory(root: Path, phases_dir: Path) -> Workflow:
         if entry.name.startswith(".") or entry.name.startswith("_"):
             continue
         if entry.is_file() and entry.suffix == ".sh":
-            # Agentic check phase that runs a script
-            phase_id = entry.stem
-            phases.append(Phase(id=phase_id, type="check", run=_script_path_command(entry)))
+            raise ValueError(
+                f"Run-based .sh phases are no longer supported: {entry}. "
+                "Create an explicit check prompt that tells the agent which command to run."
+            )
         elif entry.is_file() and entry.suffix == ".md":
             # Bare .md file = implement phase + auto check phase
             phase_id = entry.stem
@@ -496,7 +490,6 @@ def _load_phase_dir(phase_dir: Path) -> list[Phase] | None:
     - check- prefix or -check- in name -> check phase (prompt.md only)
     - no prefix -> implement phase, plus:
         - additional .md files (besides prompt.md) -> check phases
-        - .sh files -> check phases that instruct an agent to run the script
       Check phases auto-get bounce_target set to the implement phase.
     """
     prompt_path = phase_dir / "prompt.md"
@@ -508,7 +501,7 @@ def _load_phase_dir(phase_dir: Path) -> list[Phase] | None:
         # Check phase
         return [Phase(id=phase_dir.name, type="check", prompt=prompt)]
 
-    # Implement phase — also pick up sibling check/script files
+    # Implement phase — also pick up sibling markdown check files
     phase_id = phase_dir.name
     phases = [Phase(id=phase_id, type="implement", prompt=prompt)]
 
@@ -517,14 +510,9 @@ def _load_phase_dir(phase_dir: Path) -> list[Phase] | None:
         if entry.name == "prompt.md" or entry.name.startswith(".") or entry.name.startswith("_"):
             continue
         if entry.is_file() and entry.suffix == ".sh":
-            check_n += 1
-            phases.append(
-                Phase(
-                    id=f"{phase_id}~check-{check_n}",
-                    type="check",
-                    run=_script_path_command(entry),
-                    bounce_target=phase_id,
-                )
+            raise ValueError(
+                f"Run-based .sh checkers are no longer supported: {entry}. "
+                "Replace the script file with a markdown checker prompt."
             )
         elif entry.is_file() and entry.suffix == ".md":
             check_n += 1
@@ -573,7 +561,6 @@ def _load_lane_dir(lane_dir: Path) -> list[Phase]:
     Simple mode (prompt.md at root):
         prompt.md       -> implement phase (id = lane dir name)
         check*.md       -> check phases (id = {lane}~check-N)
-        *.sh            -> check phases that run the script (id = {lane}~check-N)
 
     Complex mode (subdirectories):
         Each entry is loaded using standard directory conventions,
@@ -592,8 +579,10 @@ def _load_lane_dir(lane_dir: Path) -> list[Phase]:
             if entry.name == "prompt.md" or entry.name.startswith(".") or entry.name.startswith("_"):
                 continue
             if entry.is_file() and entry.suffix == ".sh":
-                check_n += 1
-                phases.append(Phase(id=f"{lane_name}~check-{check_n}", type="check", run=_script_path_command(entry)))
+                raise ValueError(
+                    f"Run-based .sh checkers are no longer supported: {entry}. "
+                    "Replace the script file with a markdown checker prompt."
+                )
             elif entry.is_file() and entry.suffix == ".md":
                 check_n += 1
                 phases.append(Phase(id=f"{lane_name}~check-{check_n}", type="check", prompt=entry.read_text()))
@@ -604,7 +593,10 @@ def _load_lane_dir(lane_dir: Path) -> list[Phase]:
         if entry.name.startswith(".") or entry.name.startswith("_"):
             continue
         if entry.is_file() and entry.suffix == ".sh":
-            phases.append(Phase(id=f"{lane_name}~{entry.stem}", type="check", run=_script_path_command(entry)))
+            raise ValueError(
+                f"Run-based .sh phases are no longer supported: {entry}. "
+                "Replace the script file with a markdown checker prompt."
+            )
         elif entry.is_file() and entry.suffix == ".md":
             phases.append(Phase(id=f"{lane_name}~{entry.stem}", type="implement", prompt=entry.read_text()))
         elif entry.is_dir():
@@ -643,7 +635,6 @@ def _expand_checkers(
     - bare string -> role shorthand (must be in VALID_ROLES)
     - dict with "role" -> check phase with built-in role
     - dict with "prompt" or "prompt_file" -> check phase with inline/file prompt
-    - dict with "run" -> check phase that instructs an agent to run the command
     Dicts may also carry "timeout" and "env".
 
     check_offset lets counters continue from existing inline checkers.
@@ -673,17 +664,9 @@ def _expand_checkers(
             env = entry.get("env", {})
 
             if "run" in entry:
-                check_n += 1
-                result.append(
-                    Phase(
-                        id=f"{parent_id}~check-{check_n}",
-                        type="check",
-                        run=entry["run"],
-                        bounce_target=parent_id,
-                        timeout=timeout,
-                        env=env,
-                        template_vars=dict(template_vars or {}),
-                    )
+                raise ValueError(
+                    f"Phase {parent_id!r}: checkers entry {i}: 'run' is no longer supported; "
+                    "use 'prompt' or 'prompt_file' and tell the checker which command to run"
                 )
             elif "role" in entry:
                 role = entry["role"]
@@ -721,7 +704,7 @@ def _expand_checkers(
                 )
             else:
                 raise ValueError(
-                    f"Phase {parent_id!r}: checkers entry {i}: must have 'role', 'prompt', 'prompt_file', or 'run'"
+                    f"Phase {parent_id!r}: checkers entry {i}: must have 'role', 'prompt', or 'prompt_file'"
                 )
         else:
             raise ValueError(
@@ -741,8 +724,8 @@ def _load_role_prompt(role: str) -> str:
     raise FileNotFoundError(f"Built-in role prompt not found: {role_file}")
 
 
-def _render_run_checker_prompt(command: str) -> str:
-    """Render instructions for an agentic checker that should run a command."""
+def make_command_check_prompt(command: str) -> str:
+    """Render an agentic checker prompt that validates work by running a command."""
     return (
         "Run the following command from the working directory and use the result to verify the implementation:\n\n"
         f"```bash\n{command}\n```\n\n"
@@ -750,11 +733,6 @@ def _render_run_checker_prompt(command: str) -> str:
         "emit `VERDICT: FAIL: <reason>`. If it succeeds and the work looks correct for this check, "
         "emit `VERDICT: PASS`."
     )
-
-
-def _script_path_command(path: Path) -> str:
-    """Build a stable command for executing a discovered shell script."""
-    return f"bash {shlex.quote(str(path.resolve()))}"
 
 
 VALID_PHASE_TYPES = {"implement", "check", "workflow"}
@@ -776,19 +754,16 @@ def parse_checker_string(spec: str) -> dict | str:
     """Parse a --checker CLI value into the format _expand_checkers expects.
 
     - Bare string matching VALID_ROLES -> role shorthand (str)
-    - "run:CMD" -> {"run": CMD} (rendered as an agentic checker instruction)
     - "prompt:TEXT" -> {"prompt": TEXT}
     - Anything else -> ValueError
     """
     if spec in VALID_ROLES:
         return spec
     if spec.startswith("run:"):
-        return {"run": spec[4:]}
+        raise ValueError(f"Invalid --checker spec {spec!r}: 'run:' is no longer supported; use 'prompt:TEXT' instead")
     if spec.startswith("prompt:"):
         return {"prompt": spec[7:]}
-    raise ValueError(
-        f"Invalid --checker spec {spec!r}: must be a valid role ({sorted(VALID_ROLES)}), 'run:CMD', or 'prompt:TEXT'"
-    )
+    raise ValueError(f"Invalid --checker spec {spec!r}: must be a valid role ({sorted(VALID_ROLES)}) or 'prompt:TEXT'")
 
 
 def inject_checkers(workflow: Workflow, checker_specs: list[str]) -> Workflow:
@@ -885,7 +860,6 @@ def inject_implementer(workflow: Workflow, role: str) -> Workflow:
                 id=phase.id,
                 type=phase.type,
                 prompt=preamble + phase.prompt,
-                run=phase.run,
                 role=phase.role,
                 bounce_target=phase.bounce_target,
                 bounce_targets=list(phase.bounce_targets),
@@ -916,7 +890,7 @@ def inject_implementer(workflow: Workflow, role: str) -> Workflow:
 def expand_multi_vars(workflow: Workflow, multi_vars: dict[str, list[str]]) -> Workflow:
     """Expand phases that reference multi-value vars into parallel duplicates.
 
-    For each phase whose prompt or run command references a multi-value var,
+    For each phase whose prompt references a multi-value var,
     create N copies (one per value, or cartesian product for multiple vars).
     If the phase has child phases (checkers with IDs like parent~check-1),
     duplicate the entire group as a lane group. Otherwise, create a flat parallel group.
@@ -956,9 +930,9 @@ def expand_multi_vars(workflow: Workflow, multi_vars: dict[str, list[str]]) -> W
             continue
 
         # Find which multi-value vars this group references
-        all_text = parent.prompt + (parent.run or "")
+        all_text = parent.prompt
         for child in group[1:]:
-            all_text += child.prompt + (child.run or "")
+            all_text += child.prompt
         used_vars = _find_template_vars_safe(all_text)
         referenced = [k for k in multi_vars if k in used_vars]
 
@@ -992,7 +966,6 @@ def expand_multi_vars(workflow: Workflow, multi_vars: dict[str, list[str]]) -> W
                     id=new_id,
                     type=phase.type,
                     prompt=phase.prompt,
-                    run=phase.run,
                     role=phase.role,
                     bounce_target=new_bounce,
                     bounce_targets=new_bounce_targets,
@@ -1033,7 +1006,7 @@ def validate_workflow(workflow: Workflow) -> list[str]:
     - Phase types are valid
     - bounce_target references existing phase IDs
     - implement phases have a prompt
-    - check phases have a prompt, role, or run command
+    - check phases have a prompt or role
     - Parallel group phase IDs reference existing phases
     - Check phases with roles reference valid built-in roles
     """
@@ -1063,18 +1036,14 @@ def validate_workflow(workflow: Workflow) -> list[str]:
         # Type-specific validation
         if phase.type == "implement" and not phase.prompt:
             errors.append(f"Phase {phase.id!r}: implement phase has no prompt")
-        if phase.type == "check" and not phase.prompt and not phase.role and not phase.run:
-            errors.append(f"Phase {phase.id!r}: check phase has no prompt, role, or run command")
-        if phase.type not in {"check", "workflow"} and phase.run:
-            errors.append(f"Phase {phase.id!r}: run is only allowed on check phases")
+        if phase.type == "check" and not phase.prompt and not phase.role:
+            errors.append(f"Phase {phase.id!r}: check phase has no prompt or role")
         if phase.type == "workflow":
             has_source = bool(phase.prompt) or bool(phase.workflow_file) or bool(phase.workflow_dir)
             if not has_source:
                 errors.append(f"Phase {phase.id!r}: workflow phase needs prompt, workflow_file, or workflow_dir")
             if phase.workflow_file and phase.workflow_dir:
                 errors.append(f"Phase {phase.id!r}: workflow_file and workflow_dir are mutually exclusive")
-            if phase.run:
-                errors.append(f"Phase {phase.id!r}: workflow phase must not have 'run'")
             if phase.role:
                 errors.append(f"Phase {phase.id!r}: workflow phase must not have 'role'")
         if phase.type != "workflow" and (phase.workflow_file or phase.workflow_dir):
@@ -1146,7 +1115,7 @@ def validate_workflow(workflow: Workflow) -> list[str]:
         defined_vars = set(workflow.vars.keys()) | set(phase.template_vars.keys())
         undefined: set[str] = set()
         phase_has_template_errors = False
-        for field_name, text in (("prompt", phase.prompt), ("run", phase.run or "")):
+        for field_name, text in (("prompt", phase.prompt),):
             if not text:
                 continue
             try:
@@ -1165,14 +1134,12 @@ def validate_workflow(workflow: Workflow) -> list[str]:
         try:
             if phase.type == "implement":
                 phase.render_prompt(vars=workflow.vars)
-            elif phase.type == "script":
-                phase.render_run(vars=workflow.vars)
             elif phase.type == "check" and not phase.role:
                 phase.render_check_prompt(vars=workflow.vars)
             elif phase.type == "workflow" and phase.prompt:
                 phase.render_prompt(vars=workflow.vars)
         except Exception as exc:
-            field_name = "script command" if phase.type == "script" else "prompt"
+            field_name = "prompt"
             if phase.type == "check":
                 field_name = "checker prompt"
             errors.append(_describe_template_render_error(phase.id, field_name, exc))

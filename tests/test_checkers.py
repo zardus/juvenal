@@ -1,7 +1,7 @@
 """Unit tests for checker utilities."""
 
 from juvenal.checkers import NO_VERDICT_REASON, parse_verdict
-from juvenal.workflow import Phase
+from juvenal.workflow import Phase, make_command_check_prompt
 
 
 class TestParseVerdict:
@@ -24,14 +24,14 @@ class TestParseVerdict:
         assert target is None
 
 
-class TestRunBasedChecks:
-    def test_render_check_prompt_includes_run_command(self):
-        phase = Phase(id="review", type="check", run="pytest -q")
+class TestCommandPromptChecks:
+    def test_render_check_prompt_includes_command(self):
+        phase = Phase(id="review", type="check", prompt=make_command_check_prompt("pytest -q"))
         prompt = phase.render_check_prompt()
         assert "pytest -q" in prompt
         assert "VERDICT: PASS" in prompt
 
-    def test_render_check_prompt_substitutes_vars_in_run_command(self):
-        phase = Phase(id="review", type="check", run="pytest {{TARGET}} -q")
+    def test_render_check_prompt_substitutes_vars_in_command(self):
+        phase = Phase(id="review", type="check", prompt=make_command_check_prompt("pytest {{TARGET}} -q"))
         prompt = phase.render_check_prompt(vars={"TARGET": "tests/unit"})
         assert "pytest tests/unit -q" in prompt
