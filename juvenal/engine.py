@@ -217,7 +217,7 @@ class Engine:
             return 0
 
         except (PipelineExhausted, TemplateRenderError) as e:
-            phase_id = getattr(e, "phase_id", phases[min(phase_idx, len(phases) - 1)].id)
+            phase_id = getattr(e, "phase_id", next((pid for pid, ps in self.state.phases.items() if ps.status == "running"), phases[min(phase_idx, len(phases) - 1)].id))  # noqa: E501  # fmt: skip
             self.state.mark_failed(phase_id)
             self.state.completed_at = time.time()
             self.state.save()
@@ -699,10 +699,7 @@ class Engine:
                     futures = {pool.submit(self._run_implement, phases_map[pid]): pid for pid in incomplete_ids}
                     for future in as_completed(futures):
                         pid = futures[future]
-                        if isinstance(exc := future.exception(), TemplateRenderError):
-                            exc.phase_id = pid
-                            err = err or exc
-                            continue
+                        if isinstance(exc := future.exception(), TemplateRenderError): err = err or exc; continue  # noqa: E701,E702  # fmt: skip
                         result = future.result()
                         results[pid] = result
                         if result.success:
@@ -713,8 +710,7 @@ class Engine:
                                 bounce_target=result.bounce_target,
                                 failure_context=result.failure_context,
                             )
-                if err:
-                    raise err  # noqa: E701
+                if err: raise err  # noqa: E701  # fmt: skip
             finally:
                 self.display.set_parallel_mode(False)
 
@@ -743,12 +739,15 @@ class Engine:
             self.display.set_parallel_mode(True)
             try:
                 with ThreadPoolExecutor(max_workers=len(incomplete_lanes)) as pool:
+                    err = None
                     futures = {
                         pool.submit(self._run_lane, lane, bounce_counter): i for i, lane in enumerate(incomplete_lanes)
                     }
                     for future in as_completed(futures):
-                        lane_idx = futures[future]
+                        lane_idx = futures[future]; exc = future.exception()  # noqa: E702  # fmt: skip
+                        if exc and isinstance(exc, TemplateRenderError): err = err or exc; continue  # noqa: E701,E702  # fmt: skip
                         results[lane_idx] = future.result()
+                if err: raise err  # noqa: E701  # fmt: skip
             finally:
                 self.display.set_parallel_mode(False)
 

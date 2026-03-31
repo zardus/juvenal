@@ -138,8 +138,7 @@ def _parse_define_value(raw: str) -> object:
     if raw and ((lowered := raw.lower()) in {"true", "false", "null", "none", "~"} or raw[0] in "[{\"'"):
         try:
             return yaml.safe_load("null" if lowered == "none" else raw)
-        except yaml.YAMLError as exc:
-            raise SystemExit(f"Error: invalid -D value {raw!r}: {exc}") from exc
+        except yaml.YAMLError as exc: raise SystemExit(f"Error: invalid -D value {raw!r}: {exc}") from exc  # noqa: E701  # fmt: skip
     for cast in () if raw[:1] == "0" and raw.isdigit() and len(raw) > 1 else (int, float):
         with suppress(ValueError):
             return cast(raw)
