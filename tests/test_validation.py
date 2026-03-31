@@ -456,6 +456,15 @@ class TestTemplateVarValidation:
         )
         assert validate_workflow(wf) == []
 
+    def test_elif_branch_missing_var_is_still_validated(self):
+        wf = Workflow(
+            name="test",
+            phases=[Phase(id="build", type="implement", prompt="{% if ok %}A{% elif missing %}B{% endif %}")],
+            vars={"ok": False},
+        )
+        errors = validate_workflow(wf)
+        assert any("{{missing}}" in e and "no value defined" in e for e in errors)
+
     def test_expand_multi_vars_preserves_filtered_var_name_for_validation(self):
         wf = Workflow(
             name="test",

@@ -101,6 +101,12 @@ def _find_vars_requiring_values(ast: nodes.Template, missing_vars: set[str], *, 
             false_defined = _vars_defined_when_false(node.test, guaranteed_defined)
             for child in node.body:
                 _walk(child, node, true_defined)
+            for elif_node in node.elif_:
+                _walk(elif_node.test, elif_node, false_defined)
+                elif_true_defined = _vars_defined_when_true(elif_node.test, false_defined)
+                for child in elif_node.body:
+                    _walk(child, elif_node, elif_true_defined)
+                false_defined = _vars_defined_when_false(elif_node.test, false_defined)
             for child in node.else_:
                 _walk(child, node, false_defined)
             return
