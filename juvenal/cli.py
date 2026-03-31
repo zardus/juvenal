@@ -206,7 +206,7 @@ def cmd_plan(args: argparse.Namespace) -> int:
 
 
 def _inject_checkers_into_yaml(yaml_path: str, checker_specs: list[str]) -> None:
-    """Post-process a generated YAML file to append checkers: entries to each implement phase."""
+    """Post-process a generated YAML file to append checker entries to each implement phase."""
     import yaml
 
     from juvenal.workflow import parse_checker_string
@@ -218,8 +218,14 @@ def _inject_checkers_into_yaml(yaml_path: str, checker_specs: list[str]) -> None
 
     for phase in data.get("phases", []):
         if phase.get("type", "implement") == "implement":
-            existing = phase.get("checkers", [])
-            phase["checkers"] = existing + parsed
+            if "checks" in phase and "checkers" in phase:
+                phase["checkers"] = phase["checks"] + phase["checkers"] + parsed
+                del phase["checks"]
+            elif "checks" in phase:
+                phase["checks"] = phase["checks"] + parsed
+            else:
+                existing = phase.get("checkers", [])
+                phase["checkers"] = existing + parsed
 
     with open(yaml_path, "w") as f:
         yaml.dump(data, f, default_flow_style=False, sort_keys=False)

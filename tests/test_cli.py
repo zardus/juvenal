@@ -426,6 +426,42 @@ phases:
         assert wf.phases[1].id == "build~check-1"
         assert wf.phases[1].role == "tester"
 
+    def test_plan_checker_merges_existing_checks_alias(self, tmp_path, monkeypatch):
+        """cmd_plan extends an existing checks: list instead of creating a conflicting key."""
+        import yaml
+
+        import juvenal.engine
+
+        def mock_plan_workflow(goal, output, backend, plain=False, interactive=False, resume=False):
+            Path(output).write_text(
+                """\
+name: test
+phases:
+  - id: build
+    prompt: "Build it."
+    checks:
+      - tester
+"""
+            )
+
+        monkeypatch.setattr(juvenal.engine, "plan_workflow", mock_plan_workflow)
+
+        out = tmp_path / "workflow.yaml"
+        parser = build_parser()
+        args = parser.parse_args(["plan", "build something", "-o", str(out), "--checker", "senior-tester"])
+        args.plain = False
+        cmd_plan(args)
+
+        with open(out) as f:
+            data = yaml.safe_load(f)
+
+        phase = data["phases"][0]
+        assert phase["checks"] == ["tester", "senior-tester"]
+        assert "checkers" not in phase
+
+        wf = load_workflow(out)
+        assert [p.id for p in wf.phases] == ["build", "build~check-1", "build~check-2"]
+
     def test_status_subprocess_exit_1_on_failure(self, tmp_path):
         """Failed pipeline exits 1 as a real process."""
         state_file = tmp_path / "state.json"
