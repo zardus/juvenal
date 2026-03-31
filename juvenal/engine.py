@@ -217,7 +217,11 @@ class Engine:
             return 0
 
         except (PipelineExhausted, TemplateRenderError) as e:
-            phase_id = e.phase_id if isinstance(e, PipelineExhausted) else phases[min(phase_idx, len(phases) - 1)].id
+            phase_id = (
+                e.phase_id
+                if isinstance(e, PipelineExhausted)
+                else getattr(e, "phase_id", phases[min(phase_idx, len(phases) - 1)].id)
+            )
             self.state.mark_failed(phase_id)
             self.state.completed_at = time.time()
             self.state.save()
@@ -694,11 +698,17 @@ class Engine:
         else:
             self.display.set_parallel_mode(True)
             try:
+                err = None
                 with ThreadPoolExecutor(max_workers=len(incomplete_ids)) as pool:
                     futures = {pool.submit(self._run_implement, phases_map[pid]): pid for pid in incomplete_ids}
                     for future in as_completed(futures):
                         pid = futures[future]
-                        result = future.result()
+                        try:
+                            result = future.result()
+                        except TemplateRenderError as e:
+                            e.phase_id = pid
+                            err = err or e
+                            continue
                         results[pid] = result
                         if result.success:
                             self.state.mark_completed(pid)
@@ -708,6 +718,8 @@ class Engine:
                                 bounce_target=result.bounce_target,
                                 failure_context=result.failure_context,
                             )
+                if err:
+                    raise err
             finally:
                 self.display.set_parallel_mode(False)
 
