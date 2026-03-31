@@ -825,6 +825,8 @@ def expand_multi_vars(workflow: Workflow, multi_vars: dict[str, list[str]]) -> W
         lanes: list[list[str]] = []
         for combo in combinations:
             combo_vars = dict(combo)
+            render_vars = dict(workflow.vars)
+            render_vars.update(combo_vars)
             suffix = "~".join(f"{k}={v}" for k, v in combo)
             group_old_ids = {p.id for p in group}
             lane_ids: list[str] = []
@@ -841,8 +843,8 @@ def expand_multi_vars(workflow: Workflow, multi_vars: dict[str, list[str]]) -> W
                 new_phase = Phase(
                     id=new_id,
                     type=phase.type,
-                    prompt=apply_vars(phase.prompt, combo_vars) if phase.prompt else "",
-                    run=apply_vars(phase.run, combo_vars) if phase.run else phase.run,
+                    prompt=apply_vars(phase.prompt, render_vars) if phase.prompt else "",
+                    run=apply_vars(phase.run, render_vars) if phase.run else phase.run,
                     role=phase.role,
                     bounce_target=new_bounce,
                     bounce_targets=new_bounce_targets,

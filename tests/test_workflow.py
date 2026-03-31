@@ -1277,6 +1277,25 @@ class TestExpandMultiVars:
         result = expand_multi_vars(wf, {"TARGET": ["linux", "windows"]})
         assert [phase.prompt for phase in result.phases] == ["Build LINUX.", "Build WINDOWS."]
 
+    def test_multi_var_expansion_uses_workflow_vars(self):
+        """Single-value workflow vars still render correctly during expansion."""
+        wf = Workflow(
+            name="test",
+            phases=[
+                Phase(
+                    id="deploy",
+                    type="implement",
+                    prompt="Deploy {{ APP|upper }} to {{ ENV }}.{% if APP == 'svc' %} ready{% endif %}",
+                )
+            ],
+            vars={"APP": "svc"},
+        )
+        result = expand_multi_vars(wf, {"ENV": ["staging", "prod"]})
+        assert [phase.prompt for phase in result.phases] == [
+            "Deploy SVC to staging. ready",
+            "Deploy SVC to prod. ready",
+        ]
+
     def test_empty_multi_vars_is_noop(self):
         """Empty multi_vars returns workflow unchanged."""
         wf = Workflow(
