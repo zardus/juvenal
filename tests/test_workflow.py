@@ -1012,12 +1012,7 @@ class TestTemplateVars:
         assert apply_vars("Hello {{NAME}}", {}) == "Hello {{NAME}}"
 
     def test_apply_vars_no_placeholders(self):
-        assert apply_vars("no vars here", {"NAME": "world"}) == "no vars here"
-
-    def test_apply_vars_jinja_rendering_and_sandbox(self):
-        assert apply_vars("{{NAME|upper}}", {"NAME": "svc"}) == "SVC" and apply_vars("{{ 'ok'|upper }}", {}) == "OK" and apply_vars("{{ range(2)|list }}", {}) == "[0, 1]" and apply_vars("{% macro m(x) %}{{ x }}{% endmacro %}{{ m(1) }}", {}) == "1" and apply_vars("{% for key, value in D.items() %}{{ key }}={{ value }}{% endfor %}", {"D": {"a": "b"}}) == "a=b"  # noqa: E501  # fmt: skip
-        assert any(s in str(pytest.raises(ValueError, apply_vars, "{{P.read_text()}}", {"P": Path("README.md")}).value) for s in ("unsafe", "callable"))  # noqa: E501  # fmt: skip
-        assert any(s in str(pytest.raises(ValueError, apply_vars, "{{ cycler.__init__.__globals__.os.popen('echo pwned').read() }}", {}).value) for s in ("undefined", "callable"))  # noqa: E501  # fmt: skip
+        assert apply_vars("no vars here", {"NAME": "world"}) == "no vars here" and apply_vars("{{NAME|upper}}", {"NAME": "svc"}) == "SVC" and apply_vars("{{ 'ok'|upper }}", {}) == "OK" and apply_vars("{{ range(2)|list }}", {}) == "[0, 1]" and apply_vars("{% macro m(x) %}{{ x }}{% endmacro %}{{ m(1) }}", {}) == "1" and apply_vars("{% for key, value in D.items() %}{{ key }}={{ value }}{% endfor %}", {"D": {"a": "b"}}) == "a=b" and any(s in str(pytest.raises(ValueError, apply_vars, "{{P.read_text()}}", {"P": Path("README.md")}).value) for s in ("unsafe", "callable")) and any(s in str(pytest.raises(ValueError, apply_vars, "{{ cycler.__init__.__globals__.os.popen('echo pwned').read() }}", {}).value) for s in ("undefined", "callable"))  # noqa: E501  # fmt: skip
         assert (vars := {"L": [1]}) and any(s in str(pytest.raises(ValueError, apply_vars, "{{ L.append(2) }}", vars).value) for s in ("unsafe", "callable")) and "callable" in str(pytest.raises(ValueError, apply_vars, "{{ danger() }}", {"danger": lambda: "executed"}).value) and vars == {"L": [1]}  # noqa: E501  # fmt: skip
 
     def test_render_prompt_with_vars(self):

@@ -135,9 +135,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def _parse_define_value(raw: str) -> object:
-    if not raw:
-        return raw
-    if (lowered := raw.lower()) in {"true", "false", "null", "none", "~"} or raw[0] in "[{\"'":
+    if raw and ((lowered := raw.lower()) in {"true", "false", "null", "none", "~"} or raw[0] in "[{\"'"):
         try:
             return yaml.safe_load("null" if lowered == "none" else raw)
         except yaml.YAMLError as exc:
