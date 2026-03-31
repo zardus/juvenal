@@ -6,9 +6,11 @@ max_bounces: 999
 phases:
   - id: implement
     prompt_file: phases/01-implement/prompt.md
-  - id: test
-    type: script
-    run: "echo 'Add your test command here'"
+  - id: check-tests
+    type: check
+    bounce_target: implement
+    prompt_file: phases/02-check-tests/prompt.md
   - id: review
     type: check
-    role: tester
+    bounce_target: implement
+    role: senior-engineer

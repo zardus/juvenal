@@ -23,8 +23,12 @@ def test_trivial_workflow_claude(tmp_path):
             ),
             Phase(
                 id="check-hello",
-                type="script",
-                run="test -f hello.txt && grep -q 'hello world' hello.txt",
+                type="check",
+                prompt=(
+                    "Verify the implementation by running "
+                    "`test -f hello.txt && grep -q 'hello world' hello.txt`. "
+                    "Emit VERDICT: PASS only if the command succeeds and the file contents are exact."
+                ),
             ),
         ],
         backend="claude",

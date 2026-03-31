@@ -18,7 +18,7 @@ You are helping the user create and manage Juvenal workflows. Juvenal orchestrat
 
 Juvenal is a framework where a non-agentic Python script orchestrates AI coding agents (Claude or Codex) through verified phases. Each phase has:
 1. An **implementation prompt** — tells the agent what to build
-2. One or more **checkers** — verify the work (scripts, agent reviewers, or both)
+2. One or more **agentic checkers** — verify the work and emit `VERDICT: PASS` or `VERDICT: FAIL: <reason>`
 
 The key insight: the implementing agent and the checking agent are separate, so the implementer can't cheat by weakening tests.
 
@@ -36,22 +36,15 @@ phases:
   - id: setup
     prompt: "Set up the project scaffolding."
     checkers:
-      - type: script
-        run: "pytest tests/ -x"
-      - type: agent
-        role: tester
+      - tester
+      - prompt: "Run `pytest tests/ -x` and review the results."
 
   - id: implement
     prompt_file: phases/implement/prompt.md
     bounce_target: setup  # on failure, bounce back to setup
     checkers:
-      - type: script
-        run: "make test"
-      - type: agent
-        role: senior-engineer
-      - type: composite
-        run: "pytest tests/ --tb=long"
-        prompt: "Review test output:\n{script_output}"
+      - role: senior-engineer
+      - prompt: "Run `make test` before deciding."
 ```
 
 ### 2. Directory convention
@@ -61,11 +54,11 @@ my-workflow/
   phases/
     01-setup/
       prompt.md
-      check-build.sh
+      check-build.md
     02-implement/
       prompt.md
-      check-tests.sh     # script checker
-      check-quality.md   # agent checker
+      check-tests.md
+      check-quality.md
 ```
 
 ### 3. Bare .md files
@@ -78,9 +71,8 @@ phases/
 
 ## Checker Types
 
-- **script** (`type: script`): Shell command, exit 0 = PASS
-- **agent** (`type: agent`): AI agent that must emit `VERDICT: PASS` or `VERDICT: FAIL: reason`
-- **composite** (`type: composite`): Script runs first, output fed to agent via `{script_output}`
+- **role checker**: built-in reviewer persona such as `tester` or `senior-engineer`
+- **prompt checker**: custom agentic review prompt, which can include exact commands to run
 
 ## Built-in Roles
 

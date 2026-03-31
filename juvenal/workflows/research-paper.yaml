@@ -25,8 +25,8 @@ phases:
 
   # Phase 5b: Run tests
   - id: run-tests
-    type: script
-    run: "bash run-tests.sh"
+    type: check
+    prompt_file: research-paper-phases/05b-run-tests-review.md
     bounce_target: ensure-tests
 
   # Phase 6: Graduate researcher implements experiments

@@ -16,7 +16,7 @@ class TestValidateWorkflow:
             name="test",
             phases=[
                 Phase(id="setup", type="implement", prompt="Set up."),
-                Phase(id="check", type="script", run="true"),
+                Phase(id="check", type="check", role="tester"),
             ],
         )
         assert validate_workflow(wf) == []
@@ -91,15 +91,25 @@ class TestValidateWorkflow:
         )
         assert validate_workflow(wf) == []
 
-    def test_script_missing_run(self):
+    def test_script_phase_rejected(self):
         wf = Workflow(
             name="test",
             phases=[
-                Phase(id="build", type="script"),
+                Phase(id="build", type="script", run="pytest -x"),
             ],
         )
         errors = validate_workflow(wf)
-        assert any("no run command" in e for e in errors)
+        assert any("no longer supported" in e for e in errors)
+
+    def test_run_field_rejected(self):
+        wf = Workflow(
+            name="test",
+            phases=[
+                Phase(id="build", type="check", prompt="Run pytest -x.", run="pytest -x"),
+            ],
+        )
+        errors = validate_workflow(wf)
+        assert any("'run' is no longer supported" in e for e in errors)
 
     def test_invalid_role(self):
         wf = Workflow(
@@ -138,12 +148,12 @@ class TestValidateWorkflow:
             name="test",
             phases=[
                 Phase(id="a", type="invalid"),
-                Phase(id="a", type="script"),
+                Phase(id="a", type="script", run="pytest -x"),
                 Phase(id="b", type="check"),
             ],
         )
         errors = validate_workflow(wf)
-        assert len(errors) >= 3  # invalid type, duplicate ID, missing run, missing prompt/role
+        assert len(errors) >= 4  # invalid type, duplicate ID, script/run rejection, missing prompt/role
 
 
 class TestTimeoutField:
@@ -155,8 +165,8 @@ phases:
     prompt: "Build it."
     timeout: 120
   - id: check
-    type: script
-    run: "true"
+    type: check
+    role: tester
     timeout: 30
 """
         yaml_path = tmp_path / "workflow.yaml"
@@ -204,13 +214,15 @@ phases:
         phase = Phase(id="test", prompt="Test.")
         assert phase.env == {}
 
-    def test_env_in_script_phase(self, tmp_path):
-        """Script phase with env passes variables to the script."""
-        from juvenal.checkers import run_script
-
-        result = run_script("echo $TEST_VAR", str(tmp_path), env={"TEST_VAR": "hello123"})
-        assert result.exit_code == 0
-        assert "hello123" in result.output
+    def test_env_in_check_phase(self):
+        """Check phases accept env without validation errors."""
+        wf = Workflow(
+            name="test",
+            phases=[
+                Phase(id="review", type="check", prompt="Review it.\nVERDICT: PASS", env={"TEST_VAR": "hello123"}),
+            ],
+        )
+        assert validate_workflow(wf) == []
 
 
 class TestWorkflowPhaseValidation:
@@ -241,7 +253,7 @@ class TestWorkflowPhaseValidation:
             ],
         )
         errors = validate_workflow(wf)
-        assert any("must not have 'run'" in e for e in errors)
+        assert any("'run' is no longer supported" in e for e in errors)
 
     def test_workflow_phase_with_role_is_invalid(self):
         wf = Workflow(
@@ -333,12 +345,17 @@ class TestTemplateVarValidation:
         errors = validate_workflow(wf)
         assert any("PROJECT" in e and "no value defined" in e for e in errors)
 
-    def test_undefined_var_in_run(self):
+    def test_undefined_var_in_check_prompt(self):
         wf = Workflow(
             name="test",
             phases=[
                 Phase(id="build", type="implement", prompt="Build."),
-                Phase(id="test", type="script", run="pytest {{DIR}}", bounce_target="build"),
+                Phase(
+                    id="test",
+                    type="check",
+                    prompt="Run pytest {{DIR}}.\nVERDICT: PASS or FAIL",
+                    bounce_target="build",
+                ),
             ],
         )
         errors = validate_workflow(wf)

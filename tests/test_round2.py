@@ -191,11 +191,12 @@ class TestCostTracking:
         """Engine records token counts from implement phases."""
         backend = MockBackend()
         backend.add_response(exit_code=0, output="done", input_tokens=100, output_tokens=50)
+        backend.add_response(exit_code=0, output="VERDICT: PASS")
         workflow = Workflow(
             name="test",
             phases=[
                 Phase(id="setup", type="implement", prompt="Do it."),
-                Phase(id="setup-check", type="script", run="true"),
+                Phase(id="setup-check", type="check", role="tester"),
             ],
             max_bounces=3,
         )
@@ -228,11 +229,12 @@ class TestCostTracking:
         """Run summary includes token info when available."""
         backend = MockBackend()
         backend.add_response(exit_code=0, output="done", input_tokens=500, output_tokens=200)
+        backend.add_response(exit_code=0, output="VERDICT: PASS")
         workflow = Workflow(
             name="test",
             phases=[
                 Phase(id="setup", type="implement", prompt="Do it."),
-                Phase(id="setup-check", type="script", run="true"),
+                Phase(id="setup-check", type="check", role="tester"),
             ],
             max_bounces=3,
         )
@@ -273,14 +275,14 @@ class TestExponentialBackoff:
         """Engine sleeps with exponential backoff between bounces."""
         backend = MockBackend()
         backend.add_response(exit_code=0, output="done")  # implement
-        # Script fails -> bounce
+        backend.add_response(exit_code=0, output="VERDICT: FAIL: bad")  # check fails -> bounce
         backend.add_response(exit_code=0, output="done")  # implement retry
-        # Script fails again -> exhausted
+        backend.add_response(exit_code=0, output="VERDICT: FAIL: bad")  # check fails again -> exhausted
         workflow = Workflow(
             name="test",
             phases=[
                 Phase(id="setup", type="implement", prompt="Do it."),
-                Phase(id="setup-check", type="script", run="false"),
+                Phase(id="setup-check", type="check", role="tester"),
             ],
             max_bounces=2,
             backoff=1.0,
@@ -300,18 +302,18 @@ class TestExponentialBackoff:
         backend = MockBackend()
         # 4 bounces: backoff on 1, 2, 3 then exhausted on 4
         backend.add_response(exit_code=0, output="done")  # implement
-        # fail -> bounce 1
+        backend.add_response(exit_code=0, output="VERDICT: FAIL: bad")  # fail -> bounce 1
         backend.add_response(exit_code=0, output="done")  # implement
-        # fail -> bounce 2
+        backend.add_response(exit_code=0, output="VERDICT: FAIL: bad")  # fail -> bounce 2
         backend.add_response(exit_code=0, output="done")  # implement
-        # fail -> bounce 3
+        backend.add_response(exit_code=0, output="VERDICT: FAIL: bad")  # fail -> bounce 3
         backend.add_response(exit_code=0, output="done")  # implement
-        # fail -> bounce 4 -> exhausted
+        backend.add_response(exit_code=0, output="VERDICT: FAIL: bad")  # fail -> bounce 4 -> exhausted
         workflow = Workflow(
             name="test",
             phases=[
                 Phase(id="setup", type="implement", prompt="Do it."),
-                Phase(id="setup-check", type="script", run="false"),
+                Phase(id="setup-check", type="check", role="tester"),
             ],
             max_bounces=4,
             backoff=1.0,
@@ -337,12 +339,14 @@ class TestExponentialBackoff:
         """Backoff delay is capped at max_backoff."""
         backend = MockBackend()
         backend.add_response(exit_code=0, output="done")
+        backend.add_response(exit_code=0, output="VERDICT: FAIL: bad")
         backend.add_response(exit_code=0, output="done")
+        backend.add_response(exit_code=0, output="VERDICT: FAIL: bad")
         workflow = Workflow(
             name="test",
             phases=[
                 Phase(id="setup", type="implement", prompt="Do it."),
-                Phase(id="setup-check", type="script", run="false"),
+                Phase(id="setup-check", type="check", role="tester"),
             ],
             max_bounces=2,
             backoff=10.0,
@@ -360,11 +364,12 @@ class TestExponentialBackoff:
         """No sleep when backoff is 0 (default)."""
         backend = MockBackend()
         backend.add_response(exit_code=0, output="done")
+        backend.add_response(exit_code=0, output="VERDICT: FAIL: bad")
         workflow = Workflow(
             name="test",
             phases=[
                 Phase(id="setup", type="implement", prompt="Do it."),
-                Phase(id="setup-check", type="script", run="false"),
+                Phase(id="setup-check", type="check", role="tester"),
             ],
             max_bounces=1,
             backoff=0.0,
@@ -509,11 +514,12 @@ phases:
         """Engine sends notifications on successful completion."""
         backend = MockBackend()
         backend.add_response(exit_code=0, output="done")
+        backend.add_response(exit_code=0, output="VERDICT: PASS")
         workflow = Workflow(
             name="test",
             phases=[
                 Phase(id="setup", type="implement", prompt="Do it."),
-                Phase(id="setup-check", type="script", run="true"),
+                Phase(id="setup-check", type="check", role="tester"),
             ],
             max_bounces=3,
             notify=["https://example.com/hook"],
@@ -534,11 +540,12 @@ phases:
         """Engine sends notifications on pipeline failure."""
         backend = MockBackend()
         backend.add_response(exit_code=0, output="done")
+        backend.add_response(exit_code=0, output="VERDICT: FAIL: bad")
         workflow = Workflow(
             name="test",
             phases=[
                 Phase(id="setup", type="implement", prompt="Do it."),
-                Phase(id="setup-check", type="script", run="false"),
+                Phase(id="setup-check", type="check", role="tester"),
             ],
             max_bounces=1,
             notify=["https://example.com/hook"],
@@ -557,11 +564,12 @@ phases:
         """Engine doesn't attempt notifications when notify is empty."""
         backend = MockBackend()
         backend.add_response(exit_code=0, output="done")
+        backend.add_response(exit_code=0, output="VERDICT: PASS")
         workflow = Workflow(
             name="test",
             phases=[
                 Phase(id="setup", type="implement", prompt="Do it."),
-                Phase(id="setup-check", type="script", run="true"),
+                Phase(id="setup-check", type="check", role="tester"),
             ],
             max_bounces=3,
         )
@@ -620,7 +628,7 @@ class TestEnhancedDryRun:
             name="test",
             phases=[
                 Phase(id="setup", type="implement", prompt="Do it."),
-                Phase(id="check", type="script", run="true"),
+                Phase(id="check", type="check", role="tester"),
             ],
         )
         engine = Engine(workflow, state_file=str(tmp_path / "state.json"), dry_run=True, plain=True)
@@ -648,8 +656,8 @@ class TestEnhancedDryRun:
             phases=[
                 Phase(id="a", type="implement", prompt="A."),
                 Phase(id="b", type="implement", prompt="B."),
-                Phase(id="c", type="script", run="true"),
-                Phase(id="d", type="check", role="tester"),
+                Phase(id="c", type="check", role="tester"),
+                Phase(id="d", type="check", prompt="Review it.\nVERDICT: PASS"),
             ],
         )
         engine = Engine(workflow, state_file=str(tmp_path / "state.json"), dry_run=True, plain=True)
@@ -657,8 +665,7 @@ class TestEnhancedDryRun:
         captured = capsys.readouterr()
         assert "Phase summary:" in captured.out
         assert "implement: 2" in captured.out
-        assert "script: 1" in captured.out
-        assert "check: 1" in captured.out
+        assert "check: 2" in captured.out
 
     def test_dry_run_shows_execution_plan(self, tmp_path, capsys):
         """Dry-run shows detailed execution plan."""
@@ -666,7 +673,12 @@ class TestEnhancedDryRun:
             name="test",
             phases=[
                 Phase(id="setup", type="implement", prompt="Set up the project.", timeout=120),
-                Phase(id="build", type="script", run="make build", env={"CC": "gcc"}),
+                Phase(
+                    id="build-review",
+                    type="check",
+                    prompt="Run make build and review the results.\nVERDICT: PASS or FAIL",
+                    env={"CC": "gcc"},
+                ),
                 Phase(id="review", type="check", role="tester", bounce_target="setup"),
             ],
         )
@@ -676,7 +688,7 @@ class TestEnhancedDryRun:
         assert "Execution plan:" in captured.out
         assert "[implement] setup" in captured.out
         assert "timeout=120s" in captured.out
-        assert "[script] build: make build" in captured.out
+        assert "[check] build-review: Run make build and review the results. VERDICT: PASS or F" in captured.out
         assert "[check] review: tester" in captured.out
         assert "bounce->setup" in captured.out
 

@@ -1,4 +1,4 @@
-"""Core non-agentic execution loop."""
+"""Core orchestration loop."""
 
 from __future__ import annotations
 
@@ -12,7 +12,7 @@ from pathlib import Path
 from threading import Lock
 
 from juvenal.backends import create_backend
-from juvenal.checkers import NO_VERDICT_REASON, parse_verdict, run_script
+from juvenal.checkers import NO_VERDICT_REASON, parse_verdict
 from juvenal.display import Display
 from juvenal.notifications import build_notification_payload, send_webhook
 from juvenal.state import PhaseState, PipelineState
@@ -71,10 +71,11 @@ class PipelineExhausted(Exception):
 
 
 class Engine:
-    """Non-agentic, deterministic execution loop.
+    """Deterministic execution loop.
 
     This engine deliberately does NOT use an LLM to decide flow control.
-    All decisions (retry, bounce, advance) are made programmatically.
+    All decisions (retry, bounce, advance) are made programmatically while the
+    phases themselves remain agentic.
     """
 
     def __init__(
@@ -180,8 +181,6 @@ class Engine:
 
                 if phase.type == "implement":
                     result = self._run_implement(phase)
-                elif phase.type == "script":
-                    result = self._run_script(phase, phases, phase_idx)
                 elif phase.type == "check":
                     result = self._run_check(phase, phases, phase_idx)
                 elif phase.type == "workflow":
@@ -377,32 +376,6 @@ class Engine:
 
         self.display.step_pass("interactive")
         return PhaseResult(success=True)
-
-    def _run_script(self, phase: Phase, phases: list[Phase], phase_idx: int) -> PhaseResult:
-        """Run a script phase. Exit 0 = advance. Nonzero = bounce back."""
-        ps = self.state.phases.get(phase.id)
-        attempt = (ps.attempt if ps and ps.attempt > 0 else 0) + 1
-        self.state.set_attempt(phase.id, attempt)
-        self.display.phase_start(phase.id, attempt)
-        self.display.step_start(f"script: {phase.id}")
-
-        timeout = phase.timeout or 600
-        run_cmd = apply_vars(phase.run, self.workflow.vars) if self.workflow.vars else phase.run
-        result = run_script(run_cmd, self.workflow.working_dir, timeout=timeout, env=phase.env or None)
-        self.state.log_step(phase.id, attempt, "script", result.output, input=phase.run)
-
-        if result.exit_code == 0:
-            self.display.step_pass(phase.id)
-            return PhaseResult(success=True)
-
-        # Failure — resolve bounce target
-        failure_context = f"Script '{phase.run}' failed (exit {result.exit_code}).\nOutput:\n{result.output[-3000:]}"
-        self.display.step_fail(phase.id, failure_context[:500])
-
-        target_id = self._resolve_bounce_target(phase, phases, phase_idx)
-        if target_id:
-            return PhaseResult(success=False, bounce_target=target_id, failure_context=failure_context)
-        return PhaseResult(success=False)
 
     _MAX_NO_VERDICT_RESUMES = 2
     _RESUME_PROMPT = (
@@ -740,7 +713,7 @@ class Engine:
         return PhaseResult(success=False), consumed
 
     def _run_lane(self, lane_phase_ids: list[str], bounce_counter: BounceCounter) -> PhaseResult:
-        """Run a single lane: sequential implement/check/script loop with internal bounce."""
+        """Run a single lane: sequential implement/check loop with internal bounce."""
         phases_map = {p.id: p for p in self.workflow.phases}
         lane_phases = [phases_map[pid] for pid in lane_phase_ids]
         lane_scope = set(lane_phase_ids)
@@ -755,8 +728,6 @@ class Engine:
 
             if phase.type == "implement":
                 result = self._run_implement(phase)
-            elif phase.type == "script":
-                result = self._run_script(phase, lane_phases, phase_idx)
             elif phase.type == "check":
                 result = self._run_check(phase, lane_phases, phase_idx)
             else:
@@ -858,7 +829,7 @@ class Engine:
         return None
 
     def _get_parent_prompt(self, phase: Phase, phases: list[Phase], phase_idx: int) -> str | None:
-        """Get the prompt from the parent implement phase for a check/script phase."""
+        """Get the prompt from the parent implement phase for a check phase."""
         target_id = self._resolve_bounce_target(phase, phases, phase_idx)
         if target_id:
             for p in phases:
@@ -867,7 +838,7 @@ class Engine:
         return None
 
     def _get_baseline_sha(self, phase: Phase, phases: list[Phase], phase_idx: int) -> str | None:
-        """Get the baseline SHA for a check/script phase's bounce target."""
+        """Get the baseline SHA for a check phase's bounce target."""
         target_id = self._resolve_bounce_target(phase, phases, phase_idx)
         if target_id:
             target_ps = self.state.phases.get(target_id)
@@ -964,8 +935,6 @@ class Engine:
                 prompt_preview = phase.prompt[:80].replace("\n", " ")
                 print(f"{prefix} [{phase.type}] {phase.id}{extra_str}")
                 print(f"     prompt: {prompt_preview}...")
-            elif phase.type == "script":
-                print(f"{prefix} [{phase.type}] {phase.id}: {phase.run}{extra_str}")
             elif phase.type == "check":
                 target = phase.role or phase.prompt[:60].replace("\n", " ")
                 print(f"{prefix} [{phase.type}] {phase.id}: {target}{extra_str}")
@@ -978,6 +947,10 @@ class Engine:
                 else:
                     prompt_preview = phase.prompt[:80].replace("\n", " ")
                     print(f"     prompt: {prompt_preview}...")
+            else:
+                print(f"{prefix} [{phase.type}] {phase.id}{extra_str}")
+                if phase.run:
+                    print(f"     legacy run: {phase.run}")
             print()
 
         if self.workflow.parallel_groups:

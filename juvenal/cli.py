@@ -30,7 +30,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--backoff", type=float, default=None, help="Base backoff delay in seconds between bounces (exponential)"
     )
     run_p.add_argument("--notify", action="append", default=[], help="Webhook URL for completion/failure notifications")
-    run_p.add_argument("--checker", action="append", default=[], help="Inject checker on every implement phase")
+    run_p.add_argument("--checker", action="append", default=[], help="Inject agentic checker on every implement phase")
     run_p.add_argument("--implementer", help="Prepend implementer role prompt to every implement phase")
     run_p.add_argument(
         "--clear-context-on-bounce",
@@ -52,7 +52,12 @@ def build_parser() -> argparse.ArgumentParser:
     plan_p.add_argument("goal", help="Goal description")
     plan_p.add_argument("-o", "--output", default="workflow.yaml", help="Output file (default: workflow.yaml)")
     plan_p.add_argument("--backend", choices=["claude", "codex"], default="codex", help="AI backend to use")
-    plan_p.add_argument("--checker", action="append", default=[], help="Inject checker on every implement phase")
+    plan_p.add_argument(
+        "--checker",
+        action="append",
+        default=[],
+        help="Inject agentic checker on every implement phase",
+    )
     plan_p.add_argument("--implementer", help="Prepend implementer role prompt to every implement phase")
     plan_p.add_argument(
         "-i", "--interactive", action="store_true", help="Interactive mode: chat with the agent during plan refinement"
@@ -65,7 +70,7 @@ def build_parser() -> argparse.ArgumentParser:
     do_p.add_argument("goal", help="Goal description")
     do_p.add_argument("--backend", choices=["claude", "codex"], default="codex", help="AI backend to use")
     do_p.add_argument("--max-bounces", type=int, default=999, help="Max bounces across all phases (default: 999)")
-    do_p.add_argument("--checker", action="append", default=[], help="Inject checker on every implement phase")
+    do_p.add_argument("--checker", action="append", default=[], help="Inject agentic checker on every implement phase")
     do_p.add_argument("--implementer", help="Prepend implementer role prompt to every implement phase")
     do_p.add_argument(
         "-i", "--interactive", action="store_true", help="Interactive mode: chat with the agent during plan refinement"

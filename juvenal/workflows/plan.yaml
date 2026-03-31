@@ -43,8 +43,9 @@ phases:
     prompt_file: plan-phases/09-write-workflow.md
 
   - id: yaml-validate
-    type: script
-    run: "python -c \"import yaml, sys; d=yaml.safe_load(open('workflow.yaml')); assert isinstance(d,dict) and 'phases' in d, 'missing phases key'\""
+    type: check
+    bounce_target: write-workflow
+    prompt_file: plan-phases/09b-yaml-validate.md
 
   - id: workflow-review
     type: check

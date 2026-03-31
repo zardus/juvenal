@@ -1,44 +1,6 @@
-"""Checker utilities — verdict parsing and script execution."""
+"""Checker utilities — verdict parsing."""
 
-from __future__ import annotations
-
-import os
 import re
-import subprocess
-from dataclasses import dataclass
-
-
-@dataclass
-class ScriptResult:
-    """Result from running a shell command."""
-
-    exit_code: int
-    output: str
-
-
-def run_script(command: str, working_dir: str, timeout: int = 600, env: dict[str, str] | None = None) -> ScriptResult:
-    """Run a shell command. Returns exit code and combined stdout+stderr."""
-    proc_env = dict(os.environ)
-    if env:
-        proc_env.update(env)
-
-    try:
-        result = subprocess.run(
-            command,
-            shell=True,
-            cwd=working_dir,
-            capture_output=True,
-            text=True,
-            timeout=timeout,
-            env=proc_env,
-        )
-        return ScriptResult(
-            exit_code=result.returncode,
-            output=result.stdout + result.stderr,
-        )
-    except subprocess.TimeoutExpired:
-        return ScriptResult(exit_code=1, output=f"Script timed out after {timeout}s")
-
 
 # Pattern: VERDICT: FAIL(bounce-target): reason
 _FAIL_WITH_TARGET = re.compile(r"^VERDICT:\s*FAIL\(([^)]+)\):\s*(.*)")
