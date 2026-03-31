@@ -3,6 +3,7 @@
 from pathlib import Path
 
 import pytest
+from jinja2 import UndefinedError
 
 from juvenal.workflow import (
     ParallelGroup,
@@ -1006,6 +1007,10 @@ class TestTemplateVars:
 
     def test_apply_vars_jinja_filter(self):
         assert apply_vars("Hello {{ name|title }}", {"name": "juvenal"}) == "Hello Juvenal"
+
+    def test_apply_vars_rejects_filtered_undefined_var(self):
+        with pytest.raises(UndefinedError, match="app"):
+            apply_vars("Deploy {{ app|title }}.", {})
 
     def test_apply_vars_jinja_control_flow(self):
         result = apply_vars("{% if LANG == 'Python' %}typed{% else %}other{% endif %}", {"LANG": "Python"})

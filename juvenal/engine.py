@@ -140,6 +140,12 @@ class Engine:
         if self.dry_run:
             return self._dry_run()
 
+        errors = self._collect_validation_errors()
+        if errors:
+            self._print_validation_errors(errors)
+            self.display.pipeline_done(False)
+            return 1
+
         self.state.started_at = time.time()
         phases = self.workflow.phases
         phase_idx = self._start_idx
@@ -948,10 +954,24 @@ class Engine:
             if not ok:
                 self.display.notify_failed(url)
 
-    def _dry_run(self) -> int:
-        """Print what would be done without executing."""
+    def _collect_validation_errors(self) -> list[str]:
+        """Validate the workflow and collect render-time errors."""
         from juvenal.workflow import validate_workflow
 
+        errors = validate_workflow(self.workflow)
+        if not errors:
+            errors.extend(self._collect_dry_run_render_errors())
+        return errors
+
+    @staticmethod
+    def _print_validation_errors(errors: list[str]) -> None:
+        """Print validation errors in the standard CLI format."""
+        print(f"Validation: {len(errors)} error(s)")
+        for err in errors:
+            print(f"  - {err}")
+
+    def _dry_run(self) -> int:
+        """Print what would be done without executing."""
         print(f"Workflow: {self.workflow.name}")
         print(f"Backend: {self.workflow.backend}")
         print(f"Working dir: {self.workflow.working_dir}")
@@ -965,14 +985,10 @@ class Engine:
         print()
 
         # Validation
-        errors = validate_workflow(self.workflow)
-        if not errors:
-            errors.extend(self._collect_dry_run_render_errors())
+        errors = self._collect_validation_errors()
         has_errors = bool(errors)
         if errors:
-            print(f"Validation: {len(errors)} error(s)")
-            for err in errors:
-                print(f"  - {err}")
+            self._print_validation_errors(errors)
         else:
             print(f"Validation: OK ({len(self.workflow.phases)} phases)")
         print()

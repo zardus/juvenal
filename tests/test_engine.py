@@ -1931,9 +1931,8 @@ class TestTemplateVarsEngine:
             mock_run.assert_called_once()
             assert mock_run.call_args[0][0] == "pytest tests/unit -x"
 
-    def test_vars_unrecognized_passthrough(self, mock_backend, tmp_path):
-        """Unrecognized {{VAR}} placeholders pass through unchanged."""
-        mock_backend.add_response(exit_code=0, output="done")
+    def test_vars_unrecognized_passthrough_fails_validation(self, mock_backend, tmp_path, capsys):
+        """Undefined template vars fail validation before execution."""
         workflow = Workflow(
             name="test",
             phases=[Phase(id="build", type="implement", prompt="Use {{KNOWN}} and {{UNKNOWN}}.")],
@@ -1941,8 +1940,11 @@ class TestTemplateVarsEngine:
         )
         engine = Engine(workflow, state_file=str(tmp_path / "state.json"), plain=True)
         engine.backend = mock_backend
-        engine.run()
-        assert "Use value and {{UNKNOWN}}." in mock_backend.calls[0]
+        assert engine.run() == 1
+        captured = capsys.readouterr()
+        assert "{{UNKNOWN}}" in captured.out
+        assert "no value defined" in captured.out
+        assert mock_backend.calls == []
 
     def test_vars_in_dry_run(self, mock_backend, tmp_path, capsys):
         """Dry run shows variables."""
@@ -1968,7 +1970,7 @@ class TestInvalidJinjaRuntime:
         engine.backend = MockBackend()
         assert engine.run() == 1
         captured = capsys.readouterr()
-        assert "Invalid Jinja2 prompt in phase 'build'" in captured.out
+        assert "invalid Jinja2 prompt" in captured.out
         assert "Traceback" not in captured.out
 
     def test_invalid_jinja_in_script_phase_fails_cleanly(self, tmp_path, capsys):
@@ -1985,7 +1987,7 @@ class TestInvalidJinjaRuntime:
         engine.backend = backend
         assert engine.run() == 1
         captured = capsys.readouterr()
-        assert "Invalid Jinja2 script command in phase 'test'" in captured.out
+        assert "invalid Jinja2 run" in captured.out
         assert "Traceback" not in captured.out
 
     def test_invalid_jinja_in_dynamic_workflow_phase_fails_cleanly(self, tmp_path, capsys):
@@ -1997,7 +1999,7 @@ class TestInvalidJinjaRuntime:
         engine.backend = MockBackend()
         assert engine.run() == 1
         captured = capsys.readouterr()
-        assert "Invalid Jinja2 prompt in phase 'sub'" in captured.out
+        assert "invalid Jinja2 prompt" in captured.out
         assert "Traceback" not in captured.out
 
     def test_render_error_in_implement_phase_fails_cleanly(self, tmp_path, capsys):
@@ -2064,9 +2066,24 @@ class TestInvalidJinjaRuntime:
         engine.backend = MockBackend()
         assert engine.run() == 1
         captured = capsys.readouterr()
-        assert "SecurityError" in captured.out
-        assert "__init__" in captured.out
+        assert "{{cycler}}" in captured.out
+        assert "no value defined" in captured.out
         assert "Traceback" not in captured.out
+
+    def test_invalid_filtered_undefined_var_fails_before_execution(self, tmp_path, capsys):
+        backend = MockBackend()
+        workflow = Workflow(
+            name="test",
+            phases=[Phase(id="build", type="implement", prompt="Deploy {{ app|title }}.")],
+            vars={"App": "svc"},
+        )
+        engine = Engine(workflow, state_file=str(tmp_path / "state.json"), plain=True)
+        engine.backend = backend
+        assert engine.run() == 1
+        captured = capsys.readouterr()
+        assert "{{app}}" in captured.out
+        assert "no value defined" in captured.out
+        assert backend.calls == []
 
 
 class TestSerialize:

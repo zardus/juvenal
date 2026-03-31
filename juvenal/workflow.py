@@ -8,7 +8,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 import yaml
-from jinja2 import StrictUndefined, TemplateSyntaxError, meta
+from jinja2 import StrictUndefined, TemplateSyntaxError, UndefinedError, meta, nodes
 from jinja2.runtime import missing
 from jinja2.sandbox import SandboxedEnvironment
 
@@ -43,11 +43,28 @@ def _find_template_vars_safe(text: str) -> set[str]:
         return set()
 
 
+def _has_complex_undefined_usage(ast: nodes.Template, missing_vars: set[str]) -> bool:
+    """True when an undefined var appears outside a bare ``{{ name }}`` output."""
+
+    def _walk(node: nodes.Node, parent: nodes.Node | None = None) -> bool:
+        if isinstance(node, nodes.Name) and node.ctx == "load" and node.name in missing_vars:
+            return not (isinstance(parent, nodes.Output) and node in parent.nodes)
+        return any(_walk(child, node) for child in node.iter_child_nodes())
+
+    return _walk(ast)
+
+
 def apply_vars(text: str, vars: dict[str, str] | None) -> str:
     """Render text with Jinja2 using vars as the template context."""
     if not text:
         return text
-    return _JINJA_ENV.from_string(text).render(vars or {})
+    context = vars or {}
+    ast = _JINJA_ENV.parse(text)
+    missing_vars = set(meta.find_undeclared_variables(ast)) - set(context.keys())
+    if missing_vars and _has_complex_undefined_usage(ast, missing_vars):
+        missing_list = ", ".join(sorted(missing_vars))
+        raise UndefinedError(f"undefined template variables require values before rendering: {missing_list}")
+    return _JINJA_ENV.from_string(text).render(context)
 
 
 @dataclass
