@@ -75,9 +75,7 @@ def _vars_defined_when_false(test: nodes.Node, guaranteed_defined: frozenset[str
     return guaranteed_defined
 
 
-def _find_vars_requiring_values(
-    ast: nodes.Template, missing_vars: set[str], *, allow_passthrough: bool
-) -> set[str]:
+def _find_vars_requiring_values(ast: nodes.Template, missing_vars: set[str], *, allow_passthrough: bool) -> set[str]:
     """Return missing vars that are used in a way that still requires a value."""
 
     required: set[str] = set()
