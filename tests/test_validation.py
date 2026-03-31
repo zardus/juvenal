@@ -352,6 +352,14 @@ class TestTemplateVarValidation:
         errors = validate_workflow(wf)
         assert any("PROJECT" in e and "no value defined" in e for e in errors)
 
+    def test_undefined_var_in_jinja_control_block(self):
+        wf = Workflow(
+            name="test",
+            phases=[Phase(id="build", type="implement", prompt="{% if PROJECT %}Build it.{% endif %}")],
+        )
+        errors = validate_workflow(wf)
+        assert any("PROJECT" in e and "no value defined" in e for e in errors)
+
     def test_undefined_var_in_run(self):
         wf = Workflow(
             name="test",
@@ -408,6 +416,14 @@ class TestTemplateVarValidation:
         errors = validate_workflow(wf)
         undefined = [e for e in errors if "no value defined" in e]
         assert len(undefined) == 1
+
+    def test_invalid_jinja_syntax_in_prompt(self):
+        wf = Workflow(
+            name="test",
+            phases=[Phase(id="build", type="implement", prompt="{{ PROJECT")],
+        )
+        errors = validate_workflow(wf)
+        assert any("invalid Jinja2 prompt" in e for e in errors)
 
 
 class TestLaneValidation:

@@ -3,24 +3,46 @@
 from __future__ import annotations
 
 import itertools
-import re
 import shutil
 from dataclasses import dataclass, field
 from pathlib import Path
 
 import yaml
+from jinja2 import Environment, TemplateSyntaxError, Undefined, meta
 
-_VAR_RE = re.compile(r"\{\{(\w+)\}\}")
+
+class _PassthroughUndefined(Undefined):
+    """Preserve unresolved variables in rendered output."""
+
+    def __str__(self) -> str:
+        if self._undefined_name is None:
+            return ""
+        return f"{{{{{self._undefined_name}}}}}"
 
 
-def apply_vars(text: str, vars: dict[str, str]) -> str:
-    """Replace {{VAR}} placeholders with values from vars dict.
+_JINJA_ENV = Environment(autoescape=False, keep_trailing_newline=True, undefined=_PassthroughUndefined)
 
-    Unrecognized variables pass through unchanged.
-    """
-    if not vars:
+
+def _find_template_vars(text: str) -> set[str]:
+    """Return undeclared variable names referenced by a Jinja2 template."""
+    if not text:
+        return set()
+    return set(meta.find_undeclared_variables(_JINJA_ENV.parse(text)))
+
+
+def _find_template_vars_safe(text: str) -> set[str]:
+    """Best-effort variable discovery for callers that validate syntax later."""
+    try:
+        return _find_template_vars(text)
+    except TemplateSyntaxError:
+        return set()
+
+
+def apply_vars(text: str, vars: dict[str, str] | None) -> str:
+    """Render text with Jinja2 using vars as the template context."""
+    if not text:
         return text
-    return _VAR_RE.sub(lambda m: vars.get(m.group(1), m.group(0)), text)
+    return _JINJA_ENV.from_string(text).render(vars or {})
 
 
 @dataclass
@@ -50,9 +72,7 @@ class Phase:
 
     def render_prompt(self, failure_context: str = "", vars: dict[str, str] | None = None) -> str:
         """Render the implementation prompt, injecting failure context on retry."""
-        text = self.prompt
-        if vars:
-            text = apply_vars(text, vars)
+        text = apply_vars(self.prompt, vars)
         if failure_context:
             text += (
                 "\n\nIMPORTANT: A previous attempt failed verification.\n"
@@ -64,10 +84,7 @@ class Phase:
     def render_check_prompt(self, vars: dict[str, str] | None = None) -> str:
         """Render the checker prompt for check phases."""
         if self.prompt:
-            text = self.prompt
-            if vars:
-                text = apply_vars(text, vars)
-            return text
+            return apply_vars(self.prompt, vars)
         if self.role:
             return _load_role_prompt(self.role)
         return ""
@@ -121,7 +138,7 @@ class Workflow:
     backoff: float = 0.0  # base backoff delay in seconds between bounces (0 = no backoff)
     max_backoff: float = 60.0  # maximum backoff delay cap in seconds
     notify: list[str] = field(default_factory=list)  # webhook URLs for completion/failure notifications
-    vars: dict[str, str] = field(default_factory=dict)  # template variables for {{VAR}} substitution
+    vars: dict[str, str] = field(default_factory=dict)  # Jinja2 template variables
 
 
 def load_workflow(path: str | Path) -> Workflow:
@@ -794,7 +811,7 @@ def expand_multi_vars(workflow: Workflow, multi_vars: dict[str, list[str]]) -> W
         all_text = parent.prompt + (parent.run or "")
         for child in group[1:]:
             all_text += child.prompt + (child.run or "")
-        used_vars = set(_VAR_RE.findall(all_text))
+        used_vars = _find_template_vars_safe(all_text)
         referenced = [k for k in multi_vars if k in used_vars]
 
         if not referenced:
@@ -973,11 +990,19 @@ def validate_workflow(workflow: Workflow) -> list[str]:
         if not url.startswith(("http://", "https://")):
             errors.append(f"notify URL must start with http:// or https://, got {url!r}")
 
-    # Template variable validation: all {{VAR}} references must have values
+    # Template validation: referenced Jinja2 variables must have values
     defined_vars = set(workflow.vars.keys())
     for phase in workflow.phases:
-        all_text = phase.prompt + (phase.run or "")
-        undefined = set(_VAR_RE.findall(all_text)) - defined_vars
+        undefined: set[str] = set()
+        for field_name, text in (("prompt", phase.prompt), ("run", phase.run or "")):
+            if not text:
+                continue
+            try:
+                referenced = _find_template_vars(text)
+            except TemplateSyntaxError as exc:
+                errors.append(f"Phase {phase.id!r}: invalid Jinja2 {field_name}: {exc.message} (line {exc.lineno})")
+                continue
+            undefined.update(referenced - defined_vars)
         for var_name in sorted(undefined):
             errors.append(f"Phase {phase.id!r}: template variable {{{{{var_name}}}}} has no value defined")
 

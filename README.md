@@ -356,7 +356,7 @@ juvenal validate <workflow>
 | `--checker SPEC` | Inject checker on every implement phase (role, `run:CMD`, `prompt:TEXT`). Repeatable. |
 | `--implementer ROLE` | Prepend implementer role prompt to every implement phase |
 | `--clear-context-on-bounce` | Start fresh agent session on bounce (default: resume session) |
-| `-D VAR=VAL` | Set template variable for `{{VAR}}` substitution. Repeatable. |
+| `-D VAR=VAL` | Set a Jinja2 template variable. Repeatable. |
 | `--backoff SECONDS` | Exponential backoff base delay between bounces |
 | `--notify URL` | Webhook URL for completion/failure notifications. Repeatable. |
 | `--serialize` | Disable all parallelization (run everything sequentially) |

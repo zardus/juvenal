@@ -1001,6 +1001,13 @@ class TestTemplateVars:
     def test_apply_vars_basic(self):
         assert apply_vars("Hello {{NAME}}", {"NAME": "world"}) == "Hello world"
 
+    def test_apply_vars_jinja_filter(self):
+        assert apply_vars("Hello {{ name|title }}", {"name": "juvenal"}) == "Hello Juvenal"
+
+    def test_apply_vars_jinja_control_flow(self):
+        result = apply_vars("{% if LANG == 'Python' %}typed{% else %}other{% endif %}", {"LANG": "Python"})
+        assert result == "typed"
+
     def test_apply_vars_multiple(self):
         result = apply_vars("{{A}} and {{B}}", {"A": "foo", "B": "bar"})
         assert result == "foo and bar"
@@ -1260,6 +1267,15 @@ class TestExpandMultiVars:
         assert len(result.phases) == 4
         prompts = {p.prompt for p in result.phases}
         assert prompts == {"Build x on 1.", "Build x on 2.", "Build y on 1.", "Build y on 2."}
+
+    def test_jinja_expression_references_multi_var(self):
+        """Jinja2 expressions still participate in multi-value expansion."""
+        wf = Workflow(
+            name="test",
+            phases=[Phase(id="build", type="implement", prompt="Build {{ TARGET|upper }}.")],
+        )
+        result = expand_multi_vars(wf, {"TARGET": ["linux", "windows"]})
+        assert [phase.prompt for phase in result.phases] == ["Build LINUX.", "Build WINDOWS."]
 
     def test_empty_multi_vars_is_noop(self):
         """Empty multi_vars returns workflow unchanged."""
