@@ -3,9 +3,11 @@
 import subprocess
 import sys
 import time
+from pathlib import Path
 
 from juvenal.cli import _parse_defines, build_parser, cmd_plan, cmd_status
 from juvenal.state import PipelineState
+from juvenal.workflow import load_workflow
 
 
 class TestArgumentParsing:
@@ -396,6 +398,33 @@ class TestStatusExitCodeSubprocess:
 
         assert called_with["backend"] == "codex"
         assert called_with["interactive"] is True
+
+    def test_plan_checker_yaml_round_trips(self, tmp_path, monkeypatch):
+        """cmd_plan writes checker specs under a YAML key the loader expands."""
+        import juvenal.engine
+
+        def mock_plan_workflow(goal, output, backend, plain=False, interactive=False, resume=False):
+            Path(output).write_text(
+                """\
+name: test
+phases:
+  - id: build
+    prompt: "Build it."
+"""
+            )
+
+        monkeypatch.setattr(juvenal.engine, "plan_workflow", mock_plan_workflow)
+
+        out = tmp_path / "workflow.yaml"
+        parser = build_parser()
+        args = parser.parse_args(["plan", "build something", "-o", str(out), "--checker", "tester"])
+        args.plain = False
+        cmd_plan(args)
+
+        wf = load_workflow(out)
+        assert len(wf.phases) == 2
+        assert wf.phases[1].id == "build~check-1"
+        assert wf.phases[1].role == "tester"
 
     def test_status_subprocess_exit_1_on_failure(self, tmp_path):
         """Failed pipeline exits 1 as a real process."""

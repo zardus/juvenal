@@ -1344,6 +1344,38 @@ phases:
         assert wf.phases[1].type == "check"
         assert wf.phases[1].role == "tester"
 
+    def test_checkers_key_loads_checkers(self, tmp_path):
+        """The 'checkers:' YAML key also creates check phases."""
+        yaml_content = """\
+name: test
+phases:
+  - id: build
+    prompt: "Build it."
+    checkers:
+      - role: tester
+"""
+        (tmp_path / "workflow.yaml").write_text(yaml_content)
+        wf = load_workflow(tmp_path / "workflow.yaml")
+        assert len(wf.phases) == 2
+        assert wf.phases[1].id == "build~check-1"
+        assert wf.phases[1].type == "check"
+        assert wf.phases[1].role == "tester"
+
+    def test_checks_and_checkers_together_rejected(self, tmp_path):
+        yaml_content = """\
+name: test
+phases:
+  - id: build
+    prompt: "Build it."
+    checks:
+      - tester
+    checkers:
+      - tester
+"""
+        (tmp_path / "workflow.yaml").write_text(yaml_content)
+        with pytest.raises(ValueError, match="mutually exclusive"):
+            load_workflow(tmp_path / "workflow.yaml")
+
     def test_checks_with_inline_prompt(self, tmp_path):
         yaml_content = """\
 name: test

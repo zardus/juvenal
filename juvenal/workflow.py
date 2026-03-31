@@ -205,6 +205,7 @@ def _load_yaml_with_includes(path: Path, seen: set[str]) -> Workflow:
         "interactive",
         "max_depth",
         "checks",
+        "checkers",
         "workflow_file",
         "workflow_dir",
     }
@@ -223,6 +224,8 @@ def _load_yaml_with_includes(path: Path, seen: set[str]) -> Workflow:
                 f"Phase '{phase_data['id']}': script phases are no longer supported; "
                 "use a check phase and tell the checker which command(s) to run"
             )
+        if "checks" in phase_data and "checkers" in phase_data:
+            raise ValueError(f"Phase '{phase_data['id']}': checks and checkers are mutually exclusive")
         prompt = phase_data.get("prompt", "")
         if not prompt and phase_data.get("prompt_file"):
             prompt_path = path.parent / phase_data["prompt_file"]
@@ -257,8 +260,9 @@ def _load_yaml_with_includes(path: Path, seen: set[str]) -> Workflow:
         )
         phases.append(phase)
 
-        if "checks" in phase_data:
-            phases.extend(_expand_checkers(phase.id, phase_data["checks"], path.parent))
+        checker_entries = phase_data.get("checkers", phase_data.get("checks"))
+        if checker_entries is not None:
+            phases.extend(_expand_checkers(phase.id, checker_entries, path.parent))
 
     parallel_groups = list(included_parallel_groups)
     for pg in data.get("parallel_groups", []):
