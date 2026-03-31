@@ -39,18 +39,18 @@ class _Sandbox(ImmutableSandboxedEnvironment):
         else super(_Sandbox, self).getattr(obj, attr)
     )
     is_safe_attribute = lambda self, obj, attr, value: isinstance(obj, dict) and attr in {"get", "items", "keys", "values"} and super(_Sandbox, self).is_safe_attribute(obj, attr, value)  # noqa: E501,E731  # fmt: skip
-    is_safe_callable = lambda self, obj: any(obj is value for value in _JINJA_ENV.globals.values()) or type(obj).__name__ == "Macro" or isinstance(getattr(obj, "__self__", None), dict) and getattr(obj, "__name__", None) in {"get", "items", "keys", "values"}  # noqa: E501,E731  # fmt: skip
+    is_safe_callable = lambda self, obj: any(obj is value for value in _JINJA_ENV.globals.values()) or type(obj).__name__ == "Macro" or isinstance(getattr(obj, "__self__", None), dict) and getattr(obj, "__name__", None) in {"get", "items", "keys", "values", "<lambda>"}  # noqa: E501,E731  # fmt: skip
 
 
-_JINJA_ENV = _Sandbox(autoescape=False, keep_trailing_newline=True, undefined=PreservePlaceholderUndefined)
-template_vars = lambda text: set() if not text else meta.find_undeclared_variables(_JINJA_ENV.parse(text))  # noqa: E731
+_SafeTemplateList, _SafeTemplateDict = type("_SafeTemplateList", (list,), {"__getitem__": lambda self, key: PreservePlaceholderUndefined(name=key._undefined_name) if isinstance(key, Undefined) else list.__getitem__(self, key)}), type("_SafeTemplateDict", (dict,), {"__getitem__": lambda self, key: PreservePlaceholderUndefined(name=key._undefined_name) if isinstance(key, Undefined) else dict.__getitem__(self, key), "get": lambda self, key, default=None: PreservePlaceholderUndefined(name=key._undefined_name) if isinstance(key, Undefined) else dict.get(self, key, default)})  # noqa: E501,E731  # fmt: skip
+_safe_template_value = lambda value, name="undefined": value if value is None or isinstance(value, (bool, int, float, str, Undefined)) else _SafeTemplateDict({k: _safe_template_value(v, k if isinstance(k, str) else name) for k, v in value.items()}) if isinstance(value, dict) else _SafeTemplateList(_safe_template_value(v, name) for v in value) if isinstance(value, (list, tuple)) else PreservePlaceholderUndefined(name=name); _JINJA_ENV = _Sandbox(autoescape=False, keep_trailing_newline=True, undefined=PreservePlaceholderUndefined); template_vars = lambda text: set() if not text else meta.find_undeclared_variables(_JINJA_ENV.parse(text))  # noqa: E501,E702,E731  # fmt: skip
 
 
 def apply_vars(text: str, vars: dict[str, str] | None) -> str:
     if vars is None:
         return text
     try:
-        return _JINJA_ENV.from_string(text).render(vars)
+        return _JINJA_ENV.from_string(text).render({k: _safe_template_value(v, k) for k, v in vars.items()})
     except Exception as exc:
         raise TemplateRenderError(str(exc)) from exc
 
