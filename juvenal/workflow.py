@@ -17,7 +17,7 @@ _UNRESOLVED_TEMPLATE_VAR_RE = re.compile(r"\{\{\s*([A-Za-z_][A-Za-z0-9_]*)\b")
 _CONTROL_EXPR_RE = re.compile(
     r"{%\s*(?:if|elif)\s+(.+?)\s*%}|{%\s*for\s+(.+?)\s+in\s+(.+?)\s*%}|{{.*?\s+if\s+(.+?)\s+else\b", re.DOTALL
 )
-_SKIP_CONTROL_EXPR_RE = re.compile(r"(?:\w+\s+is\s+(?:not\s+)?(?:defined|undefined)|\w+\|default(?:\(.*\))?(?:\b.*)?)")
+_SKIP_CONTROL_EXPR_RE = re.compile(r"(?:\w+\s+is\s+(?:not\s+)?(?:defined|undefined))")
 _OPTIONAL_OUTPUT_RE = re.compile(
     r"{%\s*if\s+([A-Za-z_][A-Za-z0-9_]*)\s+is\s+(?:undefined|not\s+defined)(?:\s+or\s+\1)?\s*%}.*?{{\s*\1\b", re.DOTALL
 )
@@ -79,7 +79,7 @@ def _control_template_vars(text: str, defined_vars: set[str]) -> set[str]:
         guard = re.fullmatch(r"(\w+)\s+is\s+(?:(?:not\s+)?undefined\s+or|defined\s+and)\s+(.+)", expr)
         expr = "" if guard and guard.group(1) not in defined_vars else guard.group(2) if guard else expr
         if expr and not _SKIP_CONTROL_EXPR_RE.fullmatch(expr):
-            found.update(template_vars(f"{{{{ {expr} }}}}") - set(re.findall(r"\w+", loop_var)))
+            found.update(template_vars(f"{{{{ {expr} }}}}") - set(re.findall(r"\w+", loop_var)) - set(re.findall(r"(\w+)\|default", expr)))  # noqa: E501  # fmt: skip
     return found - guarded
 
 
