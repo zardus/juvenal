@@ -968,13 +968,19 @@ class Engine:
                 extras.append(f"max_depth={phase.max_depth}")
             extra_str = f" [{', '.join(extras)}]" if extras else ""
             if phase.type == "implement":
-                prompt_preview = phase.render_prompt(vars=self.workflow.vars)[:80].replace("\n", " ")
+                prompt_preview = phase.prompt if has_errors else phase.render_prompt(vars=self.workflow.vars)
+                prompt_preview = prompt_preview[:80].replace("\n", " ")
                 print(f"{prefix} [{phase.type}] {phase.id}{extra_str}")
                 print(f"     prompt: {prompt_preview}...")
             elif phase.type == "script":
-                print(f"{prefix} [{phase.type}] {phase.id}: {phase.render_run(vars=self.workflow.vars)}{extra_str}")
+                run_preview = phase.run if has_errors else phase.render_run(vars=self.workflow.vars)
+                print(f"{prefix} [{phase.type}] {phase.id}: {run_preview}{extra_str}")
             elif phase.type == "check":
-                target = phase.role or phase.render_check_prompt(vars=self.workflow.vars)[:60].replace("\n", " ")
+                if phase.role:
+                    target = phase.role
+                else:
+                    check_preview = phase.prompt if has_errors else phase.render_check_prompt(vars=self.workflow.vars)
+                    target = check_preview[:60].replace("\n", " ")
                 print(f"{prefix} [{phase.type}] {phase.id}: {target}{extra_str}")
             elif phase.type == "workflow":
                 print(f"{prefix} [{phase.type}] {phase.id}{extra_str}")
