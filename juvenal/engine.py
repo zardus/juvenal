@@ -407,14 +407,14 @@ class Engine:
         except Exception as exc:
             return self._template_render_failure(phase.id, "script command", phase.id, exc)
         result = run_script(run_cmd, self.workflow.working_dir, timeout=timeout, env=phase.env or None)
-        self.state.log_step(phase.id, attempt, "script", result.output, input=phase.run)
+        self.state.log_step(phase.id, attempt, "script", result.output, input=run_cmd)
 
         if result.exit_code == 0:
             self.display.step_pass(phase.id)
             return PhaseResult(success=True)
 
         # Failure — resolve bounce target
-        failure_context = f"Script '{phase.run}' failed (exit {result.exit_code}).\nOutput:\n{result.output[-3000:]}"
+        failure_context = f"Script '{run_cmd}' failed (exit {result.exit_code}).\nOutput:\n{result.output[-3000:]}"
         self.display.step_fail(phase.id, failure_context[:500])
 
         target_id = self._resolve_bounce_target(phase, phases, phase_idx)

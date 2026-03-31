@@ -7,7 +7,7 @@ import pytest
 
 from juvenal.checkers import parse_verdict
 from juvenal.engine import BounceCounter, Engine, _extract_yaml, _plan_workflow_internal
-from juvenal.workflow import ParallelGroup, Phase, Workflow, inject_checkers, inject_implementer
+from juvenal.workflow import ParallelGroup, Phase, Workflow, expand_multi_vars, inject_checkers, inject_implementer
 from tests.conftest import MockBackend
 
 
@@ -616,6 +616,30 @@ class TestPreserveContextOnBounce:
 
         assert len(backend.resume_calls) == 1
         assert backend.resume_calls[0][0] == "sess-1"
+
+    def test_multi_var_script_bounce_uses_rendered_command_in_failure_context(self, tmp_path):
+        """Expanded script phases should report the rendered command on bounce."""
+        backend = MockBackend()
+        backend.add_response(exit_code=0, output="built it", session_id="sess-1")  # implement attempt 1
+        backend.add_response(exit_code=0, output="fixed it", session_id="sess-2")  # implement attempt 2 (resumed)
+        workflow = Workflow(
+            name="test",
+            phases=[
+                Phase(id="build", type="implement", prompt="Build {{TARGET}}."),
+                Phase(id="build~script-1", type="script", run="pytest {{TARGET}} -x", bounce_target="build"),
+            ],
+            max_bounces=2,
+        )
+        workflow = expand_multi_vars(workflow, {"TARGET": ["linux"]})
+        engine = self._make_engine(workflow, backend, tmp_path)
+        with patch("juvenal.engine.run_script") as mock_run:
+            mock_run.return_value = type("R", (), {"exit_code": 1, "output": "boom"})()
+            assert engine.run() == 1
+
+        assert len(backend.resume_calls) == 2
+        assert backend.resume_calls[0][0] == "sess-1"
+        assert all("pytest linux -x" in prompt for _, prompt in backend.resume_calls)
+        assert all("{{TARGET}}" not in prompt for _, prompt in backend.resume_calls)
 
     def test_crash_bounce_to_self_uses_resume(self, tmp_path):
         """Implement crash bouncing to self resumes the session."""
