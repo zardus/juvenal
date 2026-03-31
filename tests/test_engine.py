@@ -1967,6 +1967,20 @@ class TestTemplateVarsEngine:
         assert engine.run() == 0
         assert mock_backend.calls == ["Use fallback."]
 
+    def test_short_circuit_defined_guard_allows_runtime(self, mock_backend, tmp_path):
+        """Short-circuit Jinja guards should validate and render cleanly."""
+        mock_backend.add_response(exit_code=0, output="done")
+        workflow = Workflow(
+            name="test",
+            phases=[
+                Phase(id="build", type="implement", prompt="{% if missing is defined and missing.foo %}x{% endif %}")
+            ],
+        )
+        engine = Engine(workflow, state_file=str(tmp_path / "state.json"), plain=True)
+        engine.backend = mock_backend
+        assert engine.run() == 0
+        assert mock_backend.calls == [""]
+
     def test_vars_unrecognized_passthrough_fails_validation(self, mock_backend, tmp_path, capsys):
         """Undefined template vars fail validation before execution."""
         workflow = Workflow(

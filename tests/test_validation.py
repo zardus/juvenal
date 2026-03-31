@@ -447,6 +447,15 @@ class TestTemplateVarValidation:
         )
         assert validate_workflow(wf) == []
 
+    def test_short_circuit_defined_guard_allows_nested_access(self):
+        wf = Workflow(
+            name="test",
+            phases=[
+                Phase(id="build", type="implement", prompt="{% if missing is defined and missing.foo %}x{% endif %}")
+            ],
+        )
+        assert validate_workflow(wf) == []
+
     def test_expand_multi_vars_preserves_filtered_var_name_for_validation(self):
         wf = Workflow(
             name="test",

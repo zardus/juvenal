@@ -43,22 +43,36 @@ def _find_template_vars_safe(text: str) -> set[str]:
         return set()
 
 
-def _vars_defined_when_true(test: nodes.Node) -> set[str]:
-    """Variables proven defined when ``test`` evaluates truthy."""
+def _vars_defined_when_true(test: nodes.Node, guaranteed_defined: frozenset[str] = frozenset()) -> frozenset[str]:
+    """Variables guaranteed defined after ``test`` evaluates truthy."""
     if isinstance(test, nodes.Test) and test.name == "defined" and isinstance(test.node, nodes.Name):
-        return {test.node.name}
+        return guaranteed_defined | frozenset({test.node.name})
     if isinstance(test, nodes.Not):
-        return _vars_defined_when_false(test.node)
-    return set()
+        return _vars_defined_when_false(test.node, guaranteed_defined)
+    if isinstance(test, nodes.And):
+        left_true = _vars_defined_when_true(test.left, guaranteed_defined)
+        return _vars_defined_when_true(test.right, left_true)
+    if isinstance(test, nodes.Or):
+        left_true = _vars_defined_when_true(test.left, guaranteed_defined)
+        right_true = _vars_defined_when_true(test.right, _vars_defined_when_false(test.left, guaranteed_defined))
+        return left_true & right_true
+    return guaranteed_defined
 
 
-def _vars_defined_when_false(test: nodes.Node) -> set[str]:
-    """Variables proven defined when ``test`` evaluates falsy."""
+def _vars_defined_when_false(test: nodes.Node, guaranteed_defined: frozenset[str] = frozenset()) -> frozenset[str]:
+    """Variables guaranteed defined after ``test`` evaluates falsy."""
     if isinstance(test, nodes.Test) and test.name == "undefined" and isinstance(test.node, nodes.Name):
-        return {test.node.name}
+        return guaranteed_defined | frozenset({test.node.name})
     if isinstance(test, nodes.Not):
-        return _vars_defined_when_true(test.node)
-    return set()
+        return _vars_defined_when_true(test.node, guaranteed_defined)
+    if isinstance(test, nodes.And):
+        left_false = _vars_defined_when_false(test.left, guaranteed_defined)
+        right_false = _vars_defined_when_false(test.right, _vars_defined_when_true(test.left, guaranteed_defined))
+        return left_false & right_false
+    if isinstance(test, nodes.Or):
+        left_false = _vars_defined_when_false(test.left, guaranteed_defined)
+        return _vars_defined_when_false(test.right, left_false)
+    return guaranteed_defined
 
 
 def _find_vars_requiring_values(
@@ -85,8 +99,8 @@ def _find_vars_requiring_values(
 
         if isinstance(node, nodes.If):
             _walk(node.test, node, guaranteed_defined)
-            true_defined = guaranteed_defined | frozenset(_vars_defined_when_true(node.test))
-            false_defined = guaranteed_defined | frozenset(_vars_defined_when_false(node.test))
+            true_defined = _vars_defined_when_true(node.test, guaranteed_defined)
+            false_defined = _vars_defined_when_false(node.test, guaranteed_defined)
             for child in node.body:
                 _walk(child, node, true_defined)
             for child in node.else_:
@@ -95,11 +109,21 @@ def _find_vars_requiring_values(
 
         if isinstance(node, nodes.CondExpr):
             _walk(node.test, node, guaranteed_defined)
-            true_defined = guaranteed_defined | frozenset(_vars_defined_when_true(node.test))
-            false_defined = guaranteed_defined | frozenset(_vars_defined_when_false(node.test))
+            true_defined = _vars_defined_when_true(node.test, guaranteed_defined)
+            false_defined = _vars_defined_when_false(node.test, guaranteed_defined)
             _walk(node.expr1, node, true_defined)
             if node.expr2 is not None:
                 _walk(node.expr2, node, false_defined)
+            return
+
+        if isinstance(node, nodes.And):
+            _walk(node.left, node, guaranteed_defined)
+            _walk(node.right, node, _vars_defined_when_true(node.left, guaranteed_defined))
+            return
+
+        if isinstance(node, nodes.Or):
+            _walk(node.left, node, guaranteed_defined)
+            _walk(node.right, node, _vars_defined_when_false(node.left, guaranteed_defined))
             return
 
         for child in node.iter_child_nodes():
