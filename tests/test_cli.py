@@ -477,3 +477,25 @@ class TestStatusExitCodeSubprocess:
             capture_output=True,
         )
         assert result.returncode == 1
+
+    def test_validate_subprocess_rejects_run_checker_cleanly(self, tmp_path):
+        """Unsupported run: checker exits cleanly instead of raising a traceback."""
+        workflow_path = tmp_path / "workflow.yaml"
+        workflow_path.write_text(
+            """\
+name: test
+phases:
+  - id: build
+    prompt: "Build it."
+""",
+        )
+
+        result = subprocess.run(
+            [sys.executable, "-m", "juvenal.cli", "validate", str(workflow_path), "--checker", "run:pytest -x"],
+            capture_output=True,
+            text=True,
+        )
+
+        assert result.returncode == 1
+        assert "Error: Invalid --checker spec" in result.stdout
+        assert "Traceback" not in result.stderr

@@ -36,14 +36,14 @@ phases:
   - id: setup
     prompt: "Set up the project scaffolding."
     checks:
-      - run: "pytest tests/ -x"
+      - prompt: "Run `pytest tests/ -x` and emit `VERDICT: PASS` only if it succeeds."
       - tester
 
   - id: implement
     prompt_file: phases/implement/prompt.md
     bounce_target: setup  # on failure, bounce back to setup
     checks:
-      - run: "make test"
+      - prompt: "Run `make test` and emit `VERDICT: PASS` only if it succeeds."
       - role: senior-engineer
       - prompt: "Run `pytest tests/ --tb=long`, review the output, and emit a verdict."
 ```
@@ -55,10 +55,9 @@ my-workflow/
   phases/
     01-setup/
       prompt.md
-      check-build.sh      # check phase that tells the agent to run the script
+      check-build.md      # check phase
     02-implement/
       prompt.md
-      check-tests.sh     # run-based checker
       check-quality.md   # agent checker
 ```
 
@@ -73,7 +72,7 @@ phases/
 ## Checker Types
 
 - **role / prompt**: AI agent that must emit `VERDICT: PASS` or `VERDICT: FAIL: reason`
-- **run: CMD**: checker shorthand that tells the agent to run `CMD` during verification
+- If a checker needs to run a command, spell that command out in the prompt.
 
 ## Built-in Roles
 
