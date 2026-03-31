@@ -149,17 +149,38 @@ def _load_workflow_or_exit(path: str):
         sys.exit(1)
 
 
+def _validate_checker_specs(checker_specs: list[str]) -> bool:
+    """Validate CLI --checker specs and print a clean error on failure."""
+    from juvenal.workflow import parse_checker_string
+
+    try:
+        for spec in checker_specs:
+            parse_checker_string(spec)
+    except ValueError as e:
+        print(f"Error: {e}")
+        return False
+
+    return True
+
+
 def cmd_run(args: argparse.Namespace) -> int:
     from juvenal.engine import Engine
     from juvenal.workflow import inject_checkers, inject_implementer, validate_workflow
 
+    if args.checker and not _validate_checker_specs(args.checker):
+        return 1
+
     workflow = _load_workflow_or_exit(args.workflow)
     if args.defines:
         workflow = _apply_defines(workflow, _parse_defines(args.defines))
-    if args.implementer:
-        workflow = inject_implementer(workflow, args.implementer)
-    if args.checker:
-        workflow = inject_checkers(workflow, args.checker)
+    try:
+        if args.implementer:
+            workflow = inject_implementer(workflow, args.implementer)
+        if args.checker:
+            workflow = inject_checkers(workflow, args.checker)
+    except ValueError as e:
+        print(f"Error: {e}")
+        return 1
     errors = validate_workflow(workflow)
     if errors:
         print(f"Workflow validation failed with {len(errors)} error(s):")
@@ -195,13 +216,20 @@ def cmd_run(args: argparse.Namespace) -> int:
 def cmd_plan(args: argparse.Namespace) -> int:
     from juvenal.engine import plan_workflow
 
+    if args.checker and not _validate_checker_specs(args.checker):
+        return 1
+
     plan_workflow(
         args.goal, args.output, args.backend, plain=args.plain, interactive=args.interactive, resume=args.resume
     )
-    if args.implementer:
-        _inject_implementer_into_yaml(args.output, args.implementer)
-    if args.checker:
-        _inject_checkers_into_yaml(args.output, args.checker)
+    try:
+        if args.implementer:
+            _inject_implementer_into_yaml(args.output, args.implementer)
+        if args.checker:
+            _inject_checkers_into_yaml(args.output, args.checker)
+    except (FileNotFoundError, ValueError) as e:
+        print(f"Error: {e}")
+        return 1
     return 0
 
 
@@ -256,16 +284,23 @@ def cmd_do(args: argparse.Namespace) -> int:
     from juvenal.engine import Engine, plan_workflow
     from juvenal.workflow import inject_checkers, inject_implementer
 
+    if args.checker and not _validate_checker_specs(args.checker):
+        return 1
+
     with tempfile.NamedTemporaryFile(suffix=".yaml", delete=False, mode="w") as f:
         plan_workflow(args.goal, f.name, args.backend, plain=args.plain, interactive=args.interactive)
         workflow = _load_workflow_or_exit(f.name)
 
     if args.defines:
         workflow = _apply_defines(workflow, _parse_defines(args.defines))
-    if args.implementer:
-        workflow = inject_implementer(workflow, args.implementer)
-    if args.checker:
-        workflow = inject_checkers(workflow, args.checker)
+    try:
+        if args.implementer:
+            workflow = inject_implementer(workflow, args.implementer)
+        if args.checker:
+            workflow = inject_checkers(workflow, args.checker)
+    except ValueError as e:
+        print(f"Error: {e}")
+        return 1
     if args.backend:
         workflow.backend = args.backend
     if args.max_bounces:
@@ -301,13 +336,20 @@ def cmd_validate(args: argparse.Namespace) -> int:
     from juvenal.engine import Engine
     from juvenal.workflow import inject_checkers, inject_implementer
 
+    if args.checker and not _validate_checker_specs(args.checker):
+        return 1
+
     workflow = _load_workflow_or_exit(args.workflow)
     if args.defines:
         workflow = _apply_defines(workflow, _parse_defines(args.defines))
-    if args.implementer:
-        workflow = inject_implementer(workflow, args.implementer)
-    if args.checker:
-        workflow = inject_checkers(workflow, args.checker)
+    try:
+        if args.implementer:
+            workflow = inject_implementer(workflow, args.implementer)
+        if args.checker:
+            workflow = inject_checkers(workflow, args.checker)
+    except ValueError as e:
+        print(f"Error: {e}")
+        return 1
     if args.backend:
         workflow.backend = args.backend
     if args.max_bounces:

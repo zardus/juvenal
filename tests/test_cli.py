@@ -5,7 +5,7 @@ import sys
 import time
 from pathlib import Path
 
-from juvenal.cli import _parse_defines, build_parser, cmd_plan, cmd_status
+from juvenal.cli import _parse_defines, build_parser, cmd_do, cmd_plan, cmd_run, cmd_status, cmd_validate
 from juvenal.state import PipelineState
 from juvenal.workflow import load_workflow
 
@@ -461,6 +461,72 @@ phases:
 
         wf = load_workflow(out)
         assert [p.id for p in wf.phases] == ["build", "build~check-1", "build~check-2"]
+
+    def test_run_invalid_checker_spec_returns_clean_error(self, sample_yaml, capsys):
+        parser = build_parser()
+        args = parser.parse_args(["run", str(sample_yaml), "--checker", "run:pytest -x"])
+        args.plain = True
+
+        result = cmd_run(args)
+
+        assert result == 1
+        captured = capsys.readouterr()
+        assert "Invalid --checker spec" in captured.out
+
+    def test_validate_invalid_checker_spec_returns_clean_error(self, sample_yaml, capsys):
+        parser = build_parser()
+        args = parser.parse_args(["validate", str(sample_yaml), "--checker", "run:pytest -x"])
+        args.plain = True
+
+        result = cmd_validate(args)
+
+        assert result == 1
+        captured = capsys.readouterr()
+        assert "Invalid --checker spec" in captured.out
+
+    def test_plan_invalid_checker_spec_returns_clean_error(self, tmp_path, monkeypatch, capsys):
+        import juvenal.engine
+
+        called = {"value": False}
+
+        def mock_plan_workflow(goal, output, backend, plain=False, interactive=False, resume=False):
+            called["value"] = True
+
+        monkeypatch.setattr(juvenal.engine, "plan_workflow", mock_plan_workflow)
+
+        out = tmp_path / "workflow.yaml"
+        parser = build_parser()
+        args = parser.parse_args(["plan", "build something", "-o", str(out), "--checker", "run:pytest -x"])
+        args.plain = False
+
+        result = cmd_plan(args)
+
+        assert result == 1
+        assert called["value"] is False
+        assert not out.exists()
+        captured = capsys.readouterr()
+        assert "Invalid --checker spec" in captured.out
+
+    def test_do_invalid_checker_spec_returns_clean_error(self, monkeypatch, capsys):
+        import juvenal.engine
+
+        called = {"value": False}
+
+        def mock_plan_workflow(goal, output, backend, plain=False, interactive=False, resume=False):
+            called["value"] = True
+
+        monkeypatch.setattr(juvenal.engine, "plan_workflow", mock_plan_workflow)
+
+        parser = build_parser()
+        args = parser.parse_args(["do", "build something", "--checker", "run:pytest -x"])
+        args.plain = False
+
+        result = cmd_do(args)
+
+        assert result == 1
+        assert called["value"] is False
+        captured = capsys.readouterr()
+        assert "Invalid --checker spec" in captured.out
 
     def test_status_subprocess_exit_1_on_failure(self, tmp_path):
         """Failed pipeline exits 1 as a real process."""
