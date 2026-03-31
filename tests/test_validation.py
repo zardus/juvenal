@@ -7,7 +7,14 @@ import argparse
 import pytest
 
 from juvenal.cli import build_parser, cmd_validate
-from juvenal.workflow import ParallelGroup, Phase, Workflow, expand_multi_vars, validate_workflow
+from juvenal.workflow import (
+    ParallelGroup,
+    Phase,
+    Workflow,
+    expand_multi_vars,
+    make_command_check_prompt,
+    validate_workflow,
+)
 
 
 class TestValidateWorkflow:
@@ -16,7 +23,7 @@ class TestValidateWorkflow:
             name="test",
             phases=[
                 Phase(id="setup", type="implement", prompt="Set up."),
-                Phase(id="check", type="check", run="true"),
+                Phase(id="check", type="check", prompt=make_command_check_prompt("true")),
             ],
         )
         assert validate_workflow(wf) == []
@@ -80,7 +87,7 @@ class TestValidateWorkflow:
             ],
         )
         errors = validate_workflow(wf)
-        assert any("no prompt, role, or run command" in e for e in errors)
+        assert any("no prompt or role" in e for e in errors)
 
     def test_check_with_role_is_valid(self):
         wf = Workflow(
@@ -108,7 +115,7 @@ class TestValidateWorkflow:
             ],
         )
         errors = validate_workflow(wf)
-        assert any("no prompt, role, or run command" in e for e in errors)
+        assert any("no prompt or role" in e for e in errors)
 
     def test_invalid_role(self):
         wf = Workflow(
@@ -175,7 +182,7 @@ phases:
     timeout: 120
   - id: check
     type: check
-    run: "true"
+    prompt: "Review the build and emit VERDICT."
     timeout: 30
 """
         yaml_path = tmp_path / "workflow.yaml"
@@ -223,9 +230,14 @@ phases:
         phase = Phase(id="test", prompt="Test.")
         assert phase.env == {}
 
-    def test_env_in_run_based_check(self):
-        """Run-based check phases remain valid with env metadata."""
-        phase = Phase(id="review", type="check", run="echo $TEST_VAR", env={"TEST_VAR": "hello123"})
+    def test_env_in_check_phase(self):
+        """Check phases remain valid with env metadata."""
+        phase = Phase(
+            id="review",
+            type="check",
+            prompt=make_command_check_prompt("echo $TEST_VAR"),
+            env={"TEST_VAR": "hello123"},
+        )
         assert phase.env == {"TEST_VAR": "hello123"}
 
 
@@ -248,16 +260,6 @@ class TestWorkflowPhaseValidation:
         )
         errors = validate_workflow(wf)
         assert any("workflow phase needs prompt, workflow_file, or workflow_dir" in e for e in errors)
-
-    def test_workflow_phase_with_run_is_invalid(self):
-        wf = Workflow(
-            name="test",
-            phases=[
-                Phase(id="dynamic", type="workflow", prompt="Do it.", run="echo hi"),
-            ],
-        )
-        errors = validate_workflow(wf)
-        assert any("must not have 'run'" in e for e in errors)
 
     def test_workflow_phase_with_role_is_invalid(self):
         wf = Workflow(
@@ -357,12 +359,17 @@ class TestTemplateVarValidation:
         errors = validate_workflow(wf)
         assert any("PROJECT" in e and "no value defined" in e for e in errors)
 
-    def test_undefined_var_in_run(self):
+    def test_undefined_var_in_check_prompt(self):
         wf = Workflow(
             name="test",
             phases=[
                 Phase(id="build", type="implement", prompt="Build."),
-                Phase(id="test", type="check", run="pytest {{DIR}}", bounce_target="build"),
+                Phase(
+                    id="test",
+                    type="check",
+                    prompt=make_command_check_prompt("pytest {{DIR}}"),
+                    bounce_target="build",
+                ),
             ],
         )
         errors = validate_workflow(wf)

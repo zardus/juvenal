@@ -13,7 +13,7 @@ from juvenal.backends import AgentResult, _extract_claude_tokens, _extract_codex
 from juvenal.engine import Engine
 from juvenal.notifications import build_notification_payload, send_webhook
 from juvenal.state import PipelineState
-from juvenal.workflow import ParallelGroup, Phase, Workflow, load_workflow, validate_workflow
+from juvenal.workflow import ParallelGroup, Phase, Workflow, load_workflow, make_command_check_prompt, validate_workflow
 from tests.conftest import MockBackend
 
 # ─── Feature 1: Workflow Includes ───────────────────────────────────────────
@@ -195,7 +195,7 @@ class TestCostTracking:
             name="test",
             phases=[
                 Phase(id="setup", type="implement", prompt="Do it."),
-                Phase(id="setup-check", type="check", run="true"),
+                Phase(id="setup-check", type="check", prompt=make_command_check_prompt("true")),
             ],
             max_bounces=3,
         )
@@ -232,7 +232,7 @@ class TestCostTracking:
             name="test",
             phases=[
                 Phase(id="setup", type="implement", prompt="Do it."),
-                Phase(id="setup-check", type="check", run="true"),
+                Phase(id="setup-check", type="check", prompt=make_command_check_prompt("true")),
             ],
             max_bounces=3,
         )
@@ -280,7 +280,7 @@ class TestExponentialBackoff:
             name="test",
             phases=[
                 Phase(id="setup", type="implement", prompt="Do it."),
-                Phase(id="setup-check", type="check", run="false"),
+                Phase(id="setup-check", type="check", prompt=make_command_check_prompt("false")),
             ],
             max_bounces=2,
             backoff=1.0,
@@ -311,7 +311,7 @@ class TestExponentialBackoff:
             name="test",
             phases=[
                 Phase(id="setup", type="implement", prompt="Do it."),
-                Phase(id="setup-check", type="check", run="false"),
+                Phase(id="setup-check", type="check", prompt=make_command_check_prompt("false")),
             ],
             max_bounces=4,
             backoff=1.0,
@@ -344,7 +344,7 @@ class TestExponentialBackoff:
             name="test",
             phases=[
                 Phase(id="setup", type="implement", prompt="Do it."),
-                Phase(id="setup-check", type="check", run="false"),
+                Phase(id="setup-check", type="check", prompt=make_command_check_prompt("false")),
             ],
             max_bounces=2,
             backoff=10.0,
@@ -367,7 +367,7 @@ class TestExponentialBackoff:
             name="test",
             phases=[
                 Phase(id="setup", type="implement", prompt="Do it."),
-                Phase(id="setup-check", type="check", run="false"),
+                Phase(id="setup-check", type="check", prompt=make_command_check_prompt("false")),
             ],
             max_bounces=1,
             backoff=0.0,
@@ -516,7 +516,7 @@ phases:
             name="test",
             phases=[
                 Phase(id="setup", type="implement", prompt="Do it."),
-                Phase(id="setup-check", type="check", run="true"),
+                Phase(id="setup-check", type="check", prompt=make_command_check_prompt("true")),
             ],
             max_bounces=3,
             notify=["https://example.com/hook"],
@@ -542,7 +542,7 @@ phases:
             name="test",
             phases=[
                 Phase(id="setup", type="implement", prompt="Do it."),
-                Phase(id="setup-check", type="check", run="false"),
+                Phase(id="setup-check", type="check", prompt=make_command_check_prompt("false")),
             ],
             max_bounces=1,
             notify=["https://example.com/hook"],
@@ -565,7 +565,7 @@ phases:
             name="test",
             phases=[
                 Phase(id="setup", type="implement", prompt="Do it."),
-                Phase(id="setup-check", type="check", run="true"),
+                Phase(id="setup-check", type="check", prompt=make_command_check_prompt("true")),
             ],
             max_bounces=3,
         )
@@ -624,7 +624,7 @@ class TestEnhancedDryRun:
             name="test",
             phases=[
                 Phase(id="setup", type="implement", prompt="Do it."),
-                Phase(id="check", type="check", run="true"),
+                Phase(id="check", type="check", prompt=make_command_check_prompt("true")),
             ],
         )
         engine = Engine(workflow, state_file=str(tmp_path / "state.json"), dry_run=True, plain=True)
@@ -690,7 +690,7 @@ class TestEnhancedDryRun:
             phases=[
                 Phase(id="a", type="implement", prompt="A."),
                 Phase(id="b", type="implement", prompt="B."),
-                Phase(id="c", type="check", run="true"),
+                Phase(id="c", type="check", prompt=make_command_check_prompt("true")),
                 Phase(id="d", type="check", role="tester"),
             ],
         )
@@ -707,7 +707,7 @@ class TestEnhancedDryRun:
             name="test",
             phases=[
                 Phase(id="setup", type="implement", prompt="Set up the project.", timeout=120),
-                Phase(id="build", type="check", run="make build", env={"CC": "gcc"}),
+                Phase(id="build", type="check", prompt=make_command_check_prompt("make build"), env={"CC": "gcc"}),
                 Phase(id="review", type="check", role="tester", bounce_target="setup"),
             ],
         )
@@ -717,7 +717,8 @@ class TestEnhancedDryRun:
         assert "Execution plan:" in captured.out
         assert "[implement] setup" in captured.out
         assert "timeout=120s" in captured.out
-        assert "[check] build: make build" in captured.out
+        assert "[check] build:" in captured.out
+        assert "make build" in captured.out
         assert "[check] review: tester" in captured.out
         assert "bounce->setup" in captured.out
 

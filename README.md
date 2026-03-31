@@ -134,7 +134,10 @@ phases:
     env:
       NODE_ENV: production
     checks:
-      - run: "pytest tests/ -x"         # checker prompt tells the agent to run this command
+      - prompt: |
+          Run `pytest tests/ -x` from the working directory and use the result to verify the implementation.
+          Do not modify code while checking.
+          Emit `VERDICT: FAIL: <reason>` if the command fails; otherwise emit `VERDICT: PASS`.
       - tester                          # built-in role shorthand
       - role: senior-engineer           # role as dict
       - prompt: "Check for security."   # inline prompt
@@ -151,13 +154,14 @@ my-workflow/
       feature-a/           #   each subdir is a lane
         prompt.md          #     implement phase
         check.md           #     check phase (auto-bounces to implement)
-        tests.sh           #     check phase that tells the agent to run tests.sh
       feature-b/
         prompt.md
         check.md
     03-finish/
       prompt.md
 ```
+
+Commands belong in checker prompts. `.sh` files are not auto-loaded as phases.
 
 Lanes can also use subdirectories for more complex pipelines:
 
@@ -202,7 +206,6 @@ A `workflow` phase dynamically generates and executes a sub-pipeline. Useful for
 Checks are defined inline on implement phases. Each entry can be:
 
 - **Bare string** — built-in role shorthand
-- **`run: CMD`** — checker shorthand that tells the agent to run `CMD` during verification
 - **`role: NAME`** — agent checker with built-in role
 - **`prompt: TEXT`** — agent checker with inline prompt
 - **`prompt_file: PATH`** — agent checker with prompt from file
@@ -213,12 +216,14 @@ Checkers can also carry `timeout` and `env`.
 - id: implement
   prompt: "Build the feature."
   checks:
-    - run: "pytest tests/ -x"
+    - prompt: |
+        Run `pytest tests/ -x` from the working directory and verify the result.
+        Emit `VERDICT: FAIL: <reason>` on failure, otherwise emit `VERDICT: PASS`.
     - tester
     - role: senior-engineer
     - prompt: "Check for security vulnerabilities."
     - prompt_file: checkers/review.md
-    - run: "npm run lint"
+    - prompt: "Run `npm run lint` and emit `VERDICT: PASS` only if it succeeds."
       timeout: 60
       env:
         CI: "true"
@@ -352,7 +357,7 @@ juvenal validate <workflow>
 | `--rewind-to ID` | Rewind to a specific phase by ID |
 | `--phase ID` | Start from a specific phase |
 | `--dry-run` | Print execution plan without running |
-| `--checker SPEC` | Inject checker on every implement phase (role, `run:CMD`, `prompt:TEXT`). `run:CMD` becomes an agentic checker instruction. Repeatable. |
+| `--checker SPEC` | Inject checker on every implement phase (role or `prompt:TEXT`). Repeatable. |
 | `--implementer ROLE` | Prepend implementer role prompt to every implement phase |
 | `--clear-context-on-bounce` | Start fresh agent session on bounce (default: resume session) |
 | `-D VAR=VAL` | Set a Jinja2 template variable. Repeatable. |
@@ -383,11 +388,11 @@ Inject checkers at the CLI without modifying the workflow file:
 # Add a tester role checker to every implement phase
 juvenal run workflow.yaml --checker tester
 
-# Add a checker that runs a command
-juvenal run workflow.yaml --checker "run:pytest tests/ -x"
+# Add a checker with explicit instructions
+juvenal run workflow.yaml --checker "prompt:Run pytest tests/ -x and emit VERDICT based on the result."
 
 # Add both
-juvenal run workflow.yaml --checker tester --checker "run:make lint"
+juvenal run workflow.yaml --checker tester --checker "prompt:Run make lint and emit VERDICT based on the result."
 ```
 
 ## License
