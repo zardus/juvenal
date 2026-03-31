@@ -72,12 +72,12 @@ def _sub_vars(text: str, vars: dict[str, str]) -> str:
 _unresolved_template_vars = lambda text, vars: template_vars(text) & set(_UNRESOLVED_TEMPLATE_VAR_RE.findall(apply_vars(text, vars)))  # noqa: E501,E731  # fmt: skip
 
 
-def _control_template_vars(text: str, defined_vars: set[str]) -> set[str]:
+def _control_template_vars(text: str, defined_vars: dict[str, object]) -> set[str]:
     found, guarded = set(), set(re.findall(r"{%\s*if\s+(\w+)\s+is\s+(?:undefined|not\s+defined)\s*%}", text := "".join('""' if t == "string" else v for _, t, v in _JINJA_ENV.lex(text) if t not in {"data", "comment_begin", "comment", "comment_end", "raw_begin", "raw_end"})))  # noqa: E501  # fmt: skip
     for if_expr, loop_var, loop_expr, cond_expr in _CONTROL_EXPR_RE.findall(text):
         expr = re.sub(r"\((\w+\s+is\s+(?:not\s+)?(?:defined|undefined))\)", r"\1", (if_expr or loop_expr or cond_expr).strip())  # noqa: E501  # fmt: skip
         guard = re.fullmatch(r"(\w+)\s+is\s+(?:(?:not\s+)?undefined\s+or|defined\s+and)\s+(.+)", expr)
-        expr = re.sub(r"^(?:[Ff]alse\s+and|[Tt]rue\s+or)\b.*$", "", re.sub(r"^(?:[Tt]rue\s+and|[Ff]alse\s+or)\s+(.+)$", r"\1", "" if guard and guard.group(1) not in defined_vars else guard.group(2) if guard else expr))  # noqa: E501  # fmt: skip
+        expr = re.sub(r"^(\w+)\s+is\s+defined\s+or\s+(.+)$", lambda m: "" if m.group(1) in defined_vars else m.group(2), re.sub(r"^(\w+)\s+(and|or)\s+(.+)$", lambda m: "" if m.group(1) in defined_vars and ((defined_vars[m.group(1)] and m.group(2) == "or") or (not defined_vars[m.group(1)] and m.group(2) == "and")) else m.group(3) if m.group(1) in defined_vars else m.group(0), re.sub(r"^(?:[Ff]alse\s+and|[Tt]rue\s+or)\b.*$", "", re.sub(r"^(?:[Tt]rue\s+and|[Ff]alse\s+or)\s+(.+)$", r"\1", "" if guard and guard.group(1) not in defined_vars else guard.group(2) if guard else expr))))  # noqa: E501  # fmt: skip
         if expr and not _SKIP_CONTROL_EXPR_RE.fullmatch(expr):
             found.update(template_vars(f"{{{{ {expr} }}}}") - set(re.findall(r"\w+", loop_var)) - set(re.findall(r"(\w+)\s*\|\s*(?:default|d)\b", expr)))  # noqa: E501  # fmt: skip
     return found - guarded
@@ -1052,7 +1052,7 @@ def validate_workflow(workflow: Workflow) -> list[str]:
             missing = set()
             for text in filter(None, (phase.prompt, phase.run)):
                 template_vars(text)
-                missing.update(_control_template_vars(text, defined_vars) - defined_vars)
+                missing.update(_control_template_vars(text, workflow.vars) - defined_vars)
                 missing.update(_unresolved_template_vars(text, workflow.vars) - _optional_output_vars(text))
         except TemplateSyntaxError as exc:
             errors.append(f"Phase {phase.id!r}: invalid template syntax on line {exc.lineno}: {exc.message}")
