@@ -8,16 +8,19 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 import yaml
-from jinja2 import Environment, TemplateSyntaxError, Undefined, meta
+from jinja2 import Environment, StrictUndefined, TemplateSyntaxError, meta
+from jinja2.runtime import missing
 
 
-class _PassthroughUndefined(Undefined):
-    """Preserve unresolved variables in rendered output."""
+class _PassthroughUndefined(StrictUndefined):
+    """Preserve unresolved top-level variables but fail on nested lookups."""
 
     def __str__(self) -> str:
         if self._undefined_name is None:
             return ""
-        return f"{{{{{self._undefined_name}}}}}"
+        if self._undefined_obj is missing:
+            return f"{{{{{self._undefined_name}}}}}"
+        return self._fail_with_undefined_error()
 
 
 _JINJA_ENV = Environment(autoescape=False, keep_trailing_newline=True, undefined=_PassthroughUndefined)

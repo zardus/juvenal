@@ -665,6 +665,20 @@ class TestEnhancedDryRun:
         assert "Jinja2 render error in prompt for phase 'setup'" in captured.out
         assert "Traceback" not in captured.out
 
+    def test_dry_run_nested_lookup_missing_does_not_crash(self, tmp_path, capsys):
+        """Dry-run reports missing nested lookups without raising a traceback."""
+        workflow = Workflow(
+            name="test",
+            phases=[Phase(id="setup", type="implement", prompt="{{ config.env }}")],
+            vars={"config": {}},
+        )
+        engine = Engine(workflow, state_file=str(tmp_path / "state.json"), dry_run=True, plain=True)
+        assert engine.run() == 1
+        captured = capsys.readouterr()
+        assert "Jinja2 render error in prompt for phase 'setup'" in captured.out
+        assert "env" in captured.out
+        assert "Traceback" not in captured.out
+
     def test_dry_run_shows_phase_summary(self, tmp_path, capsys):
         """Dry-run shows phase type counts."""
         workflow = Workflow(

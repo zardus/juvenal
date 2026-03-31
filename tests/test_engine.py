@@ -2041,6 +2041,20 @@ class TestInvalidJinjaRuntime:
         assert "Jinja2 render error in prompt for phase 'sub'" in captured.out
         assert "Traceback" not in captured.out
 
+    def test_nested_lookup_missing_in_implement_phase_fails_cleanly(self, tmp_path, capsys):
+        workflow = Workflow(
+            name="test",
+            phases=[Phase(id="build", type="implement", prompt="{{ config.env }}")],
+            vars={"config": {}},
+        )
+        engine = Engine(workflow, state_file=str(tmp_path / "state.json"), plain=True)
+        engine.backend = MockBackend()
+        assert engine.run() == 1
+        captured = capsys.readouterr()
+        assert "Jinja2 render error in prompt for phase 'build'" in captured.out
+        assert "env" in captured.out
+        assert "Traceback" not in captured.out
+
 
 class TestSerialize:
     def test_serialize_runs_flat_parallel_sequentially(self, tmp_path):
