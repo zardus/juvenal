@@ -653,6 +653,18 @@ class TestEnhancedDryRun:
         assert "invalid Jinja2 prompt" in captured.out
         assert "Traceback" not in captured.out
 
+    def test_dry_run_jinja_render_error_does_not_crash(self, tmp_path, capsys):
+        """Dry-run reports Jinja render errors without raising a traceback."""
+        workflow = Workflow(
+            name="test",
+            phases=[Phase(id="setup", type="implement", prompt="{{ 1 / 0 }}")],
+        )
+        engine = Engine(workflow, state_file=str(tmp_path / "state.json"), dry_run=True, plain=True)
+        assert engine.run() == 1
+        captured = capsys.readouterr()
+        assert "Jinja2 render error in prompt for phase 'setup'" in captured.out
+        assert "Traceback" not in captured.out
+
     def test_dry_run_shows_phase_summary(self, tmp_path, capsys):
         """Dry-run shows phase type counts."""
         workflow = Workflow(

@@ -618,6 +618,25 @@ phases:
         assert "invalid Jinja2 prompt" in captured.out
         assert "Traceback" not in captured.out
 
+    def test_validate_jinja_render_error_clean_error(self, tmp_path, capsys):
+        """Render-time Jinja errors print a clean validation error, no traceback."""
+        yaml_content = """\
+name: bad
+phases:
+  - id: build
+    prompt: "{{ 1 / 0 }}"
+"""
+        yaml_path = tmp_path / "bad-jinja-runtime.yaml"
+        yaml_path.write_text(yaml_content)
+        parser = build_parser()
+        args = parser.parse_args(["validate", str(yaml_path)])
+        args.plain = True
+        result = cmd_validate(args)
+        assert result == 1
+        captured = capsys.readouterr()
+        assert "Jinja2 render error in prompt for phase 'build'" in captured.out
+        assert "Traceback" not in captured.out
+
     def test_validate_missing_id_clean_error(self, tmp_path, capsys):
         """Missing phase ID prints a clean error, no stack trace."""
         yaml_content = """\

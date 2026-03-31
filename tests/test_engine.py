@@ -2000,6 +2000,47 @@ class TestInvalidJinjaRuntime:
         assert "Invalid Jinja2 prompt in phase 'sub'" in captured.out
         assert "Traceback" not in captured.out
 
+    def test_render_error_in_implement_phase_fails_cleanly(self, tmp_path, capsys):
+        workflow = Workflow(
+            name="test",
+            phases=[Phase(id="build", type="implement", prompt="{{ 1 / 0 }}")],
+        )
+        engine = Engine(workflow, state_file=str(tmp_path / "state.json"), plain=True)
+        engine.backend = MockBackend()
+        assert engine.run() == 1
+        captured = capsys.readouterr()
+        assert "Jinja2 render error in prompt for phase 'build'" in captured.out
+        assert "Traceback" not in captured.out
+
+    def test_render_error_in_script_phase_fails_cleanly(self, tmp_path, capsys):
+        backend = MockBackend()
+        backend.add_response(exit_code=0, output="done")
+        workflow = Workflow(
+            name="test",
+            phases=[
+                Phase(id="build", type="implement", prompt="Build it."),
+                Phase(id="test", type="script", run="echo {{ 1 / 0 }}", bounce_target="build"),
+            ],
+        )
+        engine = Engine(workflow, state_file=str(tmp_path / "state.json"), plain=True)
+        engine.backend = backend
+        assert engine.run() == 1
+        captured = capsys.readouterr()
+        assert "Jinja2 render error in script command for phase 'test'" in captured.out
+        assert "Traceback" not in captured.out
+
+    def test_render_error_in_dynamic_workflow_phase_fails_cleanly(self, tmp_path, capsys):
+        workflow = Workflow(
+            name="test",
+            phases=[Phase(id="sub", type="workflow", prompt="{{ 1 / 0 }}")],
+        )
+        engine = Engine(workflow, state_file=str(tmp_path / "state.json"), plain=True)
+        engine.backend = MockBackend()
+        assert engine.run() == 1
+        captured = capsys.readouterr()
+        assert "Jinja2 render error in prompt for phase 'sub'" in captured.out
+        assert "Traceback" not in captured.out
+
 
 class TestSerialize:
     def test_serialize_runs_flat_parallel_sequentially(self, tmp_path):

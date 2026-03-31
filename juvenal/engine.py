@@ -276,8 +276,8 @@ class Engine:
         else:
             try:
                 prompt = phase.render_prompt(failure_context=failure_context, vars=self.workflow.vars)
-            except TemplateSyntaxError as exc:
-                return self._template_syntax_failure(phase.id, "prompt", "implement", exc)
+            except Exception as exc:
+                return self._template_render_failure(phase.id, "prompt", "implement", exc)
             result = self.backend.run_agent(
                 prompt,
                 working_dir=self.workflow.working_dir,
@@ -323,8 +323,8 @@ class Engine:
         """Run an agent-driven Q&A loop. Agent asks questions, user answers, agent updates plan."""
         try:
             prompt = phase.render_prompt(failure_context=failure_context, vars=self.workflow.vars)
-        except TemplateSyntaxError as exc:
-            return self._template_syntax_failure(phase.id, "prompt", "interactive", exc)
+        except Exception as exc:
+            return self._template_render_failure(phase.id, "prompt", "interactive", exc)
         prompt = self._INTERACTIVE_PREAMBLE + prompt
 
         self.display.step_start("interactive")
@@ -398,8 +398,8 @@ class Engine:
         timeout = phase.timeout or 600
         try:
             run_cmd = phase.render_run(vars=self.workflow.vars)
-        except TemplateSyntaxError as exc:
-            return self._template_syntax_failure(phase.id, "script command", phase.id, exc)
+        except Exception as exc:
+            return self._template_render_failure(phase.id, "script command", phase.id, exc)
         result = run_script(run_cmd, self.workflow.working_dir, timeout=timeout, env=phase.env or None)
         self.state.log_step(phase.id, attempt, "script", result.output, input=phase.run)
 
@@ -434,14 +434,14 @@ class Engine:
 
         try:
             prompt = phase.render_check_prompt(vars=self.workflow.vars)
-        except TemplateSyntaxError as exc:
-            return self._template_syntax_failure(phase.id, "checker prompt", phase.id, exc)
+        except Exception as exc:
+            return self._template_render_failure(phase.id, "checker prompt", phase.id, exc)
 
         # Inject the parent implement phase's directions so the checker knows what to verify
         try:
             parent_prompt = self._get_parent_prompt(phase, phases, phase_idx)
-        except TemplateSyntaxError as exc:
-            return self._template_syntax_failure(phase.id, "parent implement prompt", phase.id, exc)
+        except Exception as exc:
+            return self._template_render_failure(phase.id, "parent implement prompt", phase.id, exc)
         if parent_prompt:
             prompt = (
                 f"You are a CHECKER. You must NOT write any code or implement anything. "
@@ -602,8 +602,8 @@ class Engine:
         self.display.step_start(f"workflow-plan: {phase.id}")
         try:
             prompt = phase.render_prompt(failure_context=failure_context, vars=self.workflow.vars)
-        except TemplateSyntaxError as exc:
-            return self._template_syntax_failure(phase.id, "prompt", f"workflow-plan: {phase.id}", exc)
+        except Exception as exc:
+            return self._template_render_failure(phase.id, "prompt", f"workflow-plan: {phase.id}", exc)
         plan_result = _plan_workflow_internal(
             goal=prompt,
             backend_instance=self.backend,
@@ -659,11 +659,16 @@ class Engine:
             shutil.rmtree(plan_result.temp_dir, ignore_errors=True)
         return PhaseResult(success=True)
 
-    def _template_syntax_failure(
-        self, phase_id: str, field_name: str, step_name: str, exc: TemplateSyntaxError
-    ) -> PhaseResult:
-        """Convert a Jinja2 syntax error into a clean phase failure."""
-        failure_context = f"Invalid Jinja2 {field_name} in phase '{phase_id}': {exc.message} (line {exc.lineno})"
+    @staticmethod
+    def _describe_template_render_error(phase_id: str, field_name: str, exc: Exception) -> str:
+        """Format a Jinja2 rendering failure for user-facing output."""
+        if isinstance(exc, TemplateSyntaxError):
+            return f"Invalid Jinja2 {field_name} in phase '{phase_id}': {exc.message} (line {exc.lineno})"
+        return f"Jinja2 render error in {field_name} for phase '{phase_id}': {type(exc).__name__}: {exc}"
+
+    def _template_render_failure(self, phase_id: str, field_name: str, step_name: str, exc: Exception) -> PhaseResult:
+        """Convert a Jinja2 render failure into a clean phase failure."""
+        failure_context = self._describe_template_render_error(phase_id, field_name, exc)
         self.display.step_fail(step_name, failure_context[:500])
         return PhaseResult(success=False)
 
@@ -961,6 +966,8 @@ class Engine:
 
         # Validation
         errors = validate_workflow(self.workflow)
+        if not errors:
+            errors.extend(self._collect_dry_run_render_errors())
         has_errors = bool(errors)
         if errors:
             print(f"Validation: {len(errors)} error(s)")
@@ -1031,6 +1038,26 @@ class Engine:
                 else:
                     print(f"  Group {gi + 1} (flat): {', '.join(group.phases)}")
         return 1 if has_errors else 0
+
+    def _collect_dry_run_render_errors(self) -> list[str]:
+        """Catch render-time Jinja errors that parse-only validation misses."""
+        errors: list[str] = []
+        for phase in self.workflow.phases:
+            try:
+                if phase.type == "implement":
+                    phase.render_prompt(vars=self.workflow.vars)
+                elif phase.type == "script":
+                    phase.render_run(vars=self.workflow.vars)
+                elif phase.type == "check" and not phase.role:
+                    phase.render_check_prompt(vars=self.workflow.vars)
+                elif phase.type == "workflow" and phase.prompt:
+                    phase.render_prompt(vars=self.workflow.vars)
+            except Exception as exc:
+                field_name = "script command" if phase.type == "script" else "prompt"
+                if phase.type == "check":
+                    field_name = "checker prompt"
+                errors.append(self._describe_template_render_error(phase.id, field_name, exc))
+        return errors
 
 
 def _plan_workflow_internal(
