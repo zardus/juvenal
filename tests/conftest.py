@@ -17,7 +17,7 @@ def tmp_workflow(tmp_path):
     New convention:
     - Subdirectory with prompt.md and NO check- prefix -> implement
     - Subdirectory with prompt.md and check- prefix -> check
-    - .sh file at top level -> script
+    - .sh file at top level -> check that tells an agent to run the script
     """
     phases_dir = tmp_path / "phases"
     phases_dir.mkdir()
@@ -27,7 +27,7 @@ def tmp_workflow(tmp_path):
     p1.mkdir()
     (p1 / "prompt.md").write_text("Set up the project.")
 
-    # Phase 2: script (build check)
+    # Phase 2: command-based check
     build_script = phases_dir / "02-check-build.sh"
     build_script.write_text("#!/bin/bash\nexit 0\n")
     build_script.chmod(0o755)
@@ -58,13 +58,13 @@ phases:
   - id: setup
     prompt: "Set up the project scaffolding."
   - id: setup-check
-    type: script
+    type: check
     run: "echo ok"
   - id: implement
     prompt: "Implement the feature."
     bounce_target: setup
   - id: implement-script
-    type: script
+    type: check
     run: "echo ok"
   - id: implement-review
     type: check
@@ -154,12 +154,12 @@ def mock_backend():
 
 @pytest.fixture
 def simple_workflow():
-    """A simple workflow with an implement phase and a script phase."""
+    """A simple workflow with an implement phase and a run-based check."""
     return Workflow(
         name="test",
         phases=[
             Phase(id="setup", type="implement", prompt="Do the thing."),
-            Phase(id="setup-check", type="script", run="exit 0"),
+            Phase(id="setup-check", type="check", run="exit 0"),
         ],
         backend="claude",
         max_bounces=3,

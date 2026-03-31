@@ -27,8 +27,9 @@ Required document sections:
    - linear execution only; no `parallel_groups`
    - self-contained inline-only YAML; no top-level `include` and no phase-level `prompt_file`, `workflow_file`, `workflow_dir`, `checks`, or other YAML-source indirection
    - no agent-guided `bounce_targets` lists; use only fixed `bounce_target`
-   - every verifier must be an explicit top-level `script` or `check` phase
+   - every verifier must be an explicit top-level `check` phase
    - every verifier must stay in the implement block it verifies and bounce to that implement phase
+   - if a verifier needs to run tests, lint, build, or any other command, those commands must be written into the checker's instructions rather than modeled as a non-agentic phase
    - if the goal or workspace already provides artifacts, list them as existing inputs and consume or update them in place instead of refetching, recollecting, rediscovering, or regenerating them from scratch
    - if prepared artifacts such as source snapshots, CVE data, dependent inventories, or test harnesses already exist, preserve that consume-existing-artifacts contract explicitly
    - every implement prompt in the final generated workflow must instruct the agent to commit work to git before yielding
@@ -36,7 +37,7 @@ Required document sections:
 3. **Implementation Phases** — a numbered, sequential phase list. For each phase include:
    - `Phase Name`
    - `Implement Phase ID`
-   - `Verification Phases` — list every planned verifier with its phase ID, type (`script` or `check`), fixed `bounce_target`, and purpose
+   - `Verification Phases` — list every planned verifier with its phase ID, type (`check`), fixed `bounce_target`, purpose, and any commands it should run
    - `Preexisting Inputs` — concrete artifacts that must already exist before the phase starts
    - `New Outputs` — concrete artifacts the phase is responsible for producing or rewriting
    - `File Changes` — specific files to create or modify

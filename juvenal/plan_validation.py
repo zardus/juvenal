@@ -8,8 +8,8 @@ from typing import Any
 
 import yaml
 
-_VERIFIER_TYPES = {"check", "script"}
-_ALLOWED_PHASE_TYPES = {"implement", "check", "script"}
+_VERIFIER_TYPES = {"check"}
+_ALLOWED_PHASE_TYPES = {"implement", "check"}
 _INLINE_ONLY_FORBIDDEN_PHASE_KEYS = ("prompt_file", "workflow_file", "workflow_dir")
 
 

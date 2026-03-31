@@ -14,7 +14,7 @@ from threading import Lock
 from jinja2 import TemplateSyntaxError
 
 from juvenal.backends import Backend, create_backend
-from juvenal.checkers import NO_VERDICT_REASON, parse_verdict, run_script
+from juvenal.checkers import NO_VERDICT_REASON, parse_verdict
 from juvenal.display import Display
 from juvenal.notifications import build_notification_payload, send_webhook
 from juvenal.state import PhaseState, PipelineState
@@ -189,9 +189,9 @@ class Engine:
 
                 if phase.type == "implement":
                     result = self._run_implement(phase)
-                elif phase.type == "script":
-                    result = self._run_script(phase, phases, phase_idx)
                 elif phase.type == "check":
+                    result = self._run_check(phase, phases, phase_idx)
+                elif phase.type == "script":
                     result = self._run_check(phase, phases, phase_idx)
                 elif phase.type == "workflow":
                     result = self._run_workflow(phase)
@@ -392,36 +392,6 @@ class Engine:
 
         self.display.step_pass("interactive")
         return PhaseResult(success=True)
-
-    def _run_script(self, phase: Phase, phases: list[Phase], phase_idx: int) -> PhaseResult:
-        """Run a script phase. Exit 0 = advance. Nonzero = bounce back."""
-        ps = self.state.phases.get(phase.id)
-        attempt = (ps.attempt if ps and ps.attempt > 0 else 0) + 1
-        self.state.set_attempt(phase.id, attempt)
-        self.display.phase_start(phase.id, attempt)
-        self.display.step_start(f"script: {phase.id}")
-
-        timeout = phase.timeout or 600
-        try:
-            run_cmd = phase.render_run(vars=self.workflow.vars)
-        except Exception as exc:
-            return self._template_render_failure(phase.id, "script command", phase.id, exc)
-        result = run_script(run_cmd, self.workflow.working_dir, timeout=timeout, env=phase.env or None)
-        self.state.log_step(phase.id, attempt, "script", result.output, input=run_cmd)
-
-        if result.exit_code == 0:
-            self.display.step_pass(phase.id)
-            return PhaseResult(success=True)
-
-        # Failure — resolve bounce target
-        failure_context = f"Script '{run_cmd}' failed (exit {result.exit_code}).\nOutput:\n{result.output[-3000:]}"
-        self.display.step_fail(phase.id, failure_context[:500])
-
-        target_id = self._resolve_bounce_target(phase, phases, phase_idx)
-        if target_id:
-            return PhaseResult(success=False, bounce_target=target_id, failure_context=failure_context)
-        return PhaseResult(success=False)
-
     _MAX_NO_VERDICT_RESUMES = 2
     _RESUME_PROMPT = (
         "Your previous response did not include a VERDICT line. Please review the work\n"
@@ -786,7 +756,7 @@ class Engine:
         return PhaseResult(success=False), consumed
 
     def _run_lane(self, lane_phase_ids: list[str], bounce_counter: BounceCounter) -> PhaseResult:
-        """Run a single lane: sequential implement/check/script loop with internal bounce."""
+        """Run a single lane: sequential implement/check loop with internal bounce."""
         phases_map = {p.id: p for p in self.workflow.phases}
         lane_phases = [phases_map[pid] for pid in lane_phase_ids]
         lane_scope = set(lane_phase_ids)
@@ -801,9 +771,9 @@ class Engine:
 
             if phase.type == "implement":
                 result = self._run_implement(phase)
-            elif phase.type == "script":
-                result = self._run_script(phase, lane_phases, phase_idx)
             elif phase.type == "check":
+                result = self._run_check(phase, lane_phases, phase_idx)
+            elif phase.type == "script":
                 result = self._run_check(phase, lane_phases, phase_idx)
             else:
                 raise ValueError(f"Unsupported phase type in lane: {phase.type!r}")
@@ -904,7 +874,7 @@ class Engine:
         return None
 
     def _get_parent_prompt(self, phase: Phase, phases: list[Phase], phase_idx: int) -> str | None:
-        """Get the prompt from the parent implement phase for a check/script phase."""
+        """Get the prompt from the parent implement phase for a checker phase."""
         target_id = self._resolve_bounce_target(phase, phases, phase_idx)
         if target_id:
             for p in phases:
@@ -913,7 +883,7 @@ class Engine:
         return None
 
     def _get_baseline_sha(self, phase: Phase, phases: list[Phase], phase_idx: int) -> str | None:
-        """Get the baseline SHA for a check/script phase's bounce target."""
+        """Get the baseline SHA for a checker phase's bounce target."""
         target_id = self._resolve_bounce_target(phase, phases, phase_idx)
         if target_id:
             target_ps = self.state.phases.get(target_id)
@@ -1020,16 +990,18 @@ class Engine:
                 prompt_preview = prompt_preview[:80].replace("\n", " ")
                 print(f"{prefix} [{phase.type}] {phase.id}{extra_str}")
                 print(f"     prompt: {prompt_preview}...")
-            elif phase.type == "script":
-                run_preview = phase.run if has_errors else phase.render_run(vars=self.workflow.vars)
-                print(f"{prefix} [{phase.type}] {phase.id}: {run_preview}{extra_str}")
             elif phase.type == "check":
                 if phase.role:
                     target = phase.role
+                elif phase.run:
+                    target = phase.run if has_errors else phase.render_run(vars=self.workflow.vars)
                 else:
                     check_preview = phase.prompt if has_errors else phase.render_check_prompt(vars=self.workflow.vars)
                     target = check_preview[:60].replace("\n", " ")
                 print(f"{prefix} [{phase.type}] {phase.id}: {target}{extra_str}")
+            elif phase.type == "script":
+                run_preview = phase.run if has_errors else phase.render_run(vars=self.workflow.vars)
+                print(f"{prefix} [check] {phase.id}: {run_preview}{extra_str}")
             elif phase.type == "workflow":
                 print(f"{prefix} [{phase.type}] {phase.id}{extra_str}")
                 if phase.workflow_file:

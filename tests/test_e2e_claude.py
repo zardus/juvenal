@@ -23,7 +23,7 @@ def test_trivial_workflow_claude(tmp_path):
             ),
             Phase(
                 id="check-hello",
-                type="script",
+                type="check",
                 run="test -f hello.txt && grep -q 'hello world' hello.txt",
             ),
         ],

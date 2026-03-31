@@ -75,14 +75,14 @@ class TestEngineWithMockedBackend:
         return engine
 
     def test_single_phase_pass(self, tmp_path):
-        """Implement phase followed by a script phase, both pass."""
+        """Implement phase followed by a run-based check, both pass."""
         backend = MockBackend()
         backend.add_response(exit_code=0, output="done")  # implement
         workflow = Workflow(
             name="test",
             phases=[
                 Phase(id="setup", type="implement", prompt="Do it."),
-                Phase(id="setup-check", type="script", run="true"),
+                Phase(id="setup-check", type="check", run="true"),
             ],
             max_bounces=3,
         )
@@ -98,7 +98,7 @@ class TestEngineWithMockedBackend:
             name="test",
             phases=[
                 Phase(id="setup", type="implement", prompt="Do it."),
-                Phase(id="setup-check", type="script", run="true"),
+                Phase(id="setup-check", type="check", run="true"),
             ],
             max_bounces=3,
         )
@@ -106,17 +106,17 @@ class TestEngineWithMockedBackend:
         assert engine.run() == 0
 
     def test_script_checker_failure_bounces(self, tmp_path):
-        """Script failure bounces back; global bounce counter exhausts."""
+        """Run-based check failure bounces back; global bounce counter exhausts."""
         backend = MockBackend()
         backend.add_response(exit_code=0, output="done")  # implement attempt 1
-        # Script fails -> bounce 1 -> back to implement
+        backend.add_response(exit_code=0, output="VERDICT: FAIL: tests failed")  # check fails -> bounce 1
         backend.add_response(exit_code=0, output="done")  # implement attempt 2
-        # Script fails -> bounce 2 -> exhausted (max_bounces=2)
+        backend.add_response(exit_code=0, output="VERDICT: FAIL: still failing")  # check fails -> exhausted
         workflow = Workflow(
             name="test",
             phases=[
                 Phase(id="setup", type="implement", prompt="Do it."),
-                Phase(id="setup-check", type="script", run="false"),  # always fails
+                Phase(id="setup-check", type="check", run="false"),
             ],
             max_bounces=2,
         )
@@ -167,9 +167,9 @@ class TestEngineWithMockedBackend:
             name="test",
             phases=[
                 Phase(id="phase1", type="implement", prompt="Do phase 1."),
-                Phase(id="phase1-check", type="script", run="true"),
+                Phase(id="phase1-check", type="check", run="true"),
                 Phase(id="phase2", type="implement", prompt="Do phase 2."),
-                Phase(id="phase2-check", type="script", run="true"),
+                Phase(id="phase2-check", type="check", run="true"),
             ],
             max_bounces=3,
         )
@@ -311,7 +311,7 @@ class TestEngineWithMockedBackend:
             name="test",
             phases=[
                 Phase(id="setup", type="implement", prompt="Do the thing."),
-                Phase(id="setup-check", type="script", run="true"),
+                Phase(id="setup-check", type="check", run="true"),
             ],
         )
         engine = self._make_engine(workflow, MockBackend(), tmp_path, dry_run=True)
@@ -320,7 +320,7 @@ class TestEngineWithMockedBackend:
         assert "test" in captured.out
         assert "setup" in captured.out
         assert "implement" in captured.out
-        assert "script" in captured.out
+        assert "check" in captured.out
 
     def test_run_summary_on_success(self, tmp_path, capsys):
         """Successful run prints a summary with phase info and bounce count."""
@@ -330,7 +330,7 @@ class TestEngineWithMockedBackend:
             name="test",
             phases=[
                 Phase(id="setup", type="implement", prompt="Do it."),
-                Phase(id="setup-check", type="script", run="true"),
+                Phase(id="setup-check", type="check", run="true"),
             ],
             max_bounces=3,
         )
@@ -345,12 +345,12 @@ class TestEngineWithMockedBackend:
         """Failed run also prints a summary with bounce count."""
         backend = MockBackend()
         backend.add_response(exit_code=0, output="done")
-        # Script always fails
+        backend.add_response(exit_code=0, output="VERDICT: FAIL: automated check failed")
         workflow = Workflow(
             name="test",
             phases=[
                 Phase(id="setup", type="implement", prompt="Do it."),
-                Phase(id="setup-check", type="script", run="false"),
+                Phase(id="setup-check", type="check", run="false"),
             ],
             max_bounces=1,
         )
@@ -368,7 +368,7 @@ class TestEngineWithMockedBackend:
             name="test",
             phases=[
                 Phase(id="setup", type="implement", prompt="Do it."),
-                Phase(id="setup-check", type="script", run="true"),
+                Phase(id="setup-check", type="check", run="true"),
             ],
             max_bounces=3,
         )
@@ -595,18 +595,17 @@ class TestPreserveContextOnBounce:
         assert len(backend.calls) == 4
         assert len(backend.resume_calls) == 0
 
-    def test_script_bounce_uses_resume(self, tmp_path):
-        """Script failure bounces back and resumes the implement session."""
+    def test_run_based_check_bounce_uses_resume(self, tmp_path):
+        """Run-based check failure bounces back and resumes the implement session."""
         backend = MockBackend()
         backend.add_response(exit_code=0, output="built it", session_id="sess-1")  # implement attempt 1
-        # script "false" fails -> bounce
+        backend.add_response(exit_code=0, output="VERDICT: FAIL: tests failed")  # check fails -> bounce
         backend.add_response(exit_code=0, output="fixed it", session_id="sess-2")  # implement attempt 2 (resumed)
-        # script "true" would pass — use a workflow where it passes on second try
         workflow = Workflow(
             name="test",
             phases=[
                 Phase(id="build", type="implement", prompt="Build it."),
-                Phase(id="build-check", type="script", run="false", bounce_target="build"),
+                Phase(id="build-check", type="check", run="false", bounce_target="build"),
             ],
             max_bounces=2,
         )
@@ -650,7 +649,7 @@ class TestPreserveContextOnBounce:
             name="test",
             phases=[
                 Phase(id="setup", type="implement", prompt="Do it."),
-                Phase(id="check", type="script", run="true"),
+                Phase(id="check", type="check", run="true"),
             ],
             max_bounces=3,
         )
@@ -939,18 +938,18 @@ class TestCheckersShorthandEngine:
         engine = self._make_engine(workflow, backend, tmp_path)
         assert engine.run() == 0
 
-    def test_checkers_script_bounce_on_fail(self, tmp_path):
-        """Implement passes, inline script checker fails, bounces back to implement."""
+    def test_checkers_run_checker_bounce_on_fail(self, tmp_path):
+        """Implement passes, inline run-based checker fails, bounces back to implement."""
         backend = MockBackend()
         backend.add_response(exit_code=0, output="built it")  # implement attempt 1
-        # script "false" fails -> bounce
+        backend.add_response(exit_code=0, output="VERDICT: FAIL: tests failed")  # check fails -> bounce
         backend.add_response(exit_code=0, output="fixed it")  # implement attempt 2
-        # script "true" would pass but we use "false" always -> bounce 2 -> exhausted
+        backend.add_response(exit_code=0, output="VERDICT: FAIL: still failing")  # check fails -> exhausted
         workflow = Workflow(
             name="test",
             phases=[
                 Phase(id="build", type="implement", prompt="Build it."),
-                Phase(id="build~script-1", type="script", run="false", bounce_target="build"),
+                Phase(id="build~check-1", type="check", run="false", bounce_target="build"),
             ],
             max_bounces=2,
         )
@@ -1330,7 +1329,7 @@ class TestBaselineSha:
             name="test",
             phases=[
                 Phase(id="setup", type="implement", prompt="Do it."),
-                Phase(id="check", type="script", run="true"),
+                Phase(id="check", type="check", run="true"),
             ],
             max_bounces=3,
         )
@@ -1658,14 +1657,14 @@ class TestResumeWithParallelPhases:
         backend.add_response(exit_code=0, output="done a")
         backend.add_response(exit_code=0, output="done b")
         backend.add_response(exit_code=0, output="done c")
-        # Then the post-group script passes
+        # Then the post-group check passes
         workflow = Workflow(
             name="test",
             phases=[
                 Phase(id="a", type="implement", prompt="A."),
                 Phase(id="b", type="implement", prompt="B."),
                 Phase(id="c", type="implement", prompt="C."),
-                Phase(id="final", type="script", run="true"),
+                Phase(id="final", type="check", run="true"),
             ],
             parallel_groups=[ParallelGroup(phases=["a", "b", "c"])],
             max_bounces=3,
@@ -1717,13 +1716,13 @@ class TestResumeWithParallelPhases:
     def test_resume_all_parallel_completed_skips_group(self, tmp_path):
         """If all phases in a flat parallel group are completed, skip the entire group."""
         backend = MockBackend()
-        # No backend calls expected for the parallel group — only the post-group script
+        # No backend calls expected for the parallel group — only the post-group check
         workflow = Workflow(
             name="test",
             phases=[
                 Phase(id="a", type="implement", prompt="A."),
                 Phase(id="b", type="implement", prompt="B."),
-                Phase(id="post", type="script", run="true"),
+                Phase(id="post", type="check", run="true"),
             ],
             parallel_groups=[ParallelGroup(phases=["a", "b"])],
             max_bounces=3,
@@ -1740,7 +1739,7 @@ class TestResumeWithParallelPhases:
         engine.backend = backend
         exit_code = engine.run()
         assert exit_code == 0
-        assert len(backend.calls) == 0
+        assert len(backend.calls) == 1
 
     def test_resume_snaps_to_lane_group_start(self, tmp_path):
         """When resume lands inside a lane group, snap to first phase of first lane."""
@@ -1948,24 +1947,22 @@ class TestTemplateVarsEngine:
         # Check phase prompt should contain the substituted var
         assert "Verify myservice works." in mock_backend.calls[1]
 
-    def test_vars_substituted_in_script_run(self, mock_backend, tmp_path):
-        """Vars are substituted in script phase run commands."""
+    def test_vars_substituted_in_check_run(self, mock_backend, tmp_path):
+        """Vars are substituted in run-based check commands."""
         mock_backend.add_response(exit_code=0, output="done")
+        mock_backend.add_response(exit_code=0, output="VERDICT: PASS")
         workflow = Workflow(
             name="test",
             phases=[
                 Phase(id="build", type="implement", prompt="Build it."),
-                Phase(id="test", type="script", run="pytest {{TEST_DIR}} -x", bounce_target="build"),
+                Phase(id="test", type="check", run="pytest {{TEST_DIR}} -x", bounce_target="build"),
             ],
             vars={"TEST_DIR": "tests/unit"},
         )
         engine = Engine(workflow, state_file=str(tmp_path / "state.json"), plain=True)
         engine.backend = mock_backend
-        with patch("juvenal.engine.run_script") as mock_run:
-            mock_run.return_value = type("R", (), {"exit_code": 0, "output": "ok"})()
-            engine.run()
-            mock_run.assert_called_once()
-            assert mock_run.call_args[0][0] == "pytest tests/unit -x"
+        engine.run()
+        assert "pytest tests/unit -x" in mock_backend.calls[1]
 
     def test_default_filter_allows_undefined_var_at_runtime(self, mock_backend, tmp_path):
         """Valid Jinja2 undefined handling should not be blocked by validation."""

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import itertools
+import shlex
 import shutil
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -163,14 +164,13 @@ class Phase:
     Every phase is exactly one thing:
     - "implement": agentic implementation (default)
     - "check": agentic checker (parses VERDICT)
-    - "script": non-agentic shell command
     - "workflow": sub-workflow (dynamic via prompt, or static via workflow_file/workflow_dir)
     """
 
     id: str
-    type: str = "implement"  # "implement", "check", "script", "workflow"
+    type: str = "implement"  # "implement", "check", "workflow"
     prompt: str = ""  # for implement, check, and workflow (dynamic)
-    run: str | None = None  # shell command for script
+    run: str | None = None  # optional command for an agentic checker to run
     role: str | None = None  # built-in role name for check
     bounce_target: str | None = None  # fixed phase to bounce back to on failure
     bounce_targets: list[str] = field(default_factory=list)  # agent-guided: checker picks from this list
@@ -200,11 +200,14 @@ class Phase:
 
     def render_check_prompt(self, vars: dict[str, str] | None = None) -> str:
         """Render the checker prompt for check phases."""
+        parts: list[str] = []
         if self.prompt:
-            return self._render_text(self.prompt, vars)
+            parts.append(self._render_text(self.prompt, vars))
         if self.role:
-            return _load_role_prompt(self.role)
-        return ""
+            parts.append(_load_role_prompt(self.role))
+        if self.run:
+            parts.append(_render_run_checker_prompt(self._render_text(self.run, vars)))
+        return "\n\n".join(part for part in parts if part)
 
     def render_run(self, vars: dict[str, str] | None = None) -> str | None:
         """Render the script command for script phases."""
@@ -377,10 +380,13 @@ def _load_yaml_with_includes(path: Path, seen: set[str]) -> Workflow:
             wf_file = str((path.parent / wf_file).resolve())
         if wf_dir:
             wf_dir = str((path.parent / wf_dir).resolve())
+        phase_type = phase_data.get("type", "implement")
+        if phase_type == "script":
+            phase_type = "check"
 
         phase = Phase(
             id=phase_data["id"],
-            type=phase_data.get("type", "implement"),
+            type=phase_type,
             prompt=prompt,
             run=phase_data.get("run"),
             role=phase_data.get("role"),
@@ -430,7 +436,7 @@ def _load_directory(root: Path, phases_dir: Path) -> Workflow:
     - Subdirectory with prompt.md and NO check- prefix -> implement
     - Subdirectory with prompt.md and check- prefix -> check
     - Subdirectory with "parallel" in name -> parallel lane group
-    - .sh file at top level -> script
+    - .sh file at top level -> check that instructs an agent to run the script
     - Bare .md file at top level -> implement + auto check phase
     """
     phases = []
@@ -441,9 +447,9 @@ def _load_directory(root: Path, phases_dir: Path) -> Workflow:
         if entry.name.startswith(".") or entry.name.startswith("_"):
             continue
         if entry.is_file() and entry.suffix == ".sh":
-            # Script phase
+            # Agentic check phase that runs a script
             phase_id = entry.stem
-            phases.append(Phase(id=phase_id, type="script", run=str(entry)))
+            phases.append(Phase(id=phase_id, type="check", run=_script_path_command(entry)))
         elif entry.is_file() and entry.suffix == ".md":
             # Bare .md file = implement phase + auto check phase
             phase_id = entry.stem
@@ -490,8 +496,8 @@ def _load_phase_dir(phase_dir: Path) -> list[Phase] | None:
     - check- prefix or -check- in name -> check phase (prompt.md only)
     - no prefix -> implement phase, plus:
         - additional .md files (besides prompt.md) -> check phases
-        - .sh files -> script phases
-      Check/script phases auto-get bounce_target set to the implement phase.
+        - .sh files -> check phases that instruct an agent to run the script
+      Check phases auto-get bounce_target set to the implement phase.
     """
     prompt_path = phase_dir / "prompt.md"
     if not prompt_path.exists():
@@ -507,14 +513,18 @@ def _load_phase_dir(phase_dir: Path) -> list[Phase] | None:
     phases = [Phase(id=phase_id, type="implement", prompt=prompt)]
 
     check_n = 0
-    script_n = 0
     for entry in sorted(phase_dir.iterdir()):
         if entry.name == "prompt.md" or entry.name.startswith(".") or entry.name.startswith("_"):
             continue
         if entry.is_file() and entry.suffix == ".sh":
-            script_n += 1
+            check_n += 1
             phases.append(
-                Phase(id=f"{phase_id}~script-{script_n}", type="script", run=str(entry), bounce_target=phase_id)
+                Phase(
+                    id=f"{phase_id}~check-{check_n}",
+                    type="check",
+                    run=_script_path_command(entry),
+                    bounce_target=phase_id,
+                )
             )
         elif entry.is_file() and entry.suffix == ".md":
             check_n += 1
@@ -529,7 +539,7 @@ def _load_parallel_dir(parallel_dir: Path) -> tuple[list[Phase], ParallelGroup]:
     """Load a parallel lane group from a directory.
 
     Each subdirectory is a lane. Within each lane, phases are loaded
-    using standard conventions. Check/script phases auto-get bounce_target
+    using standard conventions. Check phases auto-get bounce_target
     set to the lane's first implement phase.
     """
     lanes: list[list[str]] = []
@@ -545,10 +555,10 @@ def _load_parallel_dir(parallel_dir: Path) -> tuple[list[Phase], ParallelGroup]:
         if not lane_phases:
             continue
 
-        # Auto-set bounce targets for check/script phases
+        # Auto-set bounce targets for check phases
         first_implement = next((p.id for p in lane_phases if p.type == "implement"), None)
         for p in lane_phases:
-            if p.type in ("check", "script") and not p.bounce_target and first_implement:
+            if p.type == "check" and not p.bounce_target and first_implement:
                 p.bounce_target = first_implement
 
         lanes.append([p.id for p in lane_phases])
@@ -563,7 +573,7 @@ def _load_lane_dir(lane_dir: Path) -> list[Phase]:
     Simple mode (prompt.md at root):
         prompt.md       -> implement phase (id = lane dir name)
         check*.md       -> check phases (id = {lane}~check-N)
-        *.sh            -> script phases (id = {lane}~script-N)
+        *.sh            -> check phases that run the script (id = {lane}~check-N)
 
     Complex mode (subdirectories):
         Each entry is loaded using standard directory conventions,
@@ -578,13 +588,12 @@ def _load_lane_dir(lane_dir: Path) -> list[Phase]:
         phases.append(Phase(id=lane_name, type="implement", prompt=root_prompt.read_text()))
 
         check_n = 0
-        script_n = 0
         for entry in sorted(lane_dir.iterdir()):
             if entry.name == "prompt.md" or entry.name.startswith(".") or entry.name.startswith("_"):
                 continue
             if entry.is_file() and entry.suffix == ".sh":
-                script_n += 1
-                phases.append(Phase(id=f"{lane_name}~script-{script_n}", type="script", run=str(entry)))
+                check_n += 1
+                phases.append(Phase(id=f"{lane_name}~check-{check_n}", type="check", run=_script_path_command(entry)))
             elif entry.is_file() and entry.suffix == ".md":
                 check_n += 1
                 phases.append(Phase(id=f"{lane_name}~check-{check_n}", type="check", prompt=entry.read_text()))
@@ -595,7 +604,7 @@ def _load_lane_dir(lane_dir: Path) -> list[Phase]:
         if entry.name.startswith(".") or entry.name.startswith("_"):
             continue
         if entry.is_file() and entry.suffix == ".sh":
-            phases.append(Phase(id=f"{lane_name}~{entry.stem}", type="script", run=str(entry)))
+            phases.append(Phase(id=f"{lane_name}~{entry.stem}", type="check", run=_script_path_command(entry)))
         elif entry.is_file() and entry.suffix == ".md":
             phases.append(Phase(id=f"{lane_name}~{entry.stem}", type="implement", prompt=entry.read_text()))
         elif entry.is_dir():
@@ -626,23 +635,21 @@ def _expand_checkers(
     checkers: list,
     base_path: Path | None = None,
     check_offset: int = 0,
-    script_offset: int = 0,
     template_vars: dict[str, str] | None = None,
 ) -> list[Phase]:
-    """Expand inline checkers on an implement phase into synthetic check/script phases.
+    """Expand inline checkers on an implement phase into synthetic check phases.
 
     Each entry can be:
     - bare string -> role shorthand (must be in VALID_ROLES)
     - dict with "role" -> check phase with built-in role
     - dict with "prompt" or "prompt_file" -> check phase with inline/file prompt
-    - dict with "run" -> script phase
+    - dict with "run" -> check phase that instructs an agent to run the command
     Dicts may also carry "timeout" and "env".
 
-    check_offset/script_offset let counters continue from existing inline checkers.
+    check_offset lets counters continue from existing inline checkers.
     """
     result: list[Phase] = []
     check_n = check_offset
-    script_n = script_offset
 
     for i, entry in enumerate(checkers):
         if isinstance(entry, str):
@@ -666,11 +673,11 @@ def _expand_checkers(
             env = entry.get("env", {})
 
             if "run" in entry:
-                script_n += 1
+                check_n += 1
                 result.append(
                     Phase(
-                        id=f"{parent_id}~script-{script_n}",
-                        type="script",
+                        id=f"{parent_id}~check-{check_n}",
+                        type="check",
                         run=entry["run"],
                         bounce_target=parent_id,
                         timeout=timeout,
@@ -734,7 +741,23 @@ def _load_role_prompt(role: str) -> str:
     raise FileNotFoundError(f"Built-in role prompt not found: {role_file}")
 
 
-VALID_PHASE_TYPES = {"implement", "check", "script", "workflow"}
+def _render_run_checker_prompt(command: str) -> str:
+    """Render instructions for an agentic checker that should run a command."""
+    return (
+        "Run the following command from the working directory and use the result to verify the implementation:\n\n"
+        f"```bash\n{command}\n```\n\n"
+        "Do not change code while verifying. If the command fails, or if it reveals a defect, "
+        "emit `VERDICT: FAIL: <reason>`. If it succeeds and the work looks correct for this check, "
+        "emit `VERDICT: PASS`."
+    )
+
+
+def _script_path_command(path: Path) -> str:
+    """Build a stable command for executing a discovered shell script."""
+    return f"bash {shlex.quote(str(path.resolve()))}"
+
+
+VALID_PHASE_TYPES = {"implement", "check", "workflow"}
 VALID_ROLES = {
     "tester",
     "architect",
@@ -753,7 +776,7 @@ def parse_checker_string(spec: str) -> dict | str:
     """Parse a --checker CLI value into the format _expand_checkers expects.
 
     - Bare string matching VALID_ROLES -> role shorthand (str)
-    - "run:CMD" -> {"run": CMD}
+    - "run:CMD" -> {"run": CMD} (rendered as an agentic checker instruction)
     - "prompt:TEXT" -> {"prompt": TEXT}
     - Anything else -> ValueError
     """
@@ -771,7 +794,7 @@ def parse_checker_string(spec: str) -> dict | str:
 def inject_checkers(workflow: Workflow, checker_specs: list[str]) -> Workflow:
     """Inject CLI --checker specs onto every implement phase in the workflow.
 
-    For each implement phase, synthetic check/script phases are inserted after
+    For each implement phase, synthetic check phases are inserted after
     the phase (and after any existing inline checkers). Returns a new Workflow
     with the expanded phase list.
     """
@@ -789,20 +812,9 @@ def inject_checkers(workflow: Workflow, checker_specs: list[str]) -> Workflow:
         # Count existing inline checkers for this parent to get offsets
         parent_id = phase.id
         existing_checks = 0
-        existing_scripts = 0
         for p in workflow.phases:
             if p.id.startswith(f"{parent_id}~check-"):
                 existing_checks += 1
-            elif p.id.startswith(f"{parent_id}~script-"):
-                existing_scripts += 1
-
-        # Find insertion point: after last existing child of this parent
-        # (children will be appended naturally since we iterate in order)
-        # We just need to expand at the end — but we need to defer insertion
-        # until after all existing children are appended.
-        # Store expansion info for deferred insertion.
-        # Actually, since we iterate phases in order and children follow parent,
-        # we use a deferred approach below.
 
     # Rebuild with deferred expansion: process phases, when we see an implement
     # phase, collect it and its children, then append expansions.
@@ -822,24 +834,15 @@ def inject_checkers(workflow: Workflow, checker_specs: list[str]) -> Workflow:
 
         # Collect existing children (they immediately follow the parent)
         existing_checks = 0
-        existing_scripts = 0
         while i < len(phases) and phases[i].id.startswith(prefix):
             child = phases[i]
             new_phases.append(child)
             if child.id.startswith(f"{parent_id}~check-"):
                 existing_checks += 1
-            elif child.id.startswith(f"{parent_id}~script-"):
-                existing_scripts += 1
             i += 1
 
         # Expand CLI checkers with proper offsets
-        expanded = _expand_checkers(
-            parent_id,
-            parsed,
-            check_offset=existing_checks,
-            script_offset=existing_scripts,
-            template_vars=phase.template_vars,
-        )
+        expanded = _expand_checkers(parent_id, parsed, check_offset=existing_checks, template_vars=phase.template_vars)
         new_phases.extend(expanded)
 
     return Workflow(
@@ -915,7 +918,7 @@ def expand_multi_vars(workflow: Workflow, multi_vars: dict[str, list[str]]) -> W
 
     For each phase whose prompt or run command references a multi-value var,
     create N copies (one per value, or cartesian product for multiple vars).
-    If the phase has child phases (checkers/scripts with IDs like parent~check-1),
+    If the phase has child phases (checkers with IDs like parent~check-1),
     duplicate the entire group as a lane group. Otherwise, create a flat parallel group.
     """
     if not multi_vars:
@@ -1029,8 +1032,8 @@ def validate_workflow(workflow: Workflow) -> list[str]:
     - Phase IDs are unique
     - Phase types are valid
     - bounce_target references existing phase IDs
-    - implement/check phases have a prompt, prompt_file, or role
-    - script phases have a run command
+    - implement phases have a prompt
+    - check phases have a prompt, role, or run command
     - Parallel group phase IDs reference existing phases
     - Check phases with roles reference valid built-in roles
     """
@@ -1060,10 +1063,10 @@ def validate_workflow(workflow: Workflow) -> list[str]:
         # Type-specific validation
         if phase.type == "implement" and not phase.prompt:
             errors.append(f"Phase {phase.id!r}: implement phase has no prompt")
-        if phase.type == "check" and not phase.prompt and not phase.role:
-            errors.append(f"Phase {phase.id!r}: check phase has no prompt or role")
-        if phase.type == "script" and not phase.run:
-            errors.append(f"Phase {phase.id!r}: script phase has no run command")
+        if phase.type == "check" and not phase.prompt and not phase.role and not phase.run:
+            errors.append(f"Phase {phase.id!r}: check phase has no prompt, role, or run command")
+        if phase.type not in {"check", "workflow"} and phase.run:
+            errors.append(f"Phase {phase.id!r}: run is only allowed on check phases")
         if phase.type == "workflow":
             has_source = bool(phase.prompt) or bool(phase.workflow_file) or bool(phase.workflow_dir)
             if not has_source:

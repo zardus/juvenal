@@ -32,7 +32,7 @@ def test_trivial_workflow_codex(tmp_path):
             ),
             Phase(
                 id="check-hello",
-                type="script",
+                type="check",
                 run="test -f hello.txt && grep -q 'hello world' hello.txt",
             ),
         ],

@@ -16,9 +16,9 @@ You are helping the user create and manage Juvenal workflows. Juvenal orchestrat
 
 ## What is Juvenal?
 
-Juvenal is a framework where a non-agentic Python script orchestrates AI coding agents (Claude or Codex) through verified phases. Each phase has:
+Juvenal is a framework where a deterministic Python runtime orchestrates AI coding agents (Claude or Codex) through verified phases. Each phase has:
 1. An **implementation prompt** — tells the agent what to build
-2. One or more **checkers** — verify the work (scripts, agent reviewers, or both)
+2. One or more **checkers** — agentic verifiers that can review code and run commands when instructed
 
 The key insight: the implementing agent and the checking agent are separate, so the implementer can't cheat by weakening tests.
 
@@ -35,23 +35,17 @@ max_bounces: 999  # global bounce limit
 phases:
   - id: setup
     prompt: "Set up the project scaffolding."
-    checkers:
-      - type: script
-        run: "pytest tests/ -x"
-      - type: agent
-        role: tester
+    checks:
+      - run: "pytest tests/ -x"
+      - tester
 
   - id: implement
     prompt_file: phases/implement/prompt.md
     bounce_target: setup  # on failure, bounce back to setup
-    checkers:
-      - type: script
-        run: "make test"
-      - type: agent
-        role: senior-engineer
-      - type: composite
-        run: "pytest tests/ --tb=long"
-        prompt: "Review test output:\n{script_output}"
+    checks:
+      - run: "make test"
+      - role: senior-engineer
+      - prompt: "Run `pytest tests/ --tb=long`, review the output, and emit a verdict."
 ```
 
 ### 2. Directory convention
@@ -61,10 +55,10 @@ my-workflow/
   phases/
     01-setup/
       prompt.md
-      check-build.sh
+      check-build.sh      # check phase that tells the agent to run the script
     02-implement/
       prompt.md
-      check-tests.sh     # script checker
+      check-tests.sh     # run-based checker
       check-quality.md   # agent checker
 ```
 
@@ -78,9 +72,8 @@ phases/
 
 ## Checker Types
 
-- **script** (`type: script`): Shell command, exit 0 = PASS
-- **agent** (`type: agent`): AI agent that must emit `VERDICT: PASS` or `VERDICT: FAIL: reason`
-- **composite** (`type: composite`): Script runs first, output fed to agent via `{script_output}`
+- **role / prompt**: AI agent that must emit `VERDICT: PASS` or `VERDICT: FAIL: reason`
+- **run: CMD**: checker shorthand that tells the agent to run `CMD` during verification
 
 ## Built-in Roles
 
