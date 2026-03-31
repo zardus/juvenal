@@ -1958,6 +1958,49 @@ class TestTemplateVarsEngine:
         assert "myservice" in captured.out
 
 
+class TestInvalidJinjaRuntime:
+    def test_invalid_jinja_in_implement_phase_fails_cleanly(self, tmp_path, capsys):
+        workflow = Workflow(
+            name="test",
+            phases=[Phase(id="build", type="implement", prompt="{{ PROJECT")],
+        )
+        engine = Engine(workflow, state_file=str(tmp_path / "state.json"), plain=True)
+        engine.backend = MockBackend()
+        assert engine.run() == 1
+        captured = capsys.readouterr()
+        assert "Invalid Jinja2 prompt in phase 'build'" in captured.out
+        assert "Traceback" not in captured.out
+
+    def test_invalid_jinja_in_script_phase_fails_cleanly(self, tmp_path, capsys):
+        backend = MockBackend()
+        backend.add_response(exit_code=0, output="done")
+        workflow = Workflow(
+            name="test",
+            phases=[
+                Phase(id="build", type="implement", prompt="Build it."),
+                Phase(id="test", type="script", run="echo {{ PROJECT", bounce_target="build"),
+            ],
+        )
+        engine = Engine(workflow, state_file=str(tmp_path / "state.json"), plain=True)
+        engine.backend = backend
+        assert engine.run() == 1
+        captured = capsys.readouterr()
+        assert "Invalid Jinja2 script command in phase 'test'" in captured.out
+        assert "Traceback" not in captured.out
+
+    def test_invalid_jinja_in_dynamic_workflow_phase_fails_cleanly(self, tmp_path, capsys):
+        workflow = Workflow(
+            name="test",
+            phases=[Phase(id="sub", type="workflow", prompt="{{ PROJECT")],
+        )
+        engine = Engine(workflow, state_file=str(tmp_path / "state.json"), plain=True)
+        engine.backend = MockBackend()
+        assert engine.run() == 1
+        captured = capsys.readouterr()
+        assert "Invalid Jinja2 prompt in phase 'sub'" in captured.out
+        assert "Traceback" not in captured.out
+
+
 class TestSerialize:
     def test_serialize_runs_flat_parallel_sequentially(self, tmp_path):
         """With serialize=True, flat parallel groups run sequentially."""

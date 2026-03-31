@@ -11,6 +11,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from threading import Lock
 
+from jinja2 import TemplateSyntaxError
+
 from juvenal.backends import Backend, create_backend
 from juvenal.checkers import NO_VERDICT_REASON, parse_verdict, run_script
 from juvenal.display import Display
@@ -272,7 +274,10 @@ class Engine:
                 env=phase.env or None,
             )
         else:
-            prompt = phase.render_prompt(failure_context=failure_context, vars=self.workflow.vars)
+            try:
+                prompt = phase.render_prompt(failure_context=failure_context, vars=self.workflow.vars)
+            except TemplateSyntaxError as exc:
+                return self._template_syntax_failure(phase.id, "prompt", "implement", exc)
             result = self.backend.run_agent(
                 prompt,
                 working_dir=self.workflow.working_dir,
@@ -316,7 +321,10 @@ class Engine:
 
     def _run_interactive_loop(self, phase: Phase, attempt: int, failure_context: str) -> PhaseResult:
         """Run an agent-driven Q&A loop. Agent asks questions, user answers, agent updates plan."""
-        prompt = phase.render_prompt(failure_context=failure_context, vars=self.workflow.vars)
+        try:
+            prompt = phase.render_prompt(failure_context=failure_context, vars=self.workflow.vars)
+        except TemplateSyntaxError as exc:
+            return self._template_syntax_failure(phase.id, "prompt", "interactive", exc)
         prompt = self._INTERACTIVE_PREAMBLE + prompt
 
         self.display.step_start("interactive")
@@ -388,7 +396,10 @@ class Engine:
         self.display.step_start(f"script: {phase.id}")
 
         timeout = phase.timeout or 600
-        run_cmd = phase.render_run(vars=self.workflow.vars)
+        try:
+            run_cmd = phase.render_run(vars=self.workflow.vars)
+        except TemplateSyntaxError as exc:
+            return self._template_syntax_failure(phase.id, "script command", phase.id, exc)
         result = run_script(run_cmd, self.workflow.working_dir, timeout=timeout, env=phase.env or None)
         self.state.log_step(phase.id, attempt, "script", result.output, input=phase.run)
 
@@ -421,10 +432,16 @@ class Engine:
         self.display.phase_start(phase.id, attempt)
         self.display.step_start(f"check: {phase.id}")
 
-        prompt = phase.render_check_prompt(vars=self.workflow.vars)
+        try:
+            prompt = phase.render_check_prompt(vars=self.workflow.vars)
+        except TemplateSyntaxError as exc:
+            return self._template_syntax_failure(phase.id, "checker prompt", phase.id, exc)
 
         # Inject the parent implement phase's directions so the checker knows what to verify
-        parent_prompt = self._get_parent_prompt(phase, phases, phase_idx)
+        try:
+            parent_prompt = self._get_parent_prompt(phase, phases, phase_idx)
+        except TemplateSyntaxError as exc:
+            return self._template_syntax_failure(phase.id, "parent implement prompt", phase.id, exc)
         if parent_prompt:
             prompt = (
                 f"You are a CHECKER. You must NOT write any code or implement anything. "
@@ -583,7 +600,10 @@ class Engine:
 
         # Step 1: Plan the sub-workflow
         self.display.step_start(f"workflow-plan: {phase.id}")
-        prompt = phase.render_prompt(failure_context=failure_context, vars=self.workflow.vars)
+        try:
+            prompt = phase.render_prompt(failure_context=failure_context, vars=self.workflow.vars)
+        except TemplateSyntaxError as exc:
+            return self._template_syntax_failure(phase.id, "prompt", f"workflow-plan: {phase.id}", exc)
         plan_result = _plan_workflow_internal(
             goal=prompt,
             backend_instance=self.backend,
@@ -638,6 +658,14 @@ class Engine:
         if plan_result.temp_dir:
             shutil.rmtree(plan_result.temp_dir, ignore_errors=True)
         return PhaseResult(success=True)
+
+    def _template_syntax_failure(
+        self, phase_id: str, field_name: str, step_name: str, exc: TemplateSyntaxError
+    ) -> PhaseResult:
+        """Convert a Jinja2 syntax error into a clean phase failure."""
+        failure_context = f"Invalid Jinja2 {field_name} in phase '{phase_id}': {exc.message} (line {exc.lineno})"
+        self.display.step_fail(step_name, failure_context[:500])
+        return PhaseResult(success=False)
 
     def _resolve_bounce_target(
         self, phase: Phase, phases: list[Phase], phase_idx: int, agent_target: str | None = None
