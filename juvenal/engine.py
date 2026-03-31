@@ -1037,7 +1037,8 @@ class Engine:
                 elif phase.workflow_dir:
                     print(f"     workflow_dir: {phase.workflow_dir}")
                 else:
-                    prompt_preview = phase.prompt[:80].replace("\n", " ")
+                    prompt_preview = phase.prompt if has_errors else phase.render_prompt(vars=self.workflow.vars)
+                    prompt_preview = prompt_preview[:80].replace("\n", " ")
                     print(f"     prompt: {prompt_preview}...")
             print()
 

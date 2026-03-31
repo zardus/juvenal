@@ -846,6 +846,18 @@ class TestWorkflowPhase:
         assert "max_depth=2" in captured.out
         assert "Build a REST API" in captured.out
 
+    def test_dynamic_workflow_prompt_is_rendered_in_dry_run(self, tmp_path, capsys):
+        workflow = Workflow(
+            name="test",
+            phases=[Phase(id="dynamic", type="workflow", prompt="Plan {{ PROJECT }}.", max_depth=2)],
+            vars={"PROJECT": "svc"},
+        )
+        engine = self._make_engine(workflow, MockBackend(), tmp_path, dry_run=True)
+        assert engine.run() == 0
+        captured = capsys.readouterr()
+        assert "Plan svc." in captured.out
+        assert "Plan {{ PROJECT }}" not in captured.out
+
     def test_dynamic_workflow_inherits_backend_and_execution_flags(self, tmp_path):
         from juvenal.engine import PlanResult
 
