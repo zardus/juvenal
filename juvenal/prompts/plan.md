@@ -4,9 +4,8 @@ Given the user's goal, generate a `workflow.yaml` file that breaks the goal into
 
 Guidelines:
 - Each phase should be a discrete, verifiable step
-- Use script checkers (`type: script`) for automated checks (tests, linting, build)
-- Use agent checkers (`type: agent`) for semantic verification
-- Use composite checkers when you want an agent to review test/build output
+- Use agentic `check` phases for all verification
+- If a checker should run tests, lint, build, or another command, put those commands in the checker instructions
 - Order phases from setup/scaffolding to implementation to polish
 - Keep prompts specific and actionable
 - Set `backend: codex` unless the user specifies otherwise

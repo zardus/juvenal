@@ -16,7 +16,7 @@ class TestValidateWorkflow:
             name="test",
             phases=[
                 Phase(id="setup", type="implement", prompt="Set up."),
-                Phase(id="check", type="script", run="true"),
+                Phase(id="check", type="check", run="true"),
             ],
         )
         assert validate_workflow(wf) == []
@@ -80,7 +80,7 @@ class TestValidateWorkflow:
             ],
         )
         errors = validate_workflow(wf)
-        assert any("no prompt or role" in e for e in errors)
+        assert any("no prompt, role, or run command" in e for e in errors)
 
     def test_check_with_role_is_valid(self):
         wf = Workflow(
@@ -100,15 +100,15 @@ class TestValidateWorkflow:
         )
         assert validate_workflow(wf) == []
 
-    def test_script_missing_run(self):
+    def test_check_missing_all_verification_inputs(self):
         wf = Workflow(
             name="test",
             phases=[
-                Phase(id="build", type="script"),
+                Phase(id="build", type="check"),
             ],
         )
         errors = validate_workflow(wf)
-        assert any("no run command" in e for e in errors)
+        assert any("no prompt, role, or run command" in e for e in errors)
 
     def test_invalid_role(self):
         wf = Workflow(
@@ -157,12 +157,12 @@ class TestValidateWorkflow:
             name="test",
             phases=[
                 Phase(id="a", type="invalid"),
-                Phase(id="a", type="script"),
+                Phase(id="a", type="check"),
                 Phase(id="b", type="check"),
             ],
         )
         errors = validate_workflow(wf)
-        assert len(errors) >= 3  # invalid type, duplicate ID, missing run, missing prompt/role
+        assert len(errors) >= 3  # invalid type, duplicate ID, missing verification inputs
 
 
 class TestTimeoutField:
@@ -174,7 +174,7 @@ phases:
     prompt: "Build it."
     timeout: 120
   - id: check
-    type: script
+    type: check
     run: "true"
     timeout: 30
 """
@@ -223,13 +223,10 @@ phases:
         phase = Phase(id="test", prompt="Test.")
         assert phase.env == {}
 
-    def test_env_in_script_phase(self, tmp_path):
-        """Script phase with env passes variables to the script."""
-        from juvenal.checkers import run_script
-
-        result = run_script("echo $TEST_VAR", str(tmp_path), env={"TEST_VAR": "hello123"})
-        assert result.exit_code == 0
-        assert "hello123" in result.output
+    def test_env_in_run_based_check(self):
+        """Run-based check phases remain valid with env metadata."""
+        phase = Phase(id="review", type="check", run="echo $TEST_VAR", env={"TEST_VAR": "hello123"})
+        assert phase.env == {"TEST_VAR": "hello123"}
 
 
 class TestWorkflowPhaseValidation:
@@ -365,7 +362,7 @@ class TestTemplateVarValidation:
             name="test",
             phases=[
                 Phase(id="build", type="implement", prompt="Build."),
-                Phase(id="test", type="script", run="pytest {{DIR}}", bounce_target="build"),
+                Phase(id="test", type="check", run="pytest {{DIR}}", bounce_target="build"),
             ],
         )
         errors = validate_workflow(wf)

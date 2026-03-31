@@ -28,7 +28,7 @@ def _base_structure() -> dict:
             {
                 "order": 2,
                 "id": "prepare-test",
-                "type": "script",
+                "type": "check",
                 "bounce_target": "prepare",
                 "required_preexisting_inputs": ["original/"],
             },
@@ -58,7 +58,7 @@ def _base_workflow() -> dict:
             },
             {
                 "id": "prepare-test",
-                "type": "script",
+                "type": "check",
                 "run": "pytest -q",
                 "bounce_target": "prepare",
             },
@@ -82,7 +82,7 @@ def _smoke_structure() -> dict:
             {"id": "analyze-prepared-inputs", "type": "implement"},
             {
                 "id": "analyze-prepared-inputs-test",
-                "type": "script",
+                "type": "check",
                 "bounce_target": "analyze-prepared-inputs",
             },
             {
@@ -105,7 +105,7 @@ def _smoke_workflow() -> dict:
             },
             {
                 "id": "analyze-prepared-inputs-test",
-                "type": "script",
+                "type": "check",
                 "run": "true",
                 "bounce_target": "analyze-prepared-inputs",
             },

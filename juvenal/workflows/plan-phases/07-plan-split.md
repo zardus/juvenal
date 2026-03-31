@@ -16,7 +16,7 @@ Each file should represent one implement block in the final generated workflow a
 - `New Outputs`
 - `File Changes`
 - `Implementation Details`
-- `Verification Phases` — list every explicit top-level verifier with its phase ID, type (`script` or `check`), fixed `bounce_target` equal to the implement phase ID, and purpose
+- `Verification Phases` — list every explicit top-level verifier with its phase ID, type (`check`), fixed `bounce_target` equal to the implement phase ID, purpose, and any commands it should run
 - `Success Criteria`
 - `Git Commit Requirement` — explicitly state that the implementer must commit work to git before yielding
 
@@ -41,7 +41,7 @@ phases:
       - <artifact or file path>
   - order: 2
     id: <phase-id>
-    type: script
+    type: check
     bounce_target: <implement-phase-id>
     required_preexisting_inputs:
       - <artifact or file path>
@@ -49,7 +49,7 @@ phases:
 
 Rules for `.plan/workflow-structure.yaml`:
 - list every top-level phase in final execution order, including every verifier
-- `type` must be one of `implement`, `script`, or `check`
+- `type` must be one of `implement` or `check`
 - use `bounce_target: null` for implement phases
 - verifier phases must use a single fixed `bounce_target` equal to the implement phase they verify
 - `required_preexisting_inputs` must be a concrete list of artifacts already expected to exist before that phase begins; use `[]` only when truly empty

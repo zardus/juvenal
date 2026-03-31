@@ -23,10 +23,10 @@ When Agent B catches Agent A's shoddy work, Agent C can be spun up to implement 
 
 ## How It Works
 
-A non-agentic Python script orchestrates AI coding agents (Claude or Codex) through alternating steps:
+A deterministic Python runtime orchestrates AI coding agents (Claude or Codex) through alternating steps:
 
 1. **Implementation** — an agent executes a prompt to build/modify code
-2. **Verification** — separate checkers (scripts, agents, or both) verify the work
+2. **Verification** — separate checker agents verify the work, and can run commands when instructed to do so
 3. **Bounce** — if verification fails, the pipeline bounces back (to a configurable target phase or the most recent implement phase) with failure context injected. A global bounce limit (`max_bounces`) prevents infinite loops.
 
 The implementing agent and the checking agent are separate processes, so the implementer can't cheat by weakening tests, etc.
@@ -133,8 +133,8 @@ phases:
     timeout: 300
     env:
       NODE_ENV: production
-    checkers:
-      - run: "pytest tests/ -x"       # script checker
+    checks:
+      - run: "pytest tests/ -x"         # checker prompt tells the agent to run this command
       - tester                          # built-in role shorthand
       - role: senior-engineer           # role as dict
       - prompt: "Check for security."   # inline prompt
@@ -151,7 +151,7 @@ my-workflow/
       feature-a/           #   each subdir is a lane
         prompt.md          #     implement phase
         check.md           #     check phase (auto-bounces to implement)
-        tests.sh           #     script phase (auto-bounces to implement)
+        tests.sh           #     check phase that tells the agent to run tests.sh
       feature-b/
         prompt.md
         check.md
@@ -170,7 +170,7 @@ Lanes can also use subdirectories for more complex pipelines:
       prompt.md
 ```
 
-Phase IDs are derived from directory names. In simple mode (lane has `prompt.md` at root): `a`, `a~check-1`, `a~script-1`. In complex mode (subdirectories): `a~01-implement`, `a~02-check-review`.
+Phase IDs are derived from directory names. In simple mode (lane has `prompt.md` at root): `a`, `a~check-1`, `a~check-2`. In complex mode (subdirectories): `a~01-implement`, `a~02-check-review`.
 
 ### Bare Markdown
 
@@ -184,7 +184,6 @@ juvenal run task.md  # single implement phase from a .md file
 |------|-------------|
 | `implement` | Agent executes a prompt to build/modify code (default) |
 | `check` | Separate agent verifies work, emits `VERDICT: PASS` or `VERDICT: FAIL: reason` |
-| `script` | Shell command; exit 0 = PASS, nonzero = FAIL |
 | `workflow` | Dynamic sub-workflow: plans and executes a sub-pipeline from the prompt |
 
 ### Workflow Phases
@@ -200,10 +199,10 @@ A `workflow` phase dynamically generates and executes a sub-pipeline. Useful for
 
 ## Inline Checkers
 
-Checkers are defined inline on implement phases. Each entry can be:
+Checks are defined inline on implement phases. Each entry can be:
 
 - **Bare string** — built-in role shorthand
-- **`run: CMD`** — script checker (exit 0 = pass)
+- **`run: CMD`** — checker shorthand that tells the agent to run `CMD` during verification
 - **`role: NAME`** — agent checker with built-in role
 - **`prompt: TEXT`** — agent checker with inline prompt
 - **`prompt_file: PATH`** — agent checker with prompt from file
@@ -213,7 +212,7 @@ Checkers can also carry `timeout` and `env`.
 ```yaml
 - id: implement
   prompt: "Build the feature."
-  checkers:
+  checks:
     - run: "pytest tests/ -x"
     - tester
     - role: senior-engineer
@@ -353,7 +352,7 @@ juvenal validate <workflow>
 | `--rewind-to ID` | Rewind to a specific phase by ID |
 | `--phase ID` | Start from a specific phase |
 | `--dry-run` | Print execution plan without running |
-| `--checker SPEC` | Inject checker on every implement phase (role, `run:CMD`, `prompt:TEXT`). Repeatable. |
+| `--checker SPEC` | Inject checker on every implement phase (role, `run:CMD`, `prompt:TEXT`). `run:CMD` becomes an agentic checker instruction. Repeatable. |
 | `--implementer ROLE` | Prepend implementer role prompt to every implement phase |
 | `--clear-context-on-bounce` | Start fresh agent session on bounce (default: resume session) |
 | `-D VAR=VAL` | Set a Jinja2 template variable. Repeatable. |
@@ -384,7 +383,7 @@ Inject checkers at the CLI without modifying the workflow file:
 # Add a tester role checker to every implement phase
 juvenal run workflow.yaml --checker tester
 
-# Add a script checker
+# Add a checker that runs a command
 juvenal run workflow.yaml --checker "run:pytest tests/ -x"
 
 # Add both

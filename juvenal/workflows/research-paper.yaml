@@ -25,7 +25,7 @@ phases:
 
   # Phase 5b: Run tests
   - id: run-tests
-    type: script
+    type: check
     run: "bash run-tests.sh"
     bounce_target: ensure-tests
 

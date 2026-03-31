@@ -9,7 +9,7 @@ Verify:
 4. No information was lost or distorted in the split.
 5. No information was duplicated across phase files beyond lightweight context repetition.
 6. The structure file declares `linear: true`, `yaml_source_mode: inline-only`, and `verifier_encoding: explicit-phases`.
-7. Every verifier is represented as an explicit top-level `script` or `check` phase, stays in the implement block it verifies, and uses a single fixed `bounce_target`.
+7. Every verifier is represented as an explicit top-level `check` phase, stays in the implement block it verifies, and uses a single fixed `bounce_target`.
 8. The split preserves the consume-existing-artifacts contract rather than introducing refetch, recollection, rediscovery, or regeneration work for existing artifacts.
 9. Each phase file is self-contained enough for an implementer to work from.
 
