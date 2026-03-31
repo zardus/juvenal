@@ -39,7 +39,7 @@ class _Sandbox(ImmutableSandboxedEnvironment):
         else super(_Sandbox, self).getattr(obj, attr)
     )
     is_safe_attribute = lambda self, obj, attr, value: isinstance(obj, dict) and attr in {"get", "items", "keys", "values"} and super(_Sandbox, self).is_safe_attribute(obj, attr, value)  # noqa: E501,E731  # fmt: skip
-    is_safe_callable = lambda self, obj: obj in _JINJA_ENV.globals.values() or type(obj).__name__ == "Macro" or isinstance(getattr(obj, "__self__", None), dict) and getattr(obj, "__name__", None) in {"get", "items", "keys", "values"}  # noqa: E501,E731  # fmt: skip
+    is_safe_callable = lambda self, obj: any(obj is value for value in _JINJA_ENV.globals.values()) or type(obj).__name__ == "Macro" or isinstance(getattr(obj, "__self__", None), dict) and getattr(obj, "__name__", None) in {"get", "items", "keys", "values"}  # noqa: E501,E731  # fmt: skip
 
 
 _JINJA_ENV = _Sandbox(autoescape=False, keep_trailing_newline=True, undefined=PreservePlaceholderUndefined)
