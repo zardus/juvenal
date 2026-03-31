@@ -214,16 +214,16 @@ def _load_yaml_with_includes(path: Path, seen: set[str]) -> Workflow:
     for i, phase_data in enumerate(data.get("phases", [])):
         if "id" not in phase_data:
             raise ValueError(f"Phase {i} in {path}: missing required 'id' field")
-        unknown = set(phase_data.keys()) - _VALID_PHASE_KEYS
-        if unknown:
-            import warnings
-
-            warnings.warn(f"Phase '{phase_data['id']}': unknown keys {unknown} (typo?)", stacklevel=2)
         if phase_data.get("type") == "script" or "run" in phase_data:
             raise ValueError(
                 f"Phase '{phase_data['id']}': script phases are no longer supported; "
                 "use a check phase and tell the checker which command(s) to run"
             )
+        unknown = set(phase_data.keys()) - _VALID_PHASE_KEYS
+        if unknown:
+            import warnings
+
+            warnings.warn(f"Phase '{phase_data['id']}': unknown keys {unknown} (typo?)", stacklevel=2)
         if "checks" in phase_data and "checkers" in phase_data:
             raise ValueError(f"Phase '{phase_data['id']}': checks and checkers are mutually exclusive")
         prompt = phase_data.get("prompt", "")

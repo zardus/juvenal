@@ -484,6 +484,29 @@ phases:
         captured = capsys.readouterr()
         assert "Invalid --checker spec" in captured.out
 
+    def test_validate_legacy_script_workflow_has_clean_error(self, tmp_path):
+        legacy = tmp_path / "legacy.yaml"
+        legacy.write_text(
+            """\
+name: test
+phases:
+  - id: legacy-check
+    type: script
+    run: "pytest -x"
+"""
+        )
+
+        result = subprocess.run(
+            [sys.executable, "-m", "juvenal.cli", "--plain", "validate", str(legacy)],
+            capture_output=True,
+            text=True,
+        )
+
+        assert result.returncode == 1
+        assert "script phases are no longer supported" in result.stdout
+        assert "UserWarning" not in result.stderr
+        assert "unknown keys" not in result.stderr
+
     def test_plan_invalid_checker_spec_returns_clean_error(self, tmp_path, monkeypatch, capsys):
         import juvenal.engine
 

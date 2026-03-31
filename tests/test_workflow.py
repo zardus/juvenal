@@ -679,6 +679,28 @@ class TestErrors:
         with pytest.raises(ValueError, match="expected a mapping"):
             load_workflow(bad_yaml)
 
+    def test_legacy_script_yaml_rejected_without_warning(self, tmp_path):
+        """Legacy type: script YAML fails cleanly without an extra warning."""
+        import warnings
+
+        bad_yaml = tmp_path / "legacy.yaml"
+        bad_yaml.write_text(
+            """\
+name: test
+phases:
+  - id: legacy-check
+    type: script
+    run: "pytest -x"
+"""
+        )
+
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            with pytest.raises(ValueError, match="script phases are no longer supported"):
+                load_workflow(bad_yaml)
+
+        assert caught == []
+
 
 class TestParseCheckerString:
     def test_role(self):
