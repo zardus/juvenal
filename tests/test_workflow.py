@@ -1001,6 +1001,9 @@ class TestTemplateVars:
     def test_apply_vars_basic(self):
         assert apply_vars("Hello {{NAME}}", {"NAME": "world"}) == "Hello world"
 
+    def test_apply_vars_does_not_expose_builtin_globals(self):
+        assert apply_vars("{{ cycler }}", {}) == "{{cycler}}"
+
     def test_apply_vars_jinja_filter(self):
         assert apply_vars("Hello {{ name|title }}", {"name": "juvenal"}) == "Hello Juvenal"
 

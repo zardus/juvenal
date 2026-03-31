@@ -8,8 +8,9 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 import yaml
-from jinja2 import Environment, StrictUndefined, TemplateSyntaxError, meta
+from jinja2 import StrictUndefined, TemplateSyntaxError, meta
 from jinja2.runtime import missing
+from jinja2.sandbox import SandboxedEnvironment
 
 
 class _PassthroughUndefined(StrictUndefined):
@@ -23,7 +24,8 @@ class _PassthroughUndefined(StrictUndefined):
         return self._fail_with_undefined_error()
 
 
-_JINJA_ENV = Environment(autoescape=False, keep_trailing_newline=True, undefined=_PassthroughUndefined)
+_JINJA_ENV = SandboxedEnvironment(autoescape=False, keep_trailing_newline=True, undefined=_PassthroughUndefined)
+_JINJA_ENV.globals.clear()
 
 
 def _find_template_vars(text: str) -> set[str]:

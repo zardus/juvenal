@@ -425,6 +425,14 @@ class TestTemplateVarValidation:
         errors = validate_workflow(wf)
         assert any("invalid Jinja2 prompt" in e for e in errors)
 
+    def test_builtin_jinja_globals_are_not_treated_as_defined(self):
+        wf = Workflow(
+            name="test",
+            phases=[Phase(id="build", type="implement", prompt="{{ cycler }}")],
+        )
+        errors = validate_workflow(wf)
+        assert any("{{cycler}}" in e and "no value defined" in e for e in errors)
+
     def test_expand_multi_vars_preserves_filtered_var_name_for_validation(self):
         wf = Workflow(
             name="test",

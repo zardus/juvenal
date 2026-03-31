@@ -2055,6 +2055,19 @@ class TestInvalidJinjaRuntime:
         assert "env" in captured.out
         assert "Traceback" not in captured.out
 
+    def test_builtin_jinja_globals_are_not_available_at_runtime(self, tmp_path, capsys):
+        workflow = Workflow(
+            name="test",
+            phases=[Phase(id="build", type="implement", prompt="{{ cycler.__init__.__globals__ }}")],
+        )
+        engine = Engine(workflow, state_file=str(tmp_path / "state.json"), plain=True)
+        engine.backend = MockBackend()
+        assert engine.run() == 1
+        captured = capsys.readouterr()
+        assert "SecurityError" in captured.out
+        assert "__init__" in captured.out
+        assert "Traceback" not in captured.out
+
 
 class TestSerialize:
     def test_serialize_runs_flat_parallel_sequentially(self, tmp_path):
