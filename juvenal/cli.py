@@ -309,8 +309,9 @@ def _inject_checkers_into_yaml(yaml_path: str, parsed_checkers: list[dict | str]
 
     for phase in data.get("phases", []):
         if phase.get("type", "implement") == "implement":
-            existing = phase.get("checkers", [])
-            phase["checkers"] = existing + parsed_checkers
+            existing_checks = phase.get("checks", [])
+            legacy_checkers = phase.pop("checkers", [])
+            phase["checks"] = existing_checks + legacy_checkers + parsed_checkers
 
     with open(yaml_path, "w") as f:
         yaml.dump(data, f, default_flow_style=False, sort_keys=False)
