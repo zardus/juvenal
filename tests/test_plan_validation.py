@@ -10,6 +10,7 @@ from pathlib import Path
 import yaml
 
 from juvenal.plan_validation import validate_planned_workflow
+from juvenal.workflow import make_command_check_prompt
 
 
 def _base_structure() -> dict:
@@ -59,7 +60,7 @@ def _base_workflow() -> dict:
             {
                 "id": "prepare-test",
                 "type": "check",
-                "run": "pytest -q",
+                "prompt": make_command_check_prompt("pytest -q"),
                 "bounce_target": "prepare",
             },
             {
@@ -106,7 +107,7 @@ def _smoke_workflow() -> dict:
             {
                 "id": "analyze-prepared-inputs-test",
                 "type": "check",
-                "run": "true",
+                "prompt": make_command_check_prompt("true"),
                 "bounce_target": "analyze-prepared-inputs",
             },
             {
@@ -160,6 +161,18 @@ def test_validate_planned_workflow_rejects_order_id_type_mismatch(tmp_path):
     errors = validate_planned_workflow(structure_path, workflow_path)
 
     assert any("does not match structure id" in error for error in errors)
+
+
+def test_validate_planned_workflow_rejects_phase_level_run_key(tmp_path):
+    structure = _base_structure()
+    workflow = _base_workflow()
+    workflow["phases"][1].pop("prompt")
+    workflow["phases"][1]["run"] = "pytest -q"
+
+    structure_path, workflow_path = _write_case(tmp_path, structure, workflow)
+    errors = validate_planned_workflow(structure_path, workflow_path)
+
+    assert any("run is not supported" in error for error in errors)
 
 
 def test_validate_planned_workflow_rejects_deferred_verifier(tmp_path):

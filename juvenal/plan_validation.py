@@ -11,6 +11,7 @@ import yaml
 _VERIFIER_TYPES = {"check"}
 _ALLOWED_PHASE_TYPES = {"implement", "check"}
 _INLINE_ONLY_FORBIDDEN_PHASE_KEYS = ("prompt_file", "workflow_file", "workflow_dir")
+_UNSUPPORTED_PHASE_KEYS = ("run",)
 
 
 def _read_yaml(path: Path, label: str) -> tuple[Any | None, list[str]]:
@@ -170,6 +171,13 @@ def validate_planned_workflow(structure_path: Path, workflow_path: Path) -> list
             errors.append(
                 f"Workflow phase {workflow_id!r}: checks is not allowed when verifier_encoding is explicit-phases"
             )
+
+        for forbidden_key in _UNSUPPORTED_PHASE_KEYS:
+            if forbidden_key in workflow_phase:
+                errors.append(
+                    f"Workflow phase {workflow_id!r}: {forbidden_key} is not supported; "
+                    "spell command execution out in the prompt"
+                )
 
         if yaml_source_mode == "inline-only":
             for forbidden_key in _INLINE_ONLY_FORBIDDEN_PHASE_KEYS:
