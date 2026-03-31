@@ -288,30 +288,29 @@ def cmd_run(args: argparse.Namespace) -> int:
 def cmd_plan(args: argparse.Namespace) -> int:
     from juvenal.engine import plan_workflow
 
+    _expand_standard_checkers(args)
+    parsed_checkers = _parse_checker_specs_or_exit(args.checker) if args.checker else []
     plan_workflow(
         args.goal, args.output, args.backend, plain=args.plain, interactive=args.interactive, resume=args.resume
     )
     if args.implementer:
         _inject_implementer_into_yaml(args.output, args.implementer)
-    _expand_standard_checkers(args)
-    if args.checker:
-        _inject_checkers_into_yaml(args.output, args.checker)
+    if parsed_checkers:
+        _inject_checkers_into_yaml(args.output, parsed_checkers)
     return 0
 
 
-def _inject_checkers_into_yaml(yaml_path: str, checker_specs: list[str]) -> None:
-    """Post-process a generated YAML file to append checkers: entries to each implement phase."""
+def _inject_checkers_into_yaml(yaml_path: str, parsed_checkers: list[dict | str]) -> None:
+    """Post-process a generated YAML file to append validated checkers to each implement phase."""
     import yaml
 
     with open(yaml_path) as f:
         data = yaml.safe_load(f)
 
-    parsed = _parse_checker_specs_or_exit(checker_specs)
-
     for phase in data.get("phases", []):
         if phase.get("type", "implement") == "implement":
             existing = phase.get("checkers", [])
-            phase["checkers"] = existing + parsed
+            phase["checkers"] = existing + parsed_checkers
 
     with open(yaml_path, "w") as f:
         yaml.dump(data, f, default_flow_style=False, sort_keys=False)
@@ -342,6 +341,10 @@ def cmd_do(args: argparse.Namespace) -> int:
     from juvenal.engine import Engine, plan_workflow
     from juvenal.workflow import inject_implementer
 
+    _expand_standard_checkers(args)
+    if args.checker:
+        _parse_checker_specs_or_exit(args.checker)
+
     with tempfile.NamedTemporaryFile(suffix=".yaml", delete=False, mode="w") as f:
         plan_workflow(args.goal, f.name, args.backend, plain=args.plain, interactive=args.interactive)
         workflow = _load_workflow_or_exit(f.name)
@@ -350,7 +353,6 @@ def cmd_do(args: argparse.Namespace) -> int:
         workflow = _apply_defines(workflow, _parse_defines(args.defines))
     if args.implementer:
         workflow = inject_implementer(workflow, args.implementer)
-    _expand_standard_checkers(args)
     if args.checker:
         workflow = _inject_checkers_or_exit(workflow, args.checker)
     if args.backend:
