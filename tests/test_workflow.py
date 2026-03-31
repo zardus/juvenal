@@ -937,6 +937,27 @@ class TestDirectoryParallelLanes:
         # Auto bounce target to first implement
         assert phase_map["a~02-check-review"].bounce_target == "a~01-implement"
 
+    def test_complex_lane_subdirectory_script_checker_rejected(self, tmp_path):
+        """Legacy .sh checker files inside complex lane phase dirs are rejected."""
+        phases_dir = tmp_path / "phases"
+        phases_dir.mkdir()
+
+        par_dir = phases_dir / "01-parallel"
+        par_dir.mkdir()
+
+        lane = par_dir / "a"
+        lane.mkdir()
+
+        impl = lane / "01-implement"
+        impl.mkdir()
+        (impl / "prompt.md").write_text("Build A.")
+        script = impl / "tests.sh"
+        script.write_text("#!/bin/bash\nexit 0\n")
+        script.chmod(0o755)
+
+        with pytest.raises(ValueError, match="Legacy script checker files"):
+            load_workflow(tmp_path)
+
     def test_parallel_mixed_with_sequential(self, tmp_path):
         """Parallel dir coexists with regular sequential phases."""
         phases_dir = tmp_path / "phases"

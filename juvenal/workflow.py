@@ -469,6 +469,14 @@ def _load_lane_dir(lane_dir: Path) -> list[Phase]:
             prompt_path = entry / "prompt.md"
             if not prompt_path.exists():
                 continue
+            for child in sorted(entry.iterdir()):
+                if child.name == "prompt.md" or child.name.startswith(".") or child.name.startswith("_"):
+                    continue
+                if child.is_file() and child.suffix == ".sh":
+                    raise ValueError(
+                        f"Legacy script checker files are no longer supported: {child}. "
+                        "Use a check prompt that tells the checker which command(s) to run."
+                    )
             prompt = prompt_path.read_text()
             phase_id = f"{lane_name}~{entry.name}"
             if entry.name.startswith("check-") or "-check-" in entry.name:
