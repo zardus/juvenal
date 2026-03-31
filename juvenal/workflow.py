@@ -15,7 +15,7 @@ from jinja2.sandbox import ImmutableSandboxedEnvironment
 
 _UNRESOLVED_TEMPLATE_VAR_RE = re.compile(r"\{\{\s*([A-Za-z_][A-Za-z0-9_]*)\b")
 _CONTROL_EXPR_RE = re.compile(
-    r"{%\s*(?:if|elif)\s+(.+?)\s*%}|{%\s*for\s+(.+?)\s+in\s+(.+?)\s*%}|{{.*?\s+if\s+(.+?)\s+else\b", re.DOTALL
+    r"{%\s*(?:if|elif)\s+(.+?)\s*%}|{%\s*for\s+(.+?)\s+in\s+(.+?)\s*%}|{{[^{}]*?\s+if\s+(.+?)\s+else\b", re.DOTALL
 )
 _SKIP_CONTROL_EXPR_RE = re.compile(r"(?:\w+\s+is\s+(?:not\s+)?(?:defined|undefined))")
 _OPTIONAL_OUTPUT_RE = re.compile(
