@@ -43,15 +43,70 @@ def _find_template_vars_safe(text: str) -> set[str]:
         return set()
 
 
-def _has_complex_undefined_usage(ast: nodes.Template, missing_vars: set[str]) -> bool:
-    """True when an undefined var appears outside a bare ``{{ name }}`` output."""
+def _vars_defined_when_true(test: nodes.Node) -> set[str]:
+    """Variables proven defined when ``test`` evaluates truthy."""
+    if isinstance(test, nodes.Test) and test.name == "defined" and isinstance(test.node, nodes.Name):
+        return {test.node.name}
+    if isinstance(test, nodes.Not):
+        return _vars_defined_when_false(test.node)
+    return set()
 
-    def _walk(node: nodes.Node, parent: nodes.Node | None = None) -> bool:
+
+def _vars_defined_when_false(test: nodes.Node) -> set[str]:
+    """Variables proven defined when ``test`` evaluates falsy."""
+    if isinstance(test, nodes.Test) and test.name == "undefined" and isinstance(test.node, nodes.Name):
+        return {test.node.name}
+    if isinstance(test, nodes.Not):
+        return _vars_defined_when_true(test.node)
+    return set()
+
+
+def _find_vars_requiring_values(
+    ast: nodes.Template, missing_vars: set[str], *, allow_passthrough: bool
+) -> set[str]:
+    """Return missing vars that are used in a way that still requires a value."""
+
+    required: set[str] = set()
+
+    def _walk(
+        node: nodes.Node, parent: nodes.Node | None = None, guaranteed_defined: frozenset[str] = frozenset()
+    ) -> None:
         if isinstance(node, nodes.Name) and node.ctx == "load" and node.name in missing_vars:
-            return not (isinstance(parent, nodes.Output) and node in parent.nodes)
-        return any(_walk(child, node) for child in node.iter_child_nodes())
+            if node.name in guaranteed_defined:
+                return
+            if isinstance(parent, nodes.Test) and parent.node is node and parent.name in {"defined", "undefined"}:
+                return
+            if isinstance(parent, nodes.Filter) and parent.node is node and parent.name == "default":
+                return
+            if allow_passthrough and isinstance(parent, nodes.Output) and node in parent.nodes:
+                return
+            required.add(node.name)
+            return
 
-    return _walk(ast)
+        if isinstance(node, nodes.If):
+            _walk(node.test, node, guaranteed_defined)
+            true_defined = guaranteed_defined | frozenset(_vars_defined_when_true(node.test))
+            false_defined = guaranteed_defined | frozenset(_vars_defined_when_false(node.test))
+            for child in node.body:
+                _walk(child, node, true_defined)
+            for child in node.else_:
+                _walk(child, node, false_defined)
+            return
+
+        if isinstance(node, nodes.CondExpr):
+            _walk(node.test, node, guaranteed_defined)
+            true_defined = guaranteed_defined | frozenset(_vars_defined_when_true(node.test))
+            false_defined = guaranteed_defined | frozenset(_vars_defined_when_false(node.test))
+            _walk(node.expr1, node, true_defined)
+            if node.expr2 is not None:
+                _walk(node.expr2, node, false_defined)
+            return
+
+        for child in node.iter_child_nodes():
+            _walk(child, node, guaranteed_defined)
+
+    _walk(ast)
+    return required
 
 
 def apply_vars(text: str, vars: dict[str, str] | None) -> str:
@@ -61,8 +116,9 @@ def apply_vars(text: str, vars: dict[str, str] | None) -> str:
     context = vars or {}
     ast = _JINJA_ENV.parse(text)
     missing_vars = set(meta.find_undeclared_variables(ast)) - set(context.keys())
-    if missing_vars and _has_complex_undefined_usage(ast, missing_vars):
-        missing_list = ", ".join(sorted(missing_vars))
+    required_vars = _find_vars_requiring_values(ast, missing_vars, allow_passthrough=True)
+    if required_vars:
+        missing_list = ", ".join(sorted(required_vars))
         raise UndefinedError(f"undefined template variables require values before rendering: {missing_list}")
     return _JINJA_ENV.from_string(text).render(context)
 
@@ -1047,11 +1103,12 @@ def validate_workflow(workflow: Workflow) -> list[str]:
             if not text:
                 continue
             try:
-                referenced = _find_template_vars(text)
+                ast = _JINJA_ENV.parse(text)
             except TemplateSyntaxError as exc:
                 errors.append(f"Phase {phase.id!r}: invalid Jinja2 {field_name}: {exc.message} (line {exc.lineno})")
                 continue
-            undefined.update(referenced - defined_vars)
+            missing_vars = set(meta.find_undeclared_variables(ast)) - defined_vars
+            undefined.update(_find_vars_requiring_values(ast, missing_vars, allow_passthrough=False))
         for var_name in sorted(undefined):
             errors.append(f"Phase {phase.id!r}: template variable {{{{{var_name}}}}} has no value defined")
 

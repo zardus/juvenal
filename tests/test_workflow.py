@@ -1012,6 +1012,12 @@ class TestTemplateVars:
         with pytest.raises(UndefinedError, match="app"):
             apply_vars("Deploy {{ app|title }}.", {})
 
+    def test_apply_vars_allows_default_filter_for_undefined_var(self):
+        assert apply_vars('{{ missing|default("fallback") }}', {}) == "fallback"
+
+    def test_apply_vars_allows_defined_test_for_undefined_var(self):
+        assert apply_vars("{% if missing is defined %}value={{ missing }}{% endif %}", {}) == ""
+
     def test_apply_vars_jinja_control_flow(self):
         result = apply_vars("{% if LANG == 'Python' %}typed{% else %}other{% endif %}", {"LANG": "Python"})
         assert result == "typed"

@@ -1955,6 +1955,18 @@ class TestTemplateVarsEngine:
             mock_run.assert_called_once()
             assert mock_run.call_args[0][0] == "pytest tests/unit -x"
 
+    def test_default_filter_allows_undefined_var_at_runtime(self, mock_backend, tmp_path):
+        """Valid Jinja2 undefined handling should not be blocked by validation."""
+        mock_backend.add_response(exit_code=0, output="done")
+        workflow = Workflow(
+            name="test",
+            phases=[Phase(id="build", type="implement", prompt='Use {{ missing|default("fallback") }}.')],
+        )
+        engine = Engine(workflow, state_file=str(tmp_path / "state.json"), plain=True)
+        engine.backend = mock_backend
+        assert engine.run() == 0
+        assert mock_backend.calls == ["Use fallback."]
+
     def test_vars_unrecognized_passthrough_fails_validation(self, mock_backend, tmp_path, capsys):
         """Undefined template vars fail validation before execution."""
         workflow = Workflow(

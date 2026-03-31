@@ -433,6 +433,20 @@ class TestTemplateVarValidation:
         errors = validate_workflow(wf)
         assert any("{{cycler}}" in e and "no value defined" in e for e in errors)
 
+    def test_default_filter_allows_undefined_var(self):
+        wf = Workflow(
+            name="test",
+            phases=[Phase(id="build", type="implement", prompt='{{ missing|default("fallback") }}')],
+        )
+        assert validate_workflow(wf) == []
+
+    def test_defined_test_allows_guarded_undefined_var(self):
+        wf = Workflow(
+            name="test",
+            phases=[Phase(id="build", type="implement", prompt="{% if missing is defined %}{{ missing }}{% endif %}")],
+        )
+        assert validate_workflow(wf) == []
+
     def test_expand_multi_vars_preserves_filtered_var_name_for_validation(self):
         wf = Workflow(
             name="test",
