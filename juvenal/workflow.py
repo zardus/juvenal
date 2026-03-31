@@ -77,7 +77,7 @@ def _control_template_vars(text: str, defined_vars: set[str]) -> set[str]:
     for if_expr, loop_var, loop_expr, cond_expr in _CONTROL_EXPR_RE.findall(text):
         expr = re.sub(r"\((\w+\s+is\s+(?:not\s+)?(?:defined|undefined))\)", r"\1", (if_expr or loop_expr or cond_expr).strip())  # noqa: E501  # fmt: skip
         guard = re.fullmatch(r"(\w+)\s+is\s+(?:(?:not\s+)?undefined\s+or|defined\s+and)\s+(.+)", expr)
-        expr = "" if guard and guard.group(1) not in defined_vars else guard.group(2) if guard else expr
+        expr = re.sub(r"^(?:[Ff]alse\s+and|[Tt]rue\s+or)\b.*$", "", re.sub(r"^(?:[Tt]rue\s+and|[Ff]alse\s+or)\s+(.+)$", r"\1", "" if guard and guard.group(1) not in defined_vars else guard.group(2) if guard else expr))  # noqa: E501  # fmt: skip
         if expr and not _SKIP_CONTROL_EXPR_RE.fullmatch(expr):
             found.update(template_vars(f"{{{{ {expr} }}}}") - set(re.findall(r"\w+", loop_var)) - set(re.findall(r"(\w+)\s*\|\s*(?:default|d)\b", expr)))  # noqa: E501  # fmt: skip
     return found - guarded
