@@ -269,7 +269,7 @@ These are mutually exclusive. If neither is set, bounces to the most recent impl
 
 ### Lanes
 
-Each lane is a mini-pipeline (e.g., implement + check) with its own internal bounce loop. All lanes run concurrently and share the global bounce budget. The group completes when every lane passes.
+Each lane is a mini-pipeline (e.g., implement + check, or a `workflow` phase followed by checks) with its own internal bounce loop. All lanes run concurrently and share the global bounce budget. The group completes when every lane passes.
 
 ```yaml
 parallel_groups:
@@ -281,7 +281,7 @@ parallel_groups:
 
 Lane constraints:
 - Bounce targets must stay within their lane
-- No `workflow`-type phases in lanes
+- `workflow` phases are allowed in lanes and execute like any other lane step
 - No phase in multiple lanes
 
 ### Legacy Flat Format
