@@ -606,6 +606,10 @@ class Engine:
 
         sub_workflow = load_workflow(plan_result.workflow_yaml_path)
         sub_workflow.working_dir = self.workflow.working_dir
+        # Propagate vars from parent workflow.
+        merged_vars = dict(sub_workflow.vars)
+        merged_vars.update(self.workflow.vars)
+        sub_workflow.vars = merged_vars
 
         sub_engine = Engine(
             sub_workflow,
