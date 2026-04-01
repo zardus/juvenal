@@ -26,6 +26,7 @@ class _PassthroughUndefined(StrictUndefined):
 
 _JINJA_ENV = SandboxedEnvironment(autoescape=False, keep_trailing_newline=True, undefined=_PassthroughUndefined)
 _JINJA_ENV.globals.clear()
+_UNDEFINED_VARS_ERROR_PREFIX = "undefined template variables require values before rendering:"
 
 
 def _find_template_vars(text: str) -> set[str]:
@@ -147,7 +148,7 @@ def apply_vars(text: str, vars: dict[str, str] | None) -> str:
     required_vars = _find_vars_requiring_values(ast, missing_vars, allow_passthrough=True)
     if required_vars:
         missing_list = ", ".join(sorted(required_vars))
-        raise UndefinedError(f"undefined template variables require values before rendering: {missing_list}")
+        raise UndefinedError(f"{_UNDEFINED_VARS_ERROR_PREFIX} {missing_list}")
     return _JINJA_ENV.from_string(text).render(context)
 
 
@@ -1111,6 +1112,7 @@ def validate_workflow(workflow: Workflow) -> list[str]:
         for field_name, text in (("prompt", phase.prompt),):
             if not text:
                 continue
+            render_field_name = "checker prompt" if phase.type == "check" else field_name
             try:
                 ast = _JINJA_ENV.parse(text)
             except TemplateSyntaxError as exc:
@@ -1122,8 +1124,13 @@ def validate_workflow(workflow: Workflow) -> list[str]:
             if field_undefined:
                 try:
                     rendered_text = phase._render_text(text, vars=workflow.vars)
-                except Exception:
-                    pass
+                except Exception as exc:
+                    if isinstance(exc, UndefinedError) and str(exc).startswith(_UNDEFINED_VARS_ERROR_PREFIX):
+                        rendered_text = None
+                    else:
+                        errors.append(_describe_template_render_error(phase.id, render_field_name, exc))
+                        phase_has_template_errors = True
+                        continue
                 else:
                     # Drop vars that only appear in branches eliminated by the current render context.
                     field_undefined &= _find_template_vars_safe(rendered_text)

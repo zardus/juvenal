@@ -477,6 +477,18 @@ class TestTemplateVarValidation:
         )
         assert validate_workflow(wf) == []
 
+    def test_unreachable_else_branch_missing_var_defers_to_render_error(self):
+        wf = Workflow(
+            name="test",
+            phases=[
+                Phase(id="build", type="implement", prompt="{% if ok %}A{% else %}{{ missing }}{% endif %} {{ 1 / 0 }}")
+            ],
+            vars={"ok": True},
+        )
+        errors = validate_workflow(wf)
+        assert any("Jinja2 render error in prompt for phase 'build'" in e for e in errors)
+        assert not any("{{missing}}" in e and "no value defined" in e for e in errors)
+
     def test_validate_workflow_reports_render_error(self):
         wf = Workflow(
             name="test",
@@ -756,6 +768,28 @@ phases:
         captured = capsys.readouterr()
         assert "Jinja2 render error in prompt for phase 'build'" in captured.out
         assert "env" in captured.out
+        assert "Traceback" not in captured.out
+
+    def test_validate_unreachable_missing_with_render_error_reports_render_error(self, tmp_path, capsys):
+        """A real render failure should win over undefined vars from unreachable branches."""
+        yaml_content = """\
+name: bad
+vars:
+  ok: true
+phases:
+  - id: build
+    prompt: "{% if ok %}A{% else %}{{ missing }}{% endif %} {{ 1 / 0 }}"
+"""
+        yaml_path = tmp_path / "bad-jinja-mixed.yaml"
+        yaml_path.write_text(yaml_content)
+        parser = build_parser()
+        args = parser.parse_args(["validate", str(yaml_path)])
+        args.plain = True
+        result = cmd_validate(args)
+        assert result == 1
+        captured = capsys.readouterr()
+        assert "Jinja2 render error in prompt for phase 'build'" in captured.out
+        assert "{{missing}}" not in captured.out
         assert "Traceback" not in captured.out
 
     def test_validate_missing_id_clean_error(self, tmp_path, capsys):
