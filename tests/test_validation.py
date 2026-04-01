@@ -559,8 +559,8 @@ class TestLaneValidation:
         errors = validate_workflow(wf)
         assert any("multiple lanes" in e for e in errors)
 
-    def test_lane_no_workflow_type(self):
-        """Workflow-type phases are not allowed in lanes."""
+    def test_lane_allows_workflow_type(self):
+        """Lane groups may contain workflow phases."""
         wf = Workflow(
             name="test",
             phases=[
@@ -569,8 +569,16 @@ class TestLaneValidation:
             ],
             parallel_groups=[ParallelGroup(lanes=[["a", "dyn"]])],
         )
-        errors = validate_workflow(wf)
-        assert any("workflow-type" in e for e in errors)
+        assert validate_workflow(wf) == []
+
+    def test_expanded_workflow_phase_lane_group_is_valid(self):
+        """Multi-var expansion must not manufacture an invalid lane group for workflow phases."""
+        wf = Workflow(
+            name="test",
+            phases=[Phase(id="dyn", type="workflow", prompt="Plan {{ENV}}.")],
+        )
+        expanded = expand_multi_vars(wf, {"ENV": ["prod"]})
+        assert validate_workflow(expanded) == []
 
     def test_valid_lane_group(self):
         """A valid lane group passes validation."""

@@ -519,6 +519,13 @@ class Engine:
             return self._run_static_workflow(phase, effective_max_depth)
         return self._run_dynamic_workflow(phase, effective_max_depth)
 
+    def _inherit_subworkflow_vars(self, phase: Phase, sub_workflow: Workflow) -> None:
+        """Merge parent workflow context into a sub-workflow before validation/execution."""
+        merged_vars = dict(sub_workflow.vars)
+        merged_vars.update(self.workflow.vars)
+        merged_vars.update(phase.template_vars)
+        sub_workflow.vars = merged_vars
+
     def _run_static_workflow(self, phase: Phase, effective_max_depth: int) -> PhaseResult:
         """Run a static sub-workflow from workflow_file or workflow_dir."""
         from juvenal.workflow import load_workflow
@@ -532,10 +539,7 @@ class Engine:
         wf_path = phase.workflow_file or phase.workflow_dir
         sub_workflow = load_workflow(wf_path)
         sub_workflow.working_dir = self.workflow.working_dir
-        # Propagate vars from parent workflow
-        merged_vars = dict(sub_workflow.vars)
-        merged_vars.update(self.workflow.vars)
-        sub_workflow.vars = merged_vars
+        self._inherit_subworkflow_vars(phase, sub_workflow)
 
         # State file alongside parent's, named by phase ID
         parent_state = self.state.state_file
@@ -606,10 +610,7 @@ class Engine:
 
         sub_workflow = load_workflow(plan_result.workflow_yaml_path)
         sub_workflow.working_dir = self.workflow.working_dir
-        # Propagate vars from parent workflow.
-        merged_vars = dict(sub_workflow.vars)
-        merged_vars.update(self.workflow.vars)
-        sub_workflow.vars = merged_vars
+        self._inherit_subworkflow_vars(phase, sub_workflow)
 
         sub_engine = Engine(
             sub_workflow,
@@ -777,6 +778,8 @@ class Engine:
 
             if phase.type == "implement":
                 result = self._run_implement(phase)
+            elif phase.type == "workflow":
+                result = self._run_workflow(phase)
             elif phase.type == "check":
                 result = self._run_check(phase, lane_phases, phase_idx)
             else:

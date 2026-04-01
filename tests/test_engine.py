@@ -751,6 +751,47 @@ class TestWorkflowPhase:
 
         assert backend.calls == ["Deploy prod."]
 
+    def test_dynamic_workflow_inherits_phase_template_vars(self, tmp_path):
+        """Planned sub-workflows inherit workflow-phase template vars with phase-local precedence."""
+        from unittest.mock import patch
+
+        from juvenal.engine import PlanResult
+
+        backend = MockBackend()
+        backend.add_response(exit_code=0, output="deployed")
+
+        workflow = Workflow(
+            name="test",
+            phases=[
+                Phase(
+                    id="dynamic",
+                    type="workflow",
+                    prompt="Plan deploy for {{ENV}}.",
+                    template_vars={"ENV": "prod"},
+                )
+            ],
+            max_bounces=1,
+            vars={"ENV": "staging"},
+        )
+        engine = self._make_engine(workflow, backend, tmp_path)
+
+        sub_yaml = tmp_path / "sub-template-vars" / "workflow.yaml"
+        sub_yaml.parent.mkdir(parents=True)
+        sub_yaml.write_text("name: sub\nphases:\n  - id: deploy\n    prompt: 'Deploy {{ENV}}.'\n")
+
+        plan_result = PlanResult(
+            success=True,
+            workflow_yaml_path=str(sub_yaml),
+            temp_dir=str(sub_yaml.parent),
+            input_tokens=0,
+            output_tokens=0,
+        )
+
+        with patch("juvenal.engine._plan_workflow_internal", return_value=plan_result):
+            assert engine.run() == 0
+
+        assert backend.calls == ["Deploy prod."]
+
     def test_workflow_phase_planning_failure_bounces(self, tmp_path):
         """When sub-workflow planning fails, the phase bounces."""
         from unittest.mock import patch
@@ -2553,6 +2594,53 @@ class TestStaticWorkflowPhase:
         engine.backend = backend
         assert engine.run() == 0
         assert "Deploy prod." in backend.calls[0]
+
+    def test_static_workflow_inherits_phase_template_vars(self, tmp_path):
+        """Static sub-workflows inherit workflow-phase template vars with phase-local precedence."""
+        sub_yaml = tmp_path / "sub.yaml"
+        sub_yaml.write_text("name: sub\nphases:\n  - id: inner\n    prompt: 'Deploy {{ENV}}.'\n")
+
+        backend = MockBackend()
+        backend.add_response(exit_code=0, output="deployed")
+
+        workflow = Workflow(
+            name="test",
+            phases=[
+                Phase(
+                    id="sub-wf",
+                    type="workflow",
+                    workflow_file=str(sub_yaml),
+                    template_vars={"ENV": "prod"},
+                )
+            ],
+            vars={"ENV": "staging"},
+        )
+        engine = Engine(workflow, state_file=str(tmp_path / "state.json"), plain=True)
+        engine.backend = backend
+        assert engine.run() == 0
+        assert backend.calls == ["Deploy prod."]
+
+    def test_static_workflow_lane_runs(self, tmp_path):
+        """Workflow phases can execute inside lane groups created by expansion."""
+        sub_yaml = tmp_path / "sub.yaml"
+        sub_yaml.write_text("name: sub\nphases:\n  - id: inner\n    prompt: 'Inner task.'\n")
+
+        backend = MockBackend()
+        backend.add_response(exit_code=0, output="inner done")
+        backend.add_response(exit_code=0, output="built")
+
+        workflow = Workflow(
+            name="test",
+            phases=[
+                Phase(id="sub-wf", type="workflow", workflow_file=str(sub_yaml)),
+                Phase(id="build", type="implement", prompt="Build outer."),
+            ],
+            parallel_groups=[ParallelGroup(lanes=[["sub-wf"], ["build"]])],
+        )
+        engine = Engine(workflow, state_file=str(tmp_path / "state.json"), plain=True, serialize=True)
+        engine.backend = backend
+        assert engine.run() == 0
+        assert backend.calls == ["Inner task.", "Build outer."]
 
     def test_static_workflow_dry_run(self, tmp_path, capsys):
         """Dry run shows workflow_file path."""

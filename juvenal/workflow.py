@@ -1070,13 +1070,6 @@ def validate_workflow(workflow: Workflow) -> list[str]:
             for li, lane in enumerate(group.lanes):
                 if not lane:
                     errors.append(f"Parallel group {i}, lane {li}: lane is empty")
-                for pid in lane:
-                    if pid in all_ids:
-                        phase = next(p for p in workflow.phases if p.id == pid)
-                        if phase.type == "workflow":
-                            errors.append(
-                                f"Parallel group {i}, lane {li}: workflow-type phase {pid!r} not allowed in lanes"
-                            )
 
             # Check for phases appearing in multiple lanes
             seen_ids: set[str] = set()
