@@ -2050,6 +2050,19 @@ class TestTemplateVarsEngine:
         assert engine.run() == 0
         assert mock_backend.calls == [""]
 
+    def test_unreachable_else_branch_missing_var_allows_runtime(self, mock_backend, tmp_path):
+        """Undefined vars in branches pruned by current vars should not fail validation."""
+        mock_backend.add_response(exit_code=0, output="done")
+        workflow = Workflow(
+            name="test",
+            phases=[Phase(id="build", type="implement", prompt="{% if ok %}A{% else %}{{ missing }}{% endif %}")],
+            vars={"ok": True},
+        )
+        engine = Engine(workflow, state_file=str(tmp_path / "state.json"), plain=True)
+        engine.backend = mock_backend
+        assert engine.run() == 0
+        assert mock_backend.calls == ["A"]
+
     def test_vars_unrecognized_passthrough_fails_validation(self, mock_backend, tmp_path, capsys):
         """Undefined template vars fail validation before execution."""
         workflow = Workflow(

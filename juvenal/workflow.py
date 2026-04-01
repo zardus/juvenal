@@ -1125,7 +1125,16 @@ def validate_workflow(workflow: Workflow) -> list[str]:
                 phase_has_template_errors = True
                 continue
             missing_vars = set(meta.find_undeclared_variables(ast)) - defined_vars
-            undefined.update(_find_vars_requiring_values(ast, missing_vars, allow_passthrough=False))
+            field_undefined = _find_vars_requiring_values(ast, missing_vars, allow_passthrough=False)
+            if field_undefined:
+                try:
+                    rendered_text = phase._render_text(text, vars=workflow.vars)
+                except Exception:
+                    pass
+                else:
+                    # Drop vars that only appear in branches eliminated by the current render context.
+                    field_undefined &= _find_template_vars_safe(rendered_text)
+            undefined.update(field_undefined)
         for var_name in sorted(undefined):
             errors.append(f"Phase {phase.id!r}: template variable {{{{{var_name}}}}} has no value defined")
         if undefined or phase_has_template_errors:
