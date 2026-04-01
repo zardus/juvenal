@@ -469,6 +469,14 @@ class TestTemplateVarValidation:
         errors = validate_workflow(wf)
         assert any("{{missing}}" in e and "no value defined" in e for e in errors)
 
+    def test_unreachable_else_branch_missing_var_is_ignored(self):
+        wf = Workflow(
+            name="test",
+            phases=[Phase(id="build", type="implement", prompt="{% if ok %}A{% else %}{{ missing }}{% endif %}")],
+            vars={"ok": True},
+        )
+        assert validate_workflow(wf) == []
+
     def test_validate_workflow_reports_render_error(self):
         wf = Workflow(
             name="test",
