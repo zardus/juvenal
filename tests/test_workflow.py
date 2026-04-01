@@ -1050,6 +1050,10 @@ class TestTemplateVars:
     def test_apply_vars_allows_short_circuit_defined_guard(self):
         assert apply_vars("{% if missing is defined and missing.foo %}x{% endif %}", {}) == ""
 
+    def test_apply_vars_ignores_unreachable_nested_undefined_var(self):
+        result = apply_vars("{% if ok %}A{% else %}{{ missing.foo }}{% endif %}", {"ok": True})
+        assert result == "A"
+
     def test_apply_vars_jinja_control_flow(self):
         result = apply_vars("{% if LANG == 'Python' %}typed{% else %}other{% endif %}", {"LANG": "Python"})
         assert result == "typed"

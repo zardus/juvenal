@@ -27,6 +27,7 @@ class _PassthroughUndefined(StrictUndefined):
 _JINJA_ENV = SandboxedEnvironment(autoescape=False, keep_trailing_newline=True, undefined=_PassthroughUndefined)
 _JINJA_ENV.globals.clear()
 _UNDEFINED_VARS_ERROR_PREFIX = "undefined template variables require values before rendering:"
+_UNKNOWN = object()
 
 
 def _find_template_vars(text: str) -> set[str]:
@@ -76,7 +77,122 @@ def _vars_defined_when_false(test: nodes.Node, guaranteed_defined: frozenset[str
     return guaranteed_defined
 
 
-def _find_vars_requiring_values(ast: nodes.Template, missing_vars: set[str], *, allow_passthrough: bool) -> set[str]:
+def _lookup_attr_or_item(value: object, key: object) -> object:
+    """Mimic Jinja's attr/item lookup for simple context-driven branch pruning."""
+    if isinstance(value, dict):
+        return value.get(key, _UNKNOWN)
+    if isinstance(key, str):
+        try:
+            return getattr(value, key)
+        except Exception:
+            pass
+    try:
+        return value[key]
+    except Exception:
+        return _UNKNOWN
+
+
+def _evaluate_node(node: nodes.Node, context: dict[str, object] | None) -> object:
+    """Best-effort evaluation for simple Jinja conditions using current context."""
+    if context is None:
+        return _UNKNOWN
+    if isinstance(node, nodes.Const):
+        return node.value
+    if isinstance(node, nodes.Name):
+        return context.get(node.name, _UNKNOWN)
+    if isinstance(node, nodes.Getattr):
+        base = _evaluate_node(node.node, context)
+        if base is _UNKNOWN:
+            return _UNKNOWN
+        return _lookup_attr_or_item(base, node.attr)
+    if isinstance(node, nodes.Getitem):
+        base = _evaluate_node(node.node, context)
+        key = _evaluate_node(node.arg, context)
+        if base is _UNKNOWN or key is _UNKNOWN:
+            return _UNKNOWN
+        return _lookup_attr_or_item(base, key)
+    if isinstance(node, nodes.Test):
+        value = _evaluate_node(node.node, context)
+        if node.name == "defined":
+            return value is not _UNKNOWN
+        if node.name == "undefined":
+            return value is _UNKNOWN
+        return _UNKNOWN
+    if isinstance(node, nodes.Not):
+        value = _evaluate_node(node.node, context)
+        if value is _UNKNOWN:
+            return _UNKNOWN
+        return not bool(value)
+    if isinstance(node, nodes.And):
+        left = _evaluate_node(node.left, context)
+        if left is _UNKNOWN:
+            return _UNKNOWN
+        if not left:
+            return False
+        right = _evaluate_node(node.right, context)
+        if right is _UNKNOWN:
+            return _UNKNOWN
+        return bool(right)
+    if isinstance(node, nodes.Or):
+        left = _evaluate_node(node.left, context)
+        if left is _UNKNOWN:
+            return _UNKNOWN
+        if left:
+            return True
+        right = _evaluate_node(node.right, context)
+        if right is _UNKNOWN:
+            return _UNKNOWN
+        return bool(right)
+    if isinstance(node, nodes.Compare):
+        left = _evaluate_node(node.expr, context)
+        if left is _UNKNOWN:
+            return _UNKNOWN
+        current = left
+        for operand in node.ops:
+            right = _evaluate_node(operand.expr, context)
+            if right is _UNKNOWN:
+                return _UNKNOWN
+            op = operand.op
+            if op == "eq":
+                ok = current == right
+            elif op == "ne":
+                ok = current != right
+            elif op == "gt":
+                ok = current > right
+            elif op == "gteq":
+                ok = current >= right
+            elif op == "lt":
+                ok = current < right
+            elif op == "lteq":
+                ok = current <= right
+            elif op == "in":
+                ok = current in right
+            elif op == "notin":
+                ok = current not in right
+            else:
+                return _UNKNOWN
+            if not ok:
+                return False
+            current = right
+        return True
+    return _UNKNOWN
+
+
+def _evaluate_truthiness(node: nodes.Node, context: dict[str, object] | None) -> bool | None:
+    """Return the condition result when it can be decided from current context."""
+    value = _evaluate_node(node, context)
+    if value is _UNKNOWN:
+        return None
+    return bool(value)
+
+
+def _find_vars_requiring_values(
+    ast: nodes.Template,
+    missing_vars: set[str],
+    *,
+    allow_passthrough: bool,
+    context: dict[str, object] | None = None,
+) -> set[str]:
     """Return missing vars that are used in a way that still requires a value."""
 
     required: set[str] = set()
@@ -100,6 +216,38 @@ def _find_vars_requiring_values(ast: nodes.Template, missing_vars: set[str], *, 
             _walk(node.test, node, guaranteed_defined)
             true_defined = _vars_defined_when_true(node.test, guaranteed_defined)
             false_defined = _vars_defined_when_false(node.test, guaranteed_defined)
+            branch_truth = _evaluate_truthiness(node.test, context)
+            if branch_truth is True:
+                for child in node.body:
+                    _walk(child, node, true_defined)
+                return
+            if branch_truth is False:
+                for elif_node in node.elif_:
+                    _walk(elif_node.test, elif_node, false_defined)
+                    elif_true_defined = _vars_defined_when_true(elif_node.test, false_defined)
+                    elif_truth = _evaluate_truthiness(elif_node.test, context)
+                    if elif_truth is True:
+                        for child in elif_node.body:
+                            _walk(child, elif_node, elif_true_defined)
+                        return
+                    if elif_truth is False:
+                        false_defined = _vars_defined_when_false(elif_node.test, false_defined)
+                        continue
+                    for child in elif_node.body:
+                        _walk(child, elif_node, elif_true_defined)
+                    false_defined = _vars_defined_when_false(elif_node.test, false_defined)
+                    for later_elif in node.elif_[node.elif_.index(elif_node) + 1 :]:
+                        _walk(later_elif.test, later_elif, false_defined)
+                        later_true_defined = _vars_defined_when_true(later_elif.test, false_defined)
+                        for child in later_elif.body:
+                            _walk(child, later_elif, later_true_defined)
+                        false_defined = _vars_defined_when_false(later_elif.test, false_defined)
+                    for child in node.else_:
+                        _walk(child, node, false_defined)
+                    return
+                for child in node.else_:
+                    _walk(child, node, false_defined)
+                return
             for child in node.body:
                 _walk(child, node, true_defined)
             for elif_node in node.elif_:
@@ -116,6 +264,14 @@ def _find_vars_requiring_values(ast: nodes.Template, missing_vars: set[str], *, 
             _walk(node.test, node, guaranteed_defined)
             true_defined = _vars_defined_when_true(node.test, guaranteed_defined)
             false_defined = _vars_defined_when_false(node.test, guaranteed_defined)
+            branch_truth = _evaluate_truthiness(node.test, context)
+            if branch_truth is True:
+                _walk(node.expr1, node, true_defined)
+                return
+            if branch_truth is False:
+                if node.expr2 is not None:
+                    _walk(node.expr2, node, false_defined)
+                return
             _walk(node.expr1, node, true_defined)
             if node.expr2 is not None:
                 _walk(node.expr2, node, false_defined)
@@ -145,7 +301,7 @@ def apply_vars(text: str, vars: dict[str, str] | None) -> str:
     context = vars or {}
     ast = _JINJA_ENV.parse(text)
     missing_vars = set(meta.find_undeclared_variables(ast)) - set(context.keys())
-    required_vars = _find_vars_requiring_values(ast, missing_vars, allow_passthrough=True)
+    required_vars = _find_vars_requiring_values(ast, missing_vars, allow_passthrough=True, context=context)
     if required_vars:
         missing_list = ", ".join(sorted(required_vars))
         raise UndefinedError(f"{_UNDEFINED_VARS_ERROR_PREFIX} {missing_list}")
@@ -1106,7 +1262,9 @@ def validate_workflow(workflow: Workflow) -> list[str]:
 
     # Template validation: referenced Jinja2 variables must have values
     for phase in workflow.phases:
-        defined_vars = set(workflow.vars.keys()) | set(phase.template_vars.keys())
+        render_context = dict(workflow.vars)
+        render_context.update(phase.template_vars)
+        defined_vars = set(render_context.keys())
         undefined: set[str] = set()
         phase_has_template_errors = False
         for field_name, text in (("prompt", phase.prompt),):
@@ -1120,7 +1278,9 @@ def validate_workflow(workflow: Workflow) -> list[str]:
                 phase_has_template_errors = True
                 continue
             missing_vars = set(meta.find_undeclared_variables(ast)) - defined_vars
-            field_undefined = _find_vars_requiring_values(ast, missing_vars, allow_passthrough=False)
+            field_undefined = _find_vars_requiring_values(
+                ast, missing_vars, allow_passthrough=False, context=render_context
+            )
             if field_undefined:
                 try:
                     rendered_text = phase._render_text(text, vars=workflow.vars)

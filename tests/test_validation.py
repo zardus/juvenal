@@ -477,6 +477,14 @@ class TestTemplateVarValidation:
         )
         assert validate_workflow(wf) == []
 
+    def test_unreachable_else_branch_missing_nested_var_is_ignored(self):
+        wf = Workflow(
+            name="test",
+            phases=[Phase(id="build", type="implement", prompt="{% if ok %}A{% else %}{{ missing.foo }}{% endif %}")],
+            vars={"ok": True},
+        )
+        assert validate_workflow(wf) == []
+
     def test_unreachable_else_branch_missing_var_defers_to_render_error(self):
         wf = Workflow(
             name="test",
@@ -789,6 +797,27 @@ phases:
         assert result == 1
         captured = capsys.readouterr()
         assert "Jinja2 render error in prompt for phase 'build'" in captured.out
+        assert "{{missing}}" not in captured.out
+        assert "Traceback" not in captured.out
+
+    def test_validate_unreachable_nested_missing_var_is_ignored(self, tmp_path, capsys):
+        yaml_content = """\
+name: ok
+vars:
+  ok: true
+phases:
+  - id: build
+    prompt: "{% if ok %}A{% else %}{{ missing.foo }}{% endif %}"
+"""
+        yaml_path = tmp_path / "ok-jinja-dead-nested.yaml"
+        yaml_path.write_text(yaml_content)
+        parser = build_parser()
+        args = parser.parse_args(["validate", str(yaml_path)])
+        args.plain = True
+        result = cmd_validate(args)
+        assert result == 0
+        captured = capsys.readouterr()
+        assert "Validation: OK" in captured.out
         assert "{{missing}}" not in captured.out
         assert "Traceback" not in captured.out
 
