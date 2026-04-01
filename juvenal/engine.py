@@ -515,6 +515,11 @@ class Engine:
             bounce_target = phase.bounce_target or phase.id
             return PhaseResult(success=False, bounce_target=bounce_target, failure_context=failure_context)
 
+        ps = self.state._ensure_phase(phase.id)
+        if ps.baseline_sha is None:
+            ps.baseline_sha = self._get_git_head()
+            self.state.save()
+
         if phase.workflow_file or phase.workflow_dir:
             return self._run_static_workflow(phase, effective_max_depth)
         return self._run_dynamic_workflow(phase, effective_max_depth)
@@ -664,7 +669,7 @@ class Engine:
         1. If phase has bounce_targets (agent-guided), use the agent's choice if valid,
            otherwise fall back to first in the list.
         2. If phase has bounce_target (fixed), use that.
-        3. Otherwise, find the most recent implement phase.
+        3. Otherwise, find the most recent implement/workflow phase.
         """
         if phase.bounce_targets:
             if agent_target and agent_target in phase.bounce_targets:
@@ -672,12 +677,12 @@ class Engine:
             return phase.bounce_targets[0]
         if phase.bounce_target:
             return phase.bounce_target
-        return self._find_last_implement(phases, phase_idx)
+        return self._find_last_rework_phase(phases, phase_idx)
 
-    def _find_last_implement(self, phases: list[Phase], before_idx: int) -> str | None:
-        """Find the most recent implement phase before the given index."""
+    def _find_last_rework_phase(self, phases: list[Phase], before_idx: int) -> str | None:
+        """Find the most recent implement/workflow phase before the given index."""
         for i in range(before_idx - 1, -1, -1):
-            if phases[i].type == "implement":
+            if phases[i].type in {"implement", "workflow"}:
                 return phases[i].id
         return None
 
@@ -881,16 +886,16 @@ class Engine:
         return None
 
     def _get_parent_prompt(self, phase: Phase, phases: list[Phase], phase_idx: int) -> str | None:
-        """Get the prompt from the parent implement phase for a checker phase."""
+        """Get the prompt from the parent implement/workflow phase for a checker phase."""
         target_id = self._resolve_bounce_target(phase, phases, phase_idx)
         if target_id:
             for p in phases:
-                if p.id == target_id and p.type == "implement":
+                if p.id == target_id and p.type in {"implement", "workflow"}:
                     return p.render_prompt(vars=self.workflow.vars) or None
         return None
 
     def _get_baseline_sha(self, phase: Phase, phases: list[Phase], phase_idx: int) -> str | None:
-        """Get the baseline SHA for a checker phase's bounce target."""
+        """Get the baseline SHA for a checker phase's implement/workflow target."""
         target_id = self._resolve_bounce_target(phase, phases, phase_idx)
         if target_id:
             target_ps = self.state.phases.get(target_id)

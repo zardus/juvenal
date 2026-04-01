@@ -1596,6 +1596,69 @@ class TestBaselineSha:
         loaded = PipelineState.load(state_file)
         assert loaded.phases["phase1"].baseline_sha == "persist-sha"
 
+    def test_workflow_phase_check_receives_parent_prompt_and_baseline(self, tmp_path):
+        backend = MockBackend()
+        backend.add_response(exit_code=0, output="sub-workflow done")
+        backend.add_response(exit_code=0, output="VERDICT: PASS")
+        subworkflow = tmp_path / "subworkflow.yaml"
+        subworkflow.write_text(
+            """\
+name: sub
+phases:
+  - id: inner
+    prompt: "Do the sub-work."
+"""
+        )
+        workflow = Workflow(
+            name="test",
+            phases=[
+                Phase(id="sub", type="workflow", prompt="Build the full feature.", workflow_file=str(subworkflow)),
+                Phase(id="review", type="check", prompt="Review the workflow output.", bounce_target="sub"),
+            ],
+            max_bounces=3,
+        )
+        engine = self._make_engine(workflow, backend, tmp_path)
+
+        with patch.object(engine, "_get_git_head", return_value="workflow-sha"):
+            assert engine.run() == 0
+
+        assert engine.state.phases["sub"].baseline_sha == "workflow-sha"
+        check_prompt = backend.calls[1]
+        assert "Build the full feature." in check_prompt
+        assert "git diff workflow-sha..HEAD" in check_prompt
+
+    def test_check_after_workflow_defaults_bounce_target_to_workflow_phase(self, tmp_path):
+        backend = MockBackend()
+        backend.add_response(exit_code=0, output="sub-workflow done")
+        backend.add_response(exit_code=0, output="VERDICT: FAIL: incomplete")
+        backend.add_response(exit_code=0, output="sub-workflow fixed")
+        backend.add_response(exit_code=0, output="VERDICT: PASS")
+        subworkflow = tmp_path / "subworkflow.yaml"
+        subworkflow.write_text(
+            """\
+name: sub
+phases:
+  - id: inner
+    prompt: "Do the sub-work."
+"""
+        )
+        workflow = Workflow(
+            name="test",
+            phases=[
+                Phase(id="sub", type="workflow", prompt="Build the full feature.", workflow_file=str(subworkflow)),
+                Phase(id="review", type="check", prompt="Review the workflow output."),
+            ],
+            max_bounces=3,
+        )
+        engine = self._make_engine(workflow, backend, tmp_path)
+
+        with patch.object(engine, "_get_git_head", return_value="workflow-sha"):
+            assert engine.run() == 0
+
+        assert engine.state.phases["sub"].attempt == 2
+        assert "Build the full feature." in backend.calls[1]
+        assert "Build the full feature." in backend.calls[3]
+
 
 class TestLaneGroups:
     def test_lane_group_both_pass(self, tmp_path):
