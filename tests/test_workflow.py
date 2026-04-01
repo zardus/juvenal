@@ -661,9 +661,7 @@ class TestErrors:
     def test_yaml_phase_script_type_rejected(self, tmp_path):
         """Legacy script phases in YAML workflows are rejected."""
         bad_yaml = tmp_path / "bad.yaml"
-        bad_yaml.write_text(
-            "name: test\n" "phases:\n" "  - id: verify\n" "    type: script\n" "    prompt: 'Run tests'\n"
-        )
+        bad_yaml.write_text("name: test\nphases:\n  - id: verify\n    type: script\n    prompt: 'Run tests'\n")
         with pytest.raises(ValueError, match="type 'script' is no longer supported"):
             load_workflow(bad_yaml)
 

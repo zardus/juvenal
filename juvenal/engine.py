@@ -393,6 +393,7 @@ class Engine:
 
         self.display.step_pass("interactive")
         return PhaseResult(success=True)
+
     _MAX_NO_VERDICT_RESUMES = 2
     _RESUME_PROMPT = (
         "Your previous response did not include a VERDICT line. Please review the work\n"
