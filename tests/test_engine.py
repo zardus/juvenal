@@ -717,6 +717,40 @@ class TestWorkflowPhase:
 
         assert result == 0
 
+    def test_dynamic_workflow_inherits_parent_vars(self, tmp_path):
+        """Parent workflow vars are propagated to planned sub-workflows."""
+        from unittest.mock import patch
+
+        from juvenal.engine import PlanResult
+
+        backend = MockBackend()
+        backend.add_response(exit_code=0, output="deployed")
+
+        workflow = Workflow(
+            name="test",
+            phases=[Phase(id="dynamic", type="workflow", prompt="Plan a deploy workflow.")],
+            max_bounces=1,
+            vars={"ENV": "prod"},
+        )
+        engine = self._make_engine(workflow, backend, tmp_path)
+
+        sub_yaml = tmp_path / "sub" / "workflow.yaml"
+        sub_yaml.parent.mkdir(parents=True)
+        sub_yaml.write_text("name: sub\nphases:\n  - id: deploy\n    prompt: 'Deploy {{ENV}}.'\n")
+
+        plan_result = PlanResult(
+            success=True,
+            workflow_yaml_path=str(sub_yaml),
+            temp_dir=str(sub_yaml.parent),
+            input_tokens=0,
+            output_tokens=0,
+        )
+
+        with patch("juvenal.engine._plan_workflow_internal", return_value=plan_result):
+            assert engine.run() == 0
+
+        assert backend.calls == ["Deploy prod."]
+
     def test_workflow_phase_planning_failure_bounces(self, tmp_path):
         """When sub-workflow planning fails, the phase bounces."""
         from unittest.mock import patch
