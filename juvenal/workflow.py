@@ -1124,8 +1124,8 @@ def validate_workflow(workflow: Workflow) -> list[str]:
         try:
             if phase.type == "implement":
                 phase.render_prompt(vars=workflow.vars)
-            elif phase.type == "check" and not phase.role:
-                phase.render_check_prompt(vars=workflow.vars)
+            elif phase.type == "check" and phase.prompt:
+                phase._render_text(phase.prompt, vars=workflow.vars)
             elif phase.type == "workflow" and phase.prompt:
                 phase.render_prompt(vars=workflow.vars)
         except Exception as exc:
