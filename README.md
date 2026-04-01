@@ -234,10 +234,15 @@ Agent checkers can use built-in verification personas:
 - `pm` — confirms requirements are met, no TODOs remain
 - `senior-tester` — checks test integrity, looks for cheating
 - `senior-engineer` — reviews code quality, completeness, security
+- `security-engineer` — reviews security boundaries, exploitability, and risky defaults
+- `technical-writer` — reviews technical accuracy, structure, and clarity of written output
+- `professor` — reviews research vision, experiment design, and scientific rigor
+- `grant-reviewer` — reviews grant proposals for significance, feasibility, and reviewer-facing gaps
 
 Implementer roles (via `--implementer`):
 
 - `software-engineer` — structured implementation approach
+- `professor-writer` — structured approach for grants and scientific papers
 
 ## Bounce Targets
 

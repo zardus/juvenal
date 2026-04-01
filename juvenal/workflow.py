@@ -735,8 +735,18 @@ def _load_role_prompt(role: str) -> str:
 
 
 VALID_PHASE_TYPES = {"implement", "check", "script", "workflow"}
-VALID_ROLES = {"tester", "architect", "pm", "senior-tester", "senior-engineer", "security-engineer"}
-VALID_IMPLEMENTER_ROLES = {"software-engineer"}
+VALID_ROLES = {
+    "tester",
+    "architect",
+    "pm",
+    "senior-tester",
+    "senior-engineer",
+    "security-engineer",
+    "technical-writer",
+    "professor",
+    "grant-reviewer",
+}
+VALID_IMPLEMENTER_ROLES = {"software-engineer", "professor-writer"}
 
 
 def parse_checker_string(spec: str) -> dict | str:

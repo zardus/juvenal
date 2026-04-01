@@ -137,7 +137,7 @@ Static sub-workflows skip the LLM planning step. Paths resolve relative to the d
 
 Checks are defined inline on implement phases. Each entry can be:
 
-- **Bare string** — built-in role shorthand: `tester`, `architect`, `pm`, `senior-tester`, `senior-engineer`
+- **Bare string** — built-in role shorthand: `tester`, `architect`, `pm`, `senior-tester`, `senior-engineer`, `security-engineer`, `technical-writer`, `professor`, `grant-reviewer`
 - **`run: CMD`** — script checker (exit 0 = pass)
 - **`role: NAME`** — agent checker with built-in role
 - **`prompt: TEXT`** — agent checker with inline prompt
@@ -244,7 +244,7 @@ juvenal validate <workflow>
 ### Key flags
 
 - **`--checker SPEC`**: Inject a checker on every implement phase. SPEC is a role name (`tester`), `run:CMD`, or `prompt:TEXT`. Repeatable.
-- **`--implementer ROLE`**: Prepend an implementer role prompt to every implement phase (e.g., `software-engineer`).
+- **`--implementer ROLE`**: Prepend an implementer role prompt to every implement phase (e.g., `software-engineer`, `professor-writer`).
 - **`--clear-context-on-bounce`**: Start a fresh agent session on bounce instead of resuming (default: resume session, preserving conversation context).
 - **`-D VAR=VAL`**: Set a template variable. Use `{{VAR}}` in prompts/scripts. Repeatable. Overrides `vars:` defaults in YAML. Multiple values for the same key (`-D T=a -D T=b`) duplicate phases into parallel lanes.
 - **`--serialize`**: Disable all parallelization (run parallel groups and lanes sequentially).

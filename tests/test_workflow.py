@@ -563,6 +563,15 @@ class TestInjectImplementer:
         assert result.phases[0].prompt.endswith("Build the feature.")
         assert "expert software engineer" in result.phases[0].prompt
 
+    def test_prepends_professor_writer_prompt(self):
+        wf = Workflow(
+            name="test",
+            phases=[Phase(id="build", type="implement", prompt="Write the paper.")],
+        )
+        result = inject_implementer(wf, "professor-writer")
+        assert result.phases[0].prompt.endswith("Write the paper.")
+        assert "expert professor-level writer for grants and scientific papers" in result.phases[0].prompt
+
     def test_only_affects_implement_phases(self):
         """Non-implement phases are left untouched."""
         wf = Workflow(
@@ -685,6 +694,15 @@ class TestParseCheckerString:
     def test_role_security_engineer(self):
         assert parse_checker_string("security-engineer") == "security-engineer"
 
+    def test_role_technical_writer(self):
+        assert parse_checker_string("technical-writer") == "technical-writer"
+
+    def test_role_professor(self):
+        assert parse_checker_string("professor") == "professor"
+
+    def test_role_grant_reviewer(self):
+        assert parse_checker_string("grant-reviewer") == "grant-reviewer"
+
     def test_role_senior(self):
         assert parse_checker_string("senior-tester") == "senior-tester"
 
@@ -732,6 +750,18 @@ class TestInjectCheckers:
         assert result.phases[1].id == "build~check-1"
         assert result.phases[1].type == "check"
         assert result.phases[1].role == "security-engineer"
+        assert result.phases[1].bounce_target == "build"
+
+    def test_single_implement_professor_checker(self):
+        wf = Workflow(
+            name="test",
+            phases=[Phase(id="build", type="implement", prompt="Build it.")],
+        )
+        result = inject_checkers(wf, ["professor"])
+        assert len(result.phases) == 2
+        assert result.phases[1].id == "build~check-1"
+        assert result.phases[1].type == "check"
+        assert result.phases[1].role == "professor"
         assert result.phases[1].bounce_target == "build"
 
     def test_single_implement_script_checker(self):
@@ -1410,6 +1440,30 @@ class TestLoadRolePrompt:
         assert "Input handling and trust boundaries" in prompt
         assert "SSRF" in prompt
         assert "Software Tester REVIEWING" not in prompt
+
+    def test_technical_writer_role(self):
+        from juvenal.workflow import _load_role_prompt
+
+        prompt = _load_role_prompt("technical-writer")
+        assert "Technical Writer REVIEWING" in prompt
+        assert "Technical correctness" in prompt
+        assert "Framing and flow" in prompt
+
+    def test_professor_role(self):
+        from juvenal.workflow import _load_role_prompt
+
+        prompt = _load_role_prompt("professor")
+        assert "Professor REVIEWING" in prompt
+        assert "Experimental design" in prompt
+        assert "Scientific rigor" in prompt
+
+    def test_grant_reviewer_role(self):
+        from juvenal.workflow import _load_role_prompt
+
+        prompt = _load_role_prompt("grant-reviewer")
+        assert "Grant Reviewer REVIEWING" in prompt
+        assert "Problem significance" in prompt
+        assert "fundability" in prompt
 
     def test_invalid_role_raises(self):
         from juvenal.workflow import _load_role_prompt

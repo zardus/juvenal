@@ -84,7 +84,7 @@ phases/
 
 ## Built-in Roles
 
-Agent checkers can use built-in roles: `tester`, `architect`, `pm`, `senior-tester`, `senior-engineer`
+Agent checkers can use built-in roles: `tester`, `architect`, `pm`, `senior-tester`, `senior-engineer`, `security-engineer`, `technical-writer`, `professor`, `grant-reviewer`
 
 ## CLI Commands
 
