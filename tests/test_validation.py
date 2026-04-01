@@ -477,6 +477,16 @@ class TestTemplateVarValidation:
         errors = validate_workflow(wf)
         assert any("Jinja2 render error in prompt for phase 'build'" in e for e in errors)
 
+    def test_validate_workflow_reports_render_error_for_check_prompt_with_role(self):
+        wf = Workflow(
+            name="test",
+            phases=[
+                Phase(id="review", type="check", role="tester", prompt="{{ 1 / 0 }}"),
+            ],
+        )
+        errors = validate_workflow(wf)
+        assert any("Jinja2 render error in checker prompt for phase 'review'" in e for e in errors)
+
     def test_expand_multi_vars_preserves_filtered_var_name_for_validation(self):
         wf = Workflow(
             name="test",
@@ -687,6 +697,27 @@ phases:
         assert result == 1
         captured = capsys.readouterr()
         assert "Jinja2 render error in prompt for phase 'build'" in captured.out
+        assert "Traceback" not in captured.out
+
+    def test_validate_check_prompt_with_role_jinja_render_error_clean_error(self, tmp_path, capsys):
+        """Role-backed check prompts still surface render-time Jinja errors during validation."""
+        yaml_content = """\
+name: bad
+phases:
+  - id: review
+    type: check
+    role: tester
+    prompt: "{{ 1 / 0 }}"
+"""
+        yaml_path = tmp_path / "bad-check-jinja-runtime.yaml"
+        yaml_path.write_text(yaml_content)
+        parser = build_parser()
+        args = parser.parse_args(["validate", str(yaml_path)])
+        args.plain = True
+        result = cmd_validate(args)
+        assert result == 1
+        captured = capsys.readouterr()
+        assert "Jinja2 render error in checker prompt for phase 'review'" in captured.out
         assert "Traceback" not in captured.out
 
     def test_validate_nested_lookup_missing_clean_error(self, tmp_path, capsys):
