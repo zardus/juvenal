@@ -216,6 +216,12 @@ class TestArgumentParsing:
         args = parser.parse_args(["run", "workflow.yaml"])
         assert args.implementer == []
 
+    def test_parse_implementer_strips_wrapping_quotes(self):
+        from juvenal.cli import _parse_implementer
+
+        assert _parse_implementer('software-engineer:"do X"') == ("software-engineer", "do X")
+        assert _parse_implementer("software-engineer:'do Y'") == ("software-engineer", "do Y")
+
     def test_plan_implementer(self):
         parser = build_parser()
         args = parser.parse_args(["plan", "build an API", "--implementer", "software-engineer"])
@@ -569,6 +575,44 @@ phases:
         assert workflow.phases[1].role == "tester"
         assert workflow.phases[1].prompt == "Focus on API error handling."
         assert workflow.phases[1].bounce_target == "build"
+
+    def test_plan_quoted_specialized_role_checker_writes_checks_and_loads(self, monkeypatch, tmp_path):
+        """Quoted checker specializations are normalized before they reach workflow YAML."""
+        import yaml
+
+        import juvenal.engine
+        from juvenal.workflow import load_workflow
+
+        def mock_plan_workflow(goal, output, backend, plain=False, interactive=False, resume=False):
+            with open(output, "w") as f:
+                f.write(
+                    """\
+name: test
+phases:
+  - id: build
+    prompt: "Build it."
+""",
+                )
+
+        monkeypatch.setattr(juvenal.engine, "plan_workflow", mock_plan_workflow)
+
+        output_path = tmp_path / "workflow.yaml"
+        parser = build_parser()
+        args = parser.parse_args(
+            ["plan", "build something", "-o", str(output_path), "--checker", 'tester:"Focus on API error handling."']
+        )
+        args.plain = True
+
+        assert cmd_plan(args) == 0
+
+        data = yaml.safe_load(output_path.read_text())
+        phase = data["phases"][0]
+        assert phase["checks"] == [{"role": "tester", "prompt": "Focus on API error handling."}]
+
+        workflow = load_workflow(output_path)
+        assert [p.id for p in workflow.phases] == ["build", "build~check-1"]
+        assert workflow.phases[1].role == "tester"
+        assert workflow.phases[1].prompt == "Focus on API error handling."
 
     def test_status_subprocess_exit_1_on_failure(self, tmp_path):
         """Failed pipeline exits 1 as a real process."""

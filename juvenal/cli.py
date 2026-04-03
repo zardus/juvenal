@@ -6,6 +6,7 @@ import sys
 from juvenal import __version__
 
 STANDARD_CHECKERS = ["tester", "senior-tester", "senior-engineer", "architect", "pm"]
+CHECKER_HELP = 'Inject checker on every implement phase: ROLE, ROLE:"extra instructions", or prompt:"TEXT"'
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -32,7 +33,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--backoff", type=float, default=None, help="Base backoff delay in seconds between bounces (exponential)"
     )
     run_p.add_argument("--notify", action="append", default=[], help="Webhook URL for completion/failure notifications")
-    run_p.add_argument("--checker", action="append", default=[], help="Inject checker on every implement phase")
+    run_p.add_argument("--checker", action="append", default=[], help=CHECKER_HELP)
     run_p.add_argument(
         "--standard-checkers",
         action="store_true",
@@ -64,7 +65,7 @@ def build_parser() -> argparse.ArgumentParser:
     plan_p.add_argument("goal", help="Goal description")
     plan_p.add_argument("-o", "--output", default="workflow.yaml", help="Output file (default: workflow.yaml)")
     plan_p.add_argument("--backend", choices=["claude", "codex"], default="codex", help="AI backend to use")
-    plan_p.add_argument("--checker", action="append", default=[], help="Inject checker on every implement phase")
+    plan_p.add_argument("--checker", action="append", default=[], help=CHECKER_HELP)
     plan_p.add_argument(
         "--standard-checkers",
         action="store_true",
@@ -81,7 +82,7 @@ def build_parser() -> argparse.ArgumentParser:
     do_p.add_argument("goal", help="Goal description")
     do_p.add_argument("--backend", choices=["claude", "codex"], default="codex", help="AI backend to use")
     do_p.add_argument("--max-bounces", type=int, default=999, help="Max bounces across all phases (default: 999)")
-    do_p.add_argument("--checker", action="append", default=[], help="Inject checker on every implement phase")
+    do_p.add_argument("--checker", action="append", default=[], help=CHECKER_HELP)
     do_p.add_argument(
         "--standard-checkers",
         action="store_true",
@@ -123,7 +124,7 @@ def build_parser() -> argparse.ArgumentParser:
     validate_p.add_argument("--working-dir")
     validate_p.add_argument("--backoff", type=float, default=None)
     validate_p.add_argument("--notify", action="append", default=[])
-    validate_p.add_argument("--checker", action="append", default=[])
+    validate_p.add_argument("--checker", action="append", default=[], help=CHECKER_HELP)
     validate_p.add_argument("--standard-checkers", action="store_true")
     validate_p.add_argument("--implementer")
     validate_p.add_argument("-D", action="append", default=[], metavar="VAR=VAL", dest="defines")
@@ -193,10 +194,9 @@ def _parse_implementer(spec: str) -> tuple[str, str | None]:
 
     Accepts either 'role' or 'role:prompt text'.
     """
-    if ":" in spec:
-        role, prompt = spec.split(":", 1)
-        return role, prompt
-    return spec, None
+    from juvenal.workflow import split_specialized_role
+
+    return split_specialized_role(spec)
 
 
 def _expand_standard_checkers(args: argparse.Namespace) -> None:

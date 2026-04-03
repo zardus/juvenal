@@ -718,8 +718,17 @@ class TestParseCheckerString:
     def test_prompt(self):
         assert parse_checker_string("prompt:Verify the API") == {"prompt": "Verify the API"}
 
+    def test_prompt_strips_wrapping_quotes(self):
+        assert parse_checker_string('prompt:"Verify the API"') == {"prompt": "Verify the API"}
+
     def test_specialized_role(self):
         assert parse_checker_string("tester:Focus on API error handling.") == {
+            "role": "tester",
+            "prompt": "Focus on API error handling.",
+        }
+
+    def test_specialized_role_strips_wrapping_quotes(self):
+        assert parse_checker_string('tester:"Focus on API error handling."') == {
             "role": "tester",
             "prompt": "Focus on API error handling.",
         }

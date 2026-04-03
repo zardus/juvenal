@@ -912,6 +912,21 @@ VALID_ROLES = {
 VALID_IMPLEMENTER_ROLES = {"software-engineer", "professor-writer"}
 
 
+def _strip_wrapping_quotes(text: str) -> str:
+    """Drop a single matching pair of outer quotes from a specialization prompt."""
+    if len(text) >= 2 and text[0] == text[-1] and text[0] in {"'", '"'}:
+        return text[1:-1]
+    return text
+
+
+def split_specialized_role(spec: str) -> tuple[str, str | None]:
+    """Split ROLE:TEXT shorthand, normalizing a wrapped quoted TEXT payload."""
+    if ":" not in spec:
+        return spec, None
+    role, prompt = spec.split(":", 1)
+    return role, _strip_wrapping_quotes(prompt)
+
+
 def parse_checker_string(spec: str) -> dict | str:
     """Parse a --checker CLI value into the format _expand_checkers expects.
 
@@ -923,13 +938,12 @@ def parse_checker_string(spec: str) -> dict | str:
     if spec.startswith("run:"):
         raise ValueError(f"Invalid --checker spec {spec!r}: 'run:' is no longer supported; use 'prompt:TEXT' instead")
     if spec.startswith("prompt:"):
-        return {"prompt": spec[7:]}
+        return {"prompt": _strip_wrapping_quotes(spec[7:])}
     if spec in VALID_ROLES:
         return spec
-    if ":" in spec:
-        role, prompt = spec.split(":", 1)
-        if role in VALID_ROLES:
-            return {"role": role, "prompt": prompt}
+    role, prompt = split_specialized_role(spec)
+    if prompt is not None and role in VALID_ROLES:
+        return {"role": role, "prompt": prompt}
     raise ValueError(
         f"Invalid --checker spec {spec!r}: must be a valid role ({sorted(VALID_ROLES)}), "
         "'ROLE:TEXT', or 'prompt:TEXT'"
