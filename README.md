@@ -235,6 +235,7 @@ Checkers can also carry `timeout` and `env`.
 
 Agent checkers can use built-in verification personas:
 
+- `always-fail` — deliberately emits `VERDICT: FAIL: keep going` to force another implementation pass
 - `tester` — runs tests, checks for build errors
 - `architect` — validates design, checks for circular dependencies
 - `pm` — confirms requirements are met, no TODOs remain
