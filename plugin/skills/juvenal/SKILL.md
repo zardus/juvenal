@@ -72,6 +72,7 @@ phases/
 ## Checker Types
 
 - **role / prompt**: AI agent that must emit `VERDICT: PASS` or `VERDICT: FAIL: reason`
+- A role checker can also carry extra instructions, for example `tester:Focus on API error handling.`
 - If a checker needs to run a command, spell that command out in the prompt.
 
 ## Built-in Roles

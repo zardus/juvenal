@@ -718,6 +718,12 @@ class TestParseCheckerString:
     def test_prompt(self):
         assert parse_checker_string("prompt:Verify the API") == {"prompt": "Verify the API"}
 
+    def test_specialized_role(self):
+        assert parse_checker_string("tester:Focus on API error handling.") == {
+            "role": "tester",
+            "prompt": "Focus on API error handling.",
+        }
+
     def test_invalid_spec(self):
         with pytest.raises(ValueError, match="Invalid --checker spec"):
             parse_checker_string("not-a-valid-thing")
@@ -802,6 +808,19 @@ class TestInjectCheckers:
         assert result.phases[1].id == "build~check-1"
         assert result.phases[1].type == "check"
         assert result.phases[1].prompt == "Verify the API"
+
+    def test_single_implement_specialized_role_checker(self):
+        """Inject a role checker with extra instructions onto a single implement phase."""
+        wf = Workflow(
+            name="test",
+            phases=[Phase(id="build", type="implement", prompt="Build it.")],
+        )
+        result = inject_checkers(wf, ["tester:Focus on API error handling."])
+        assert len(result.phases) == 2
+        assert result.phases[1].id == "build~check-1"
+        assert result.phases[1].type == "check"
+        assert result.phases[1].role == "tester"
+        assert result.phases[1].prompt == "Focus on API error handling."
 
     def test_with_existing_inline_checkers(self):
         """Injected checkers get offset numbering to avoid ID collisions."""
@@ -1101,6 +1120,13 @@ class TestTemplateVars:
         phase = Phase(id="check", type="check", prompt="Verify {{COMPONENT}}.")
         result = phase.render_check_prompt(vars={"COMPONENT": "auth"})
         assert result == "Verify auth."
+
+    def test_render_check_prompt_with_role_and_specialization(self):
+        phase = Phase(id="check", type="check", role="tester", prompt="Focus on API error handling.")
+        result = phase.render_check_prompt()
+        assert "Software Tester REVIEWING" in result
+        assert result.endswith("Focus on API error handling.")
+        assert result.find("Software Tester REVIEWING") < result.find("Focus on API error handling.")
 
     def test_render_prompt_none_vars(self):
         phase = Phase(id="build", prompt="Build {{PROJECT}}.")
@@ -1533,6 +1559,21 @@ phases:
         (tmp_path / "workflow.yaml").write_text(yaml_content)
         wf = load_workflow(tmp_path / "workflow.yaml")
         assert wf.phases[1].prompt == "Verify the build."
+
+    def test_checks_with_role_and_inline_prompt(self, tmp_path):
+        yaml_content = """\
+name: test
+phases:
+  - id: build
+    prompt: "Build it."
+    checks:
+      - role: tester
+        prompt: "Focus on API error handling."
+"""
+        (tmp_path / "workflow.yaml").write_text(yaml_content)
+        wf = load_workflow(tmp_path / "workflow.yaml")
+        assert wf.phases[1].role == "tester"
+        assert wf.phases[1].prompt == "Focus on API error handling."
 
     def test_checks_with_run_rejected(self, tmp_path):
         yaml_content = """\

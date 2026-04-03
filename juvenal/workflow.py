@@ -356,10 +356,10 @@ class Phase:
     def render_check_prompt(self, vars: dict[str, str] | None = None) -> str:
         """Render the checker prompt for check phases."""
         parts: list[str] = []
-        if self.prompt:
-            parts.append(self._render_text(self.prompt, vars))
         if self.role:
             parts.append(_load_role_prompt(self.role))
+        if self.prompt:
+            parts.append(self._render_text(self.prompt, vars))
         return "\n\n".join(part for part in parts if part)
 
 
@@ -831,12 +831,16 @@ def _expand_checkers(
                     raise ValueError(
                         f"Phase {parent_id!r}: checkers entry {i}: unknown role {role!r} (valid: {sorted(VALID_ROLES)})"
                     )
+                prompt = entry.get("prompt", "")
+                if not prompt and entry.get("prompt_file"):
+                    prompt = (base_path / entry["prompt_file"]).read_text()
                 check_n += 1
                 result.append(
                     Phase(
                         id=f"{parent_id}~check-{check_n}",
                         type="check",
                         role=role,
+                        prompt=prompt,
                         bounce_target=parent_id,
                         timeout=timeout,
                         env=env,
@@ -912,16 +916,24 @@ def parse_checker_string(spec: str) -> dict | str:
     """Parse a --checker CLI value into the format _expand_checkers expects.
 
     - Bare string matching VALID_ROLES -> role shorthand (str)
+    - "ROLE:TEXT" -> {"role": ROLE, "prompt": TEXT}
     - "prompt:TEXT" -> {"prompt": TEXT}
     - Anything else -> ValueError
     """
-    if spec in VALID_ROLES:
-        return spec
     if spec.startswith("run:"):
         raise ValueError(f"Invalid --checker spec {spec!r}: 'run:' is no longer supported; use 'prompt:TEXT' instead")
     if spec.startswith("prompt:"):
         return {"prompt": spec[7:]}
-    raise ValueError(f"Invalid --checker spec {spec!r}: must be a valid role ({sorted(VALID_ROLES)}) or 'prompt:TEXT'")
+    if spec in VALID_ROLES:
+        return spec
+    if ":" in spec:
+        role, prompt = spec.split(":", 1)
+        if role in VALID_ROLES:
+            return {"role": role, "prompt": prompt}
+    raise ValueError(
+        f"Invalid --checker spec {spec!r}: must be a valid role ({sorted(VALID_ROLES)}), "
+        "'ROLE:TEXT', or 'prompt:TEXT'"
+    )
 
 
 def inject_checkers(workflow: Workflow, checker_specs: list[str]) -> Workflow:

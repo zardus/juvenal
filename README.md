@@ -207,6 +207,7 @@ Checks are defined inline on implement phases. Each entry can be:
 
 - **Bare string** — built-in role shorthand
 - **`role: NAME`** — agent checker with built-in role
+- **`role: NAME` + `prompt: TEXT`** — built-in role plus extra checker instructions
 - **`prompt: TEXT`** — agent checker with inline prompt
 - **`prompt_file: PATH`** — agent checker with prompt from file
 
@@ -221,6 +222,7 @@ Checkers can also carry `timeout` and `env`.
         Emit `VERDICT: FAIL: <reason>` on failure, otherwise emit `VERDICT: PASS`.
     - tester
     - role: senior-engineer
+      prompt: "Focus on migration safety and rollback behavior."
     - prompt: "Check for security vulnerabilities."
     - prompt_file: checkers/review.md
     - prompt: "Run `npm run lint` and emit `VERDICT: PASS` only if it succeeds."
@@ -363,7 +365,7 @@ juvenal validate <workflow>
 | `--rewind-to ID` | Rewind to a specific phase by ID |
 | `--phase ID` | Start from a specific phase |
 | `--dry-run` | Print execution plan without running |
-| `--checker SPEC` | Inject checker on every implement phase (role or `prompt:TEXT`). Repeatable. |
+| `--checker SPEC` | Inject checker on every implement phase (`tester`, `tester:extra instructions`, or `prompt:TEXT`). Repeatable. |
 | `--implementer ROLE` | Prepend implementer role prompt to every implement phase |
 | `--clear-context-on-bounce` | Start fresh agent session on bounce (default: resume session) |
 | `-D VAR=VAL` | Set a Jinja2 template variable. Repeatable. |
@@ -396,6 +398,9 @@ juvenal run workflow.yaml --checker tester
 
 # Add a checker with explicit instructions
 juvenal run workflow.yaml --checker "prompt:Run pytest tests/ -x and emit VERDICT based on the result."
+
+# Add a built-in checker role with extra instructions
+juvenal run workflow.yaml --checker "tester:Focus on API error handling and regression coverage."
 
 # Add both
 juvenal run workflow.yaml --checker tester --checker "prompt:Run make lint and emit VERDICT based on the result."

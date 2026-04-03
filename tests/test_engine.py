@@ -1066,6 +1066,24 @@ class TestCheckersShorthandEngine:
         engine = self._make_engine(workflow, backend, tmp_path)
         assert engine.run() == 0
 
+    def test_injected_specialized_checker_prompt_reaches_backend(self, tmp_path):
+        """Injected checker specializations are appended after the role prompt."""
+        backend = MockBackend()
+        backend.add_response(exit_code=0, output="built it")  # implement
+        backend.add_response(exit_code=0, output="VERDICT: PASS")  # injected check
+        workflow = Workflow(
+            name="test",
+            phases=[Phase(id="build", type="implement", prompt="Build it.")],
+            max_bounces=3,
+        )
+        workflow = inject_checkers(workflow, ["tester:Focus on API error handling."])
+        engine = self._make_engine(workflow, backend, tmp_path)
+        assert engine.run() == 0
+        checker_prompt = backend.calls[1]
+        assert "Software Tester REVIEWING" in checker_prompt
+        assert "Focus on API error handling." in checker_prompt
+        assert checker_prompt.find("Software Tester REVIEWING") < checker_prompt.find("Focus on API error handling.")
+
     def test_injected_checker_bounce(self, tmp_path):
         """Engine run with inject_checkers: checker fails, bounces, then passes."""
         backend = MockBackend()

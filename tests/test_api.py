@@ -282,6 +282,19 @@ def test_do_single_step_run_records_history_and_state(tmp_path):
         assert do_state_files[0].exists()
 
 
+def test_do_specialized_checker_reaches_backend(tmp_path):
+    backend = MockBackend()
+    backend.add_response(exit_code=0, output="implemented")
+    backend.add_response(exit_code=0, output="VERDICT: PASS")
+
+    with goal("Ship the API", working_dir=tmp_path, backend=backend):
+        do("Implement the API", checker="tester:Focus on API error handling.")
+
+        checker_prompt = backend.calls[1]
+        assert "Software Tester REVIEWING" in checker_prompt
+        assert "Focus on API error handling." in checker_prompt
+
+
 def test_do_multi_step_run_uses_completed_steps_context_and_records_each_step(tmp_path):
     backend = MockBackend()
     backend.add_response(exit_code=0, output="first done")
