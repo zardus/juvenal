@@ -1528,6 +1528,7 @@ class TestLoadRolePrompt:
         prompt = _load_role_prompt("always-fail")
         assert "Always Fail Checker" in prompt
         assert "VERDICT: FAIL: keep going" in prompt
+        assert "`VERDICT: FAIL: keep going`" not in prompt
         assert "nothing else" in prompt
 
     def test_llm_writing_role(self):

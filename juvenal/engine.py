@@ -22,6 +22,7 @@ from juvenal.state import PhaseState, PipelineState
 from juvenal.workflow import ParallelGroup, Phase, Workflow
 
 _BASH_CODE_BLOCK_RE = re.compile(r"```bash\n(.*?)\n```", re.DOTALL)
+_sleep = time.sleep
 
 
 @dataclass
@@ -867,7 +868,7 @@ class Engine:
             return
         delay = min(base * (2 ** (bounces - 1)), self.workflow.max_backoff)
         self.display.backoff_wait(delay)
-        time.sleep(delay)
+        _sleep(delay)
 
     def _get_git_head(self) -> str | None:
         """Get the current git HEAD SHA, or None if not in a git repo."""

@@ -289,11 +289,10 @@ class TestExponentialBackoff:
         engine = Engine(workflow, state_file=str(tmp_path / "state.json"), plain=True)
         engine.backend = backend
 
-        with patch("juvenal.engine.time.sleep") as mock_sleep:
+        with patch("juvenal.engine._sleep") as mock_sleep:
             engine.run()
-            delays = [call[0][0] for call in mock_sleep.call_args_list if call[0][0] >= 0.5]
-            assert len(delays) >= 1
-            assert delays[0] == pytest.approx(1.0)
+            delays = [call[0][0] for call in mock_sleep.call_args_list]
+            assert delays == [pytest.approx(1.0)]
 
     def test_backoff_exponential_growth(self, tmp_path):
         """Backoff delay grows exponentially: base * 2^(n-1)."""
@@ -320,18 +319,10 @@ class TestExponentialBackoff:
         engine = Engine(workflow, state_file=str(tmp_path / "state.json"), plain=True)
         engine.backend = backend
 
-        with patch("juvenal.engine.time.sleep") as mock_sleep:
+        with patch("juvenal.engine._sleep") as mock_sleep:
             engine.run()
-            # Filter for backoff-sized sleeps (>= 0.5s), ignoring tiny spinner sleeps
-            delays = [call[0][0] for call in mock_sleep.call_args_list if call[0][0] >= 0.5]
-            # bounce 1: 1.0 * 2^0 = 1.0
-            # bounce 2: 1.0 * 2^1 = 2.0
-            # bounce 3: 1.0 * 2^2 = 4.0
-            # bounce 4: exhausted (no backoff)
-            assert len(delays) == 3
-            assert delays[0] == pytest.approx(1.0)
-            assert delays[1] == pytest.approx(2.0)
-            assert delays[2] == pytest.approx(4.0)
+            delays = [call[0][0] for call in mock_sleep.call_args_list]
+            assert delays == [pytest.approx(1.0), pytest.approx(2.0), pytest.approx(4.0)]
 
     def test_backoff_capped_at_max(self, tmp_path):
         """Backoff delay is capped at max_backoff."""
@@ -353,7 +344,7 @@ class TestExponentialBackoff:
         engine = Engine(workflow, state_file=str(tmp_path / "state.json"), plain=True)
         engine.backend = backend
 
-        with patch("juvenal.engine.time.sleep") as mock_sleep:
+        with patch("juvenal.engine._sleep") as mock_sleep:
             engine.run()
             for call in mock_sleep.call_args_list:
                 assert call[0][0] <= 5.0
@@ -375,10 +366,9 @@ class TestExponentialBackoff:
         engine = Engine(workflow, state_file=str(tmp_path / "state.json"), plain=True)
         engine.backend = backend
 
-        with patch("juvenal.engine.time.sleep") as mock_sleep:
+        with patch("juvenal.engine._sleep") as mock_sleep:
             engine.run()
-            delays = [call[0][0] for call in mock_sleep.call_args_list if call[0][0] >= 0.5]
-            assert delays == []
+            mock_sleep.assert_not_called()
 
     def test_validation_rejects_negative_backoff(self):
         """Validation catches negative backoff."""
