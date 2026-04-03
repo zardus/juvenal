@@ -945,8 +945,7 @@ def parse_checker_string(spec: str) -> dict | str:
     if prompt is not None and role in VALID_ROLES:
         return {"role": role, "prompt": prompt}
     raise ValueError(
-        f"Invalid --checker spec {spec!r}: must be a valid role ({sorted(VALID_ROLES)}), "
-        "'ROLE:TEXT', or 'prompt:TEXT'"
+        f"Invalid --checker spec {spec!r}: must be a valid role ({sorted(VALID_ROLES)}), 'ROLE:TEXT', or 'prompt:TEXT'"
     )
 
 
