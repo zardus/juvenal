@@ -14,7 +14,6 @@ Write a self-contained `workflow.yaml` file in the current working directory.
 
 Phase types:
 - `implement` (default when `type` is omitted): runs an AI agent to do work
-- `script`: runs a shell command; exit 0 = pass, nonzero = fail
 - `check`: runs an AI agent that must emit `VERDICT: PASS` or `VERDICT: FAIL: <reason>`
 
 Generated-workflow rules:
@@ -22,7 +21,7 @@ Generated-workflow rules:
 - no `parallel_groups`
 - no phase-level `prompt_file`, `workflow_file`, `workflow_dir`, or `checks`
 - no agent-guided `bounce_targets` lists
-- every verifier must be an explicit top-level `script` or `check` phase from `.plan/workflow-structure.yaml`
+- every verifier must be an explicit top-level `check` phase from `.plan/workflow-structure.yaml`
 - verifiers must remain in structure order immediately after the implement block they verify
 - use only the fixed `bounce_target` values from `.plan/workflow-structure.yaml`
 - do not invent, rename, or reorder phase IDs
@@ -37,9 +36,7 @@ For every implement phase prompt:
 For every check phase prompt:
 - state the reviewer role at the top
 - list the specific things to verify
+- if the checker should run tests, lint, build, or any other command, spell those commands out in the prompt
 - end with an exact verdict instruction: `VERDICT: PASS` or `VERDICT: FAIL: <reason>`
-
-For every script phase:
-- inline the `run` command directly in the YAML
 
 Write ONLY `workflow.yaml`. Do not write any other files.

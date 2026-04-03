@@ -7,8 +7,8 @@ phases:
   - id: implement
     prompt_file: phases/01-implement/prompt.md
   - id: test
-    type: script
-    run: "echo 'Add your test command here'"
+    type: check
+    prompt_file: phases/01-implement/check-tests.md
   - id: review
     type: check
     role: tester

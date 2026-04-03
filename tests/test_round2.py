@@ -13,7 +13,7 @@ from juvenal.backends import AgentResult, _extract_claude_tokens, _extract_codex
 from juvenal.engine import Engine
 from juvenal.notifications import build_notification_payload, send_webhook
 from juvenal.state import PipelineState
-from juvenal.workflow import ParallelGroup, Phase, Workflow, load_workflow, validate_workflow
+from juvenal.workflow import ParallelGroup, Phase, Workflow, load_workflow, make_command_check_prompt, validate_workflow
 from tests.conftest import MockBackend
 
 # ─── Feature 1: Workflow Includes ───────────────────────────────────────────
@@ -195,7 +195,7 @@ class TestCostTracking:
             name="test",
             phases=[
                 Phase(id="setup", type="implement", prompt="Do it."),
-                Phase(id="setup-check", type="script", run="true"),
+                Phase(id="setup-check", type="check", prompt=make_command_check_prompt("true")),
             ],
             max_bounces=3,
         )
@@ -232,7 +232,7 @@ class TestCostTracking:
             name="test",
             phases=[
                 Phase(id="setup", type="implement", prompt="Do it."),
-                Phase(id="setup-check", type="script", run="true"),
+                Phase(id="setup-check", type="check", prompt=make_command_check_prompt("true")),
             ],
             max_bounces=3,
         )
@@ -273,14 +273,14 @@ class TestExponentialBackoff:
         """Engine sleeps with exponential backoff between bounces."""
         backend = MockBackend()
         backend.add_response(exit_code=0, output="done")  # implement
-        # Script fails -> bounce
+        backend.add_response(exit_code=0, output="VERDICT: FAIL: tests failed")  # check fails -> bounce
         backend.add_response(exit_code=0, output="done")  # implement retry
-        # Script fails again -> exhausted
+        backend.add_response(exit_code=0, output="VERDICT: FAIL: still failing")  # check fails -> exhausted
         workflow = Workflow(
             name="test",
             phases=[
                 Phase(id="setup", type="implement", prompt="Do it."),
-                Phase(id="setup-check", type="script", run="false"),
+                Phase(id="setup-check", type="check", prompt=make_command_check_prompt("false")),
             ],
             max_bounces=2,
             backoff=1.0,
@@ -300,18 +300,18 @@ class TestExponentialBackoff:
         backend = MockBackend()
         # 4 bounces: backoff on 1, 2, 3 then exhausted on 4
         backend.add_response(exit_code=0, output="done")  # implement
-        # fail -> bounce 1
+        backend.add_response(exit_code=0, output="VERDICT: FAIL: bounce 1")
         backend.add_response(exit_code=0, output="done")  # implement
-        # fail -> bounce 2
+        backend.add_response(exit_code=0, output="VERDICT: FAIL: bounce 2")
         backend.add_response(exit_code=0, output="done")  # implement
-        # fail -> bounce 3
+        backend.add_response(exit_code=0, output="VERDICT: FAIL: bounce 3")
         backend.add_response(exit_code=0, output="done")  # implement
-        # fail -> bounce 4 -> exhausted
+        backend.add_response(exit_code=0, output="VERDICT: FAIL: bounce 4")
         workflow = Workflow(
             name="test",
             phases=[
                 Phase(id="setup", type="implement", prompt="Do it."),
-                Phase(id="setup-check", type="script", run="false"),
+                Phase(id="setup-check", type="check", prompt=make_command_check_prompt("false")),
             ],
             max_bounces=4,
             backoff=1.0,
@@ -337,12 +337,14 @@ class TestExponentialBackoff:
         """Backoff delay is capped at max_backoff."""
         backend = MockBackend()
         backend.add_response(exit_code=0, output="done")
+        backend.add_response(exit_code=0, output="VERDICT: FAIL: bounce")
         backend.add_response(exit_code=0, output="done")
+        backend.add_response(exit_code=0, output="VERDICT: FAIL: bounce again")
         workflow = Workflow(
             name="test",
             phases=[
                 Phase(id="setup", type="implement", prompt="Do it."),
-                Phase(id="setup-check", type="script", run="false"),
+                Phase(id="setup-check", type="check", prompt=make_command_check_prompt("false")),
             ],
             max_bounces=2,
             backoff=10.0,
@@ -360,11 +362,12 @@ class TestExponentialBackoff:
         """No sleep when backoff is 0 (default)."""
         backend = MockBackend()
         backend.add_response(exit_code=0, output="done")
+        backend.add_response(exit_code=0, output="VERDICT: FAIL: bounce")
         workflow = Workflow(
             name="test",
             phases=[
                 Phase(id="setup", type="implement", prompt="Do it."),
-                Phase(id="setup-check", type="script", run="false"),
+                Phase(id="setup-check", type="check", prompt=make_command_check_prompt("false")),
             ],
             max_bounces=1,
             backoff=0.0,
@@ -513,7 +516,7 @@ phases:
             name="test",
             phases=[
                 Phase(id="setup", type="implement", prompt="Do it."),
-                Phase(id="setup-check", type="script", run="true"),
+                Phase(id="setup-check", type="check", prompt=make_command_check_prompt("true")),
             ],
             max_bounces=3,
             notify=["https://example.com/hook"],
@@ -534,11 +537,12 @@ phases:
         """Engine sends notifications on pipeline failure."""
         backend = MockBackend()
         backend.add_response(exit_code=0, output="done")
+        backend.add_response(exit_code=0, output="VERDICT: FAIL: check failed")
         workflow = Workflow(
             name="test",
             phases=[
                 Phase(id="setup", type="implement", prompt="Do it."),
-                Phase(id="setup-check", type="script", run="false"),
+                Phase(id="setup-check", type="check", prompt=make_command_check_prompt("false")),
             ],
             max_bounces=1,
             notify=["https://example.com/hook"],
@@ -561,7 +565,7 @@ phases:
             name="test",
             phases=[
                 Phase(id="setup", type="implement", prompt="Do it."),
-                Phase(id="setup-check", type="script", run="true"),
+                Phase(id="setup-check", type="check", prompt=make_command_check_prompt("true")),
             ],
             max_bounces=3,
         )
@@ -620,7 +624,7 @@ class TestEnhancedDryRun:
             name="test",
             phases=[
                 Phase(id="setup", type="implement", prompt="Do it."),
-                Phase(id="check", type="script", run="true"),
+                Phase(id="check", type="check", prompt=make_command_check_prompt("true")),
             ],
         )
         engine = Engine(workflow, state_file=str(tmp_path / "state.json"), dry_run=True, plain=True)
@@ -686,7 +690,7 @@ class TestEnhancedDryRun:
             phases=[
                 Phase(id="a", type="implement", prompt="A."),
                 Phase(id="b", type="implement", prompt="B."),
-                Phase(id="c", type="script", run="true"),
+                Phase(id="c", type="check", prompt=make_command_check_prompt("true")),
                 Phase(id="d", type="check", role="tester"),
             ],
         )
@@ -695,8 +699,7 @@ class TestEnhancedDryRun:
         captured = capsys.readouterr()
         assert "Phase summary:" in captured.out
         assert "implement: 2" in captured.out
-        assert "script: 1" in captured.out
-        assert "check: 1" in captured.out
+        assert "check: 2" in captured.out
 
     def test_dry_run_shows_execution_plan(self, tmp_path, capsys):
         """Dry-run shows detailed execution plan."""
@@ -704,7 +707,7 @@ class TestEnhancedDryRun:
             name="test",
             phases=[
                 Phase(id="setup", type="implement", prompt="Set up the project.", timeout=120),
-                Phase(id="build", type="script", run="make build", env={"CC": "gcc"}),
+                Phase(id="build", type="check", prompt=make_command_check_prompt("make build"), env={"CC": "gcc"}),
                 Phase(id="review", type="check", role="tester", bounce_target="setup"),
             ],
         )
@@ -714,7 +717,8 @@ class TestEnhancedDryRun:
         assert "Execution plan:" in captured.out
         assert "[implement] setup" in captured.out
         assert "timeout=120s" in captured.out
-        assert "[script] build: make build" in captured.out
+        assert "[check] build:" in captured.out
+        assert "make build" in captured.out
         assert "[check] review: tester" in captured.out
         assert "bounce->setup" in captured.out
 

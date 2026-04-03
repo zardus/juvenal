@@ -7,7 +7,14 @@ import argparse
 import pytest
 
 from juvenal.cli import build_parser, cmd_validate
-from juvenal.workflow import ParallelGroup, Phase, Workflow, expand_multi_vars, validate_workflow
+from juvenal.workflow import (
+    ParallelGroup,
+    Phase,
+    Workflow,
+    expand_multi_vars,
+    make_command_check_prompt,
+    validate_workflow,
+)
 
 
 class TestValidateWorkflow:
@@ -16,7 +23,7 @@ class TestValidateWorkflow:
             name="test",
             phases=[
                 Phase(id="setup", type="implement", prompt="Set up."),
-                Phase(id="check", type="script", run="true"),
+                Phase(id="check", type="check", prompt=make_command_check_prompt("true")),
             ],
         )
         assert validate_workflow(wf) == []
@@ -100,15 +107,15 @@ class TestValidateWorkflow:
         )
         assert validate_workflow(wf) == []
 
-    def test_script_missing_run(self):
+    def test_check_missing_all_verification_inputs(self):
         wf = Workflow(
             name="test",
             phases=[
-                Phase(id="build", type="script"),
+                Phase(id="build", type="check"),
             ],
         )
         errors = validate_workflow(wf)
-        assert any("no run command" in e for e in errors)
+        assert any("no prompt or role" in e for e in errors)
 
     def test_invalid_role(self):
         wf = Workflow(
@@ -157,12 +164,12 @@ class TestValidateWorkflow:
             name="test",
             phases=[
                 Phase(id="a", type="invalid"),
-                Phase(id="a", type="script"),
+                Phase(id="a", type="check"),
                 Phase(id="b", type="check"),
             ],
         )
         errors = validate_workflow(wf)
-        assert len(errors) >= 3  # invalid type, duplicate ID, missing run, missing prompt/role
+        assert len(errors) >= 3  # invalid type, duplicate ID, missing verification inputs
 
 
 class TestTimeoutField:
@@ -174,8 +181,8 @@ phases:
     prompt: "Build it."
     timeout: 120
   - id: check
-    type: script
-    run: "true"
+    type: check
+    prompt: "Review the build and emit VERDICT."
     timeout: 30
 """
         yaml_path = tmp_path / "workflow.yaml"
@@ -223,13 +230,15 @@ phases:
         phase = Phase(id="test", prompt="Test.")
         assert phase.env == {}
 
-    def test_env_in_script_phase(self, tmp_path):
-        """Script phase with env passes variables to the script."""
-        from juvenal.checkers import run_script
-
-        result = run_script("echo $TEST_VAR", str(tmp_path), env={"TEST_VAR": "hello123"})
-        assert result.exit_code == 0
-        assert "hello123" in result.output
+    def test_env_in_check_phase(self):
+        """Check phases remain valid with env metadata."""
+        phase = Phase(
+            id="review",
+            type="check",
+            prompt=make_command_check_prompt("echo $TEST_VAR"),
+            env={"TEST_VAR": "hello123"},
+        )
+        assert phase.env == {"TEST_VAR": "hello123"}
 
 
 class TestWorkflowPhaseValidation:
@@ -251,16 +260,6 @@ class TestWorkflowPhaseValidation:
         )
         errors = validate_workflow(wf)
         assert any("workflow phase needs prompt, workflow_file, or workflow_dir" in e for e in errors)
-
-    def test_workflow_phase_with_run_is_invalid(self):
-        wf = Workflow(
-            name="test",
-            phases=[
-                Phase(id="dynamic", type="workflow", prompt="Do it.", run="echo hi"),
-            ],
-        )
-        errors = validate_workflow(wf)
-        assert any("must not have 'run'" in e for e in errors)
 
     def test_workflow_phase_with_role_is_invalid(self):
         wf = Workflow(
@@ -360,12 +359,17 @@ class TestTemplateVarValidation:
         errors = validate_workflow(wf)
         assert any("PROJECT" in e and "no value defined" in e for e in errors)
 
-    def test_undefined_var_in_run(self):
+    def test_undefined_var_in_check_prompt(self):
         wf = Workflow(
             name="test",
             phases=[
                 Phase(id="build", type="implement", prompt="Build."),
-                Phase(id="test", type="script", run="pytest {{DIR}}", bounce_target="build"),
+                Phase(
+                    id="test",
+                    type="check",
+                    prompt=make_command_check_prompt("pytest {{DIR}}"),
+                    bounce_target="build",
+                ),
             ],
         )
         errors = validate_workflow(wf)
@@ -465,6 +469,34 @@ class TestTemplateVarValidation:
         errors = validate_workflow(wf)
         assert any("{{missing}}" in e and "no value defined" in e for e in errors)
 
+    def test_unreachable_else_branch_missing_var_is_ignored(self):
+        wf = Workflow(
+            name="test",
+            phases=[Phase(id="build", type="implement", prompt="{% if ok %}A{% else %}{{ missing }}{% endif %}")],
+            vars={"ok": True},
+        )
+        assert validate_workflow(wf) == []
+
+    def test_unreachable_else_branch_missing_nested_var_is_ignored(self):
+        wf = Workflow(
+            name="test",
+            phases=[Phase(id="build", type="implement", prompt="{% if ok %}A{% else %}{{ missing.foo }}{% endif %}")],
+            vars={"ok": True},
+        )
+        assert validate_workflow(wf) == []
+
+    def test_unreachable_else_branch_missing_var_defers_to_render_error(self):
+        wf = Workflow(
+            name="test",
+            phases=[
+                Phase(id="build", type="implement", prompt="{% if ok %}A{% else %}{{ missing }}{% endif %} {{ 1 / 0 }}")
+            ],
+            vars={"ok": True},
+        )
+        errors = validate_workflow(wf)
+        assert any("Jinja2 render error in prompt for phase 'build'" in e for e in errors)
+        assert not any("{{missing}}" in e and "no value defined" in e for e in errors)
+
     def test_validate_workflow_reports_render_error(self):
         wf = Workflow(
             name="test",
@@ -472,6 +504,16 @@ class TestTemplateVarValidation:
         )
         errors = validate_workflow(wf)
         assert any("Jinja2 render error in prompt for phase 'build'" in e for e in errors)
+
+    def test_validate_workflow_reports_render_error_for_check_prompt_with_role(self):
+        wf = Workflow(
+            name="test",
+            phases=[
+                Phase(id="review", type="check", role="tester", prompt="{{ 1 / 0 }}"),
+            ],
+        )
+        errors = validate_workflow(wf)
+        assert any("Jinja2 render error in checker prompt for phase 'review'" in e for e in errors)
 
     def test_expand_multi_vars_preserves_filtered_var_name_for_validation(self):
         wf = Workflow(
@@ -537,8 +579,8 @@ class TestLaneValidation:
         errors = validate_workflow(wf)
         assert any("multiple lanes" in e for e in errors)
 
-    def test_lane_no_workflow_type(self):
-        """Workflow-type phases are not allowed in lanes."""
+    def test_lane_allows_workflow_type(self):
+        """Lane groups may contain workflow phases."""
         wf = Workflow(
             name="test",
             phases=[
@@ -547,8 +589,16 @@ class TestLaneValidation:
             ],
             parallel_groups=[ParallelGroup(lanes=[["a", "dyn"]])],
         )
-        errors = validate_workflow(wf)
-        assert any("workflow-type" in e for e in errors)
+        assert validate_workflow(wf) == []
+
+    def test_expanded_workflow_phase_lane_group_is_valid(self):
+        """Multi-var expansion must not manufacture an invalid lane group for workflow phases."""
+        wf = Workflow(
+            name="test",
+            phases=[Phase(id="dyn", type="workflow", prompt="Plan {{ENV}}.")],
+        )
+        expanded = expand_multi_vars(wf, {"ENV": ["prod"]})
+        assert validate_workflow(expanded) == []
 
     def test_valid_lane_group(self):
         """A valid lane group passes validation."""
@@ -685,6 +735,27 @@ phases:
         assert "Jinja2 render error in prompt for phase 'build'" in captured.out
         assert "Traceback" not in captured.out
 
+    def test_validate_check_prompt_with_role_jinja_render_error_clean_error(self, tmp_path, capsys):
+        """Role-backed check prompts still surface render-time Jinja errors during validation."""
+        yaml_content = """\
+name: bad
+phases:
+  - id: review
+    type: check
+    role: tester
+    prompt: "{{ 1 / 0 }}"
+"""
+        yaml_path = tmp_path / "bad-check-jinja-runtime.yaml"
+        yaml_path.write_text(yaml_content)
+        parser = build_parser()
+        args = parser.parse_args(["validate", str(yaml_path)])
+        args.plain = True
+        result = cmd_validate(args)
+        assert result == 1
+        captured = capsys.readouterr()
+        assert "Jinja2 render error in checker prompt for phase 'review'" in captured.out
+        assert "Traceback" not in captured.out
+
     def test_validate_nested_lookup_missing_clean_error(self, tmp_path, capsys):
         """Missing nested lookups print a clean validation error, no traceback."""
         yaml_content = """\
@@ -705,6 +776,49 @@ phases:
         captured = capsys.readouterr()
         assert "Jinja2 render error in prompt for phase 'build'" in captured.out
         assert "env" in captured.out
+        assert "Traceback" not in captured.out
+
+    def test_validate_unreachable_missing_with_render_error_reports_render_error(self, tmp_path, capsys):
+        """A real render failure should win over undefined vars from unreachable branches."""
+        yaml_content = """\
+name: bad
+vars:
+  ok: true
+phases:
+  - id: build
+    prompt: "{% if ok %}A{% else %}{{ missing }}{% endif %} {{ 1 / 0 }}"
+"""
+        yaml_path = tmp_path / "bad-jinja-mixed.yaml"
+        yaml_path.write_text(yaml_content)
+        parser = build_parser()
+        args = parser.parse_args(["validate", str(yaml_path)])
+        args.plain = True
+        result = cmd_validate(args)
+        assert result == 1
+        captured = capsys.readouterr()
+        assert "Jinja2 render error in prompt for phase 'build'" in captured.out
+        assert "{{missing}}" not in captured.out
+        assert "Traceback" not in captured.out
+
+    def test_validate_unreachable_nested_missing_var_is_ignored(self, tmp_path, capsys):
+        yaml_content = """\
+name: ok
+vars:
+  ok: true
+phases:
+  - id: build
+    prompt: "{% if ok %}A{% else %}{{ missing.foo }}{% endif %}"
+"""
+        yaml_path = tmp_path / "ok-jinja-dead-nested.yaml"
+        yaml_path.write_text(yaml_content)
+        parser = build_parser()
+        args = parser.parse_args(["validate", str(yaml_path)])
+        args.plain = True
+        result = cmd_validate(args)
+        assert result == 0
+        captured = capsys.readouterr()
+        assert "Validation: OK" in captured.out
+        assert "{{missing}}" not in captured.out
         assert "Traceback" not in captured.out
 
     def test_validate_missing_id_clean_error(self, tmp_path, capsys):

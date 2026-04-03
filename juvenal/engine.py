@@ -1,7 +1,8 @@
-"""Core non-agentic execution loop."""
+"""Core workflow execution loop."""
 
 from __future__ import annotations
 
+import re
 import shutil
 import subprocess
 import tempfile
@@ -14,11 +15,13 @@ from threading import Lock
 from jinja2 import TemplateSyntaxError
 
 from juvenal.backends import Backend, create_backend
-from juvenal.checkers import NO_VERDICT_REASON, parse_verdict, run_script
+from juvenal.checkers import NO_VERDICT_REASON, parse_verdict
 from juvenal.display import Display
 from juvenal.notifications import build_notification_payload, send_webhook
 from juvenal.state import PhaseState, PipelineState
 from juvenal.workflow import ParallelGroup, Phase, Workflow
+
+_BASH_CODE_BLOCK_RE = re.compile(r"```bash\n(.*?)\n```", re.DOTALL)
 
 
 @dataclass
@@ -73,10 +76,10 @@ class PipelineExhausted(Exception):
 
 
 class Engine:
-    """Non-agentic, deterministic execution loop.
+    """Deterministic execution loop.
 
-    This engine deliberately does NOT use an LLM to decide flow control.
-    All decisions (retry, bounce, advance) are made programmatically.
+    Agents handle phase work, while flow control remains programmatic:
+    retry, bounce, and advance decisions are all made by the engine.
     """
 
     def __init__(
@@ -189,8 +192,6 @@ class Engine:
 
                 if phase.type == "implement":
                     result = self._run_implement(phase)
-                elif phase.type == "script":
-                    result = self._run_script(phase, phases, phase_idx)
                 elif phase.type == "check":
                     result = self._run_check(phase, phases, phase_idx)
                 elif phase.type == "workflow":
@@ -393,35 +394,6 @@ class Engine:
         self.display.step_pass("interactive")
         return PhaseResult(success=True)
 
-    def _run_script(self, phase: Phase, phases: list[Phase], phase_idx: int) -> PhaseResult:
-        """Run a script phase. Exit 0 = advance. Nonzero = bounce back."""
-        ps = self.state.phases.get(phase.id)
-        attempt = (ps.attempt if ps and ps.attempt > 0 else 0) + 1
-        self.state.set_attempt(phase.id, attempt)
-        self.display.phase_start(phase.id, attempt)
-        self.display.step_start(f"script: {phase.id}")
-
-        timeout = phase.timeout or 600
-        try:
-            run_cmd = phase.render_run(vars=self.workflow.vars)
-        except Exception as exc:
-            return self._template_render_failure(phase.id, "script command", phase.id, exc)
-        result = run_script(run_cmd, self.workflow.working_dir, timeout=timeout, env=phase.env or None)
-        self.state.log_step(phase.id, attempt, "script", result.output, input=run_cmd)
-
-        if result.exit_code == 0:
-            self.display.step_pass(phase.id)
-            return PhaseResult(success=True)
-
-        # Failure — resolve bounce target
-        failure_context = f"Script '{run_cmd}' failed (exit {result.exit_code}).\nOutput:\n{result.output[-3000:]}"
-        self.display.step_fail(phase.id, failure_context[:500])
-
-        target_id = self._resolve_bounce_target(phase, phases, phase_idx)
-        if target_id:
-            return PhaseResult(success=False, bounce_target=target_id, failure_context=failure_context)
-        return PhaseResult(success=False)
-
     _MAX_NO_VERDICT_RESUMES = 2
     _RESUME_PROMPT = (
         "Your previous response did not include a VERDICT line. Please review the work\n"
@@ -543,9 +515,21 @@ class Engine:
             bounce_target = phase.bounce_target or phase.id
             return PhaseResult(success=False, bounce_target=bounce_target, failure_context=failure_context)
 
+        ps = self.state._ensure_phase(phase.id)
+        if ps.baseline_sha is None:
+            ps.baseline_sha = self._get_git_head()
+            self.state.save()
+
         if phase.workflow_file or phase.workflow_dir:
             return self._run_static_workflow(phase, effective_max_depth)
         return self._run_dynamic_workflow(phase, effective_max_depth)
+
+    def _inherit_subworkflow_vars(self, phase: Phase, sub_workflow: Workflow) -> None:
+        """Merge parent workflow context into a sub-workflow before validation/execution."""
+        merged_vars = dict(sub_workflow.vars)
+        merged_vars.update(self.workflow.vars)
+        merged_vars.update(phase.template_vars)
+        sub_workflow.vars = merged_vars
 
     def _run_static_workflow(self, phase: Phase, effective_max_depth: int) -> PhaseResult:
         """Run a static sub-workflow from workflow_file or workflow_dir."""
@@ -560,10 +544,7 @@ class Engine:
         wf_path = phase.workflow_file or phase.workflow_dir
         sub_workflow = load_workflow(wf_path)
         sub_workflow.working_dir = self.workflow.working_dir
-        # Propagate vars from parent workflow
-        merged_vars = dict(sub_workflow.vars)
-        merged_vars.update(self.workflow.vars)
-        sub_workflow.vars = merged_vars
+        self._inherit_subworkflow_vars(phase, sub_workflow)
 
         # State file alongside parent's, named by phase ID
         parent_state = self.state.state_file
@@ -634,6 +615,7 @@ class Engine:
 
         sub_workflow = load_workflow(plan_result.workflow_yaml_path)
         sub_workflow.working_dir = self.workflow.working_dir
+        self._inherit_subworkflow_vars(phase, sub_workflow)
 
         sub_engine = Engine(
             sub_workflow,
@@ -687,7 +669,7 @@ class Engine:
         1. If phase has bounce_targets (agent-guided), use the agent's choice if valid,
            otherwise fall back to first in the list.
         2. If phase has bounce_target (fixed), use that.
-        3. Otherwise, find the most recent implement phase.
+        3. Otherwise, find the most recent implement/workflow phase.
         """
         if phase.bounce_targets:
             if agent_target and agent_target in phase.bounce_targets:
@@ -695,12 +677,12 @@ class Engine:
             return phase.bounce_targets[0]
         if phase.bounce_target:
             return phase.bounce_target
-        return self._find_last_implement(phases, phase_idx)
+        return self._find_last_rework_phase(phases, phase_idx)
 
-    def _find_last_implement(self, phases: list[Phase], before_idx: int) -> str | None:
-        """Find the most recent implement phase before the given index."""
+    def _find_last_rework_phase(self, phases: list[Phase], before_idx: int) -> str | None:
+        """Find the most recent implement/workflow phase before the given index."""
         for i in range(before_idx - 1, -1, -1):
-            if phases[i].type == "implement":
+            if phases[i].type in {"implement", "workflow"}:
                 return phases[i].id
         return None
 
@@ -786,7 +768,7 @@ class Engine:
         return PhaseResult(success=False), consumed
 
     def _run_lane(self, lane_phase_ids: list[str], bounce_counter: BounceCounter) -> PhaseResult:
-        """Run a single lane: sequential implement/check/script loop with internal bounce."""
+        """Run a single lane: sequential implement/check loop with internal bounce."""
         phases_map = {p.id: p for p in self.workflow.phases}
         lane_phases = [phases_map[pid] for pid in lane_phase_ids]
         lane_scope = set(lane_phase_ids)
@@ -801,8 +783,8 @@ class Engine:
 
             if phase.type == "implement":
                 result = self._run_implement(phase)
-            elif phase.type == "script":
-                result = self._run_script(phase, lane_phases, phase_idx)
+            elif phase.type == "workflow":
+                result = self._run_workflow(phase)
             elif phase.type == "check":
                 result = self._run_check(phase, lane_phases, phase_idx)
             else:
@@ -904,16 +886,16 @@ class Engine:
         return None
 
     def _get_parent_prompt(self, phase: Phase, phases: list[Phase], phase_idx: int) -> str | None:
-        """Get the prompt from the parent implement phase for a check/script phase."""
+        """Get the prompt from the parent implement/workflow phase for a checker phase."""
         target_id = self._resolve_bounce_target(phase, phases, phase_idx)
         if target_id:
             for p in phases:
-                if p.id == target_id and p.type == "implement":
+                if p.id == target_id and p.type in {"implement", "workflow"}:
                     return p.render_prompt(vars=self.workflow.vars) or None
         return None
 
     def _get_baseline_sha(self, phase: Phase, phases: list[Phase], phase_idx: int) -> str | None:
-        """Get the baseline SHA for a check/script phase's bounce target."""
+        """Get the baseline SHA for a checker phase's implement/workflow target."""
         target_id = self._resolve_bounce_target(phase, phases, phase_idx)
         if target_id:
             target_ps = self.state.phases.get(target_id)
@@ -1020,15 +1002,8 @@ class Engine:
                 prompt_preview = prompt_preview[:80].replace("\n", " ")
                 print(f"{prefix} [{phase.type}] {phase.id}{extra_str}")
                 print(f"     prompt: {prompt_preview}...")
-            elif phase.type == "script":
-                run_preview = phase.run if has_errors else phase.render_run(vars=self.workflow.vars)
-                print(f"{prefix} [{phase.type}] {phase.id}: {run_preview}{extra_str}")
             elif phase.type == "check":
-                if phase.role:
-                    target = phase.role
-                else:
-                    check_preview = phase.prompt if has_errors else phase.render_check_prompt(vars=self.workflow.vars)
-                    target = check_preview[:60].replace("\n", " ")
+                target = phase.role or _preview_check_target(phase.prompt)
                 print(f"{prefix} [{phase.type}] {phase.id}: {target}{extra_str}")
             elif phase.type == "workflow":
                 print(f"{prefix} [{phase.type}] {phase.id}{extra_str}")
@@ -1052,6 +1027,16 @@ class Engine:
                 else:
                     print(f"  Group {gi + 1} (flat): {', '.join(group.phases)}")
         return 1 if has_errors else 0
+
+
+def _preview_check_target(prompt: str) -> str:
+    """Summarize a check prompt for dry-run output."""
+    match = _BASH_CODE_BLOCK_RE.search(prompt)
+    if match:
+        command = " ".join(line.strip() for line in match.group(1).strip().splitlines() if line.strip())
+        if command:
+            return command
+    return prompt[:60].replace("\n", " ")
 
 
 def _plan_workflow_internal(

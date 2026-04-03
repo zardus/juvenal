@@ -6,7 +6,7 @@ import subprocess
 import pytest
 
 from juvenal.engine import Engine
-from juvenal.workflow import Phase, Workflow
+from juvenal.workflow import Phase, Workflow, make_command_check_prompt
 from tests.conftest import codex_available
 
 
@@ -32,8 +32,8 @@ def test_trivial_workflow_codex(tmp_path):
             ),
             Phase(
                 id="check-hello",
-                type="script",
-                run="test -f hello.txt && grep -q 'hello world' hello.txt",
+                type="check",
+                prompt=make_command_check_prompt("test -f hello.txt && grep -q 'hello world' hello.txt"),
             ),
         ],
         backend="codex",

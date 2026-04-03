@@ -4,6 +4,8 @@ import subprocess
 import sys
 import time
 
+import pytest
+
 from juvenal.cli import _parse_defines, build_parser, cmd_plan, cmd_status
 from juvenal.state import PipelineState
 
@@ -462,6 +464,72 @@ class TestStatusExitCodeSubprocess:
         assert called_with["backend"] == "codex"
         assert called_with["interactive"] is True
 
+    def test_plan_rejects_run_checker_before_planning(self, monkeypatch, capsys, tmp_path):
+        """Invalid checker specs fail before the planner is invoked."""
+        import juvenal.engine
+
+        called = False
+
+        def mock_plan_workflow(goal, output, backend, plain=False, interactive=False, resume=False):
+            nonlocal called
+            called = True
+
+        monkeypatch.setattr(juvenal.engine, "plan_workflow", mock_plan_workflow)
+
+        parser = build_parser()
+        args = parser.parse_args(
+            ["plan", "build something", "-o", str(tmp_path / "workflow.yaml"), "--checker", "run:pytest -x"]
+        )
+        args.plain = True
+
+        with pytest.raises(SystemExit) as excinfo:
+            cmd_plan(args)
+
+        captured = capsys.readouterr()
+        assert excinfo.value.code == 1
+        assert called is False
+        assert "Error: Invalid --checker spec" in captured.out
+
+    def test_plan_prompt_checker_writes_checks_and_loads(self, monkeypatch, tmp_path):
+        """Prompt checkers injected by plan use the supported checks: schema."""
+        import yaml
+
+        import juvenal.engine
+        from juvenal.workflow import load_workflow
+
+        def mock_plan_workflow(goal, output, backend, plain=False, interactive=False, resume=False):
+            with open(output, "w") as f:
+                f.write(
+                    """\
+name: test
+phases:
+  - id: build
+    prompt: "Build it."
+""",
+                )
+
+        monkeypatch.setattr(juvenal.engine, "plan_workflow", mock_plan_workflow)
+
+        output_path = tmp_path / "workflow.yaml"
+        parser = build_parser()
+        args = parser.parse_args(
+            ["plan", "build something", "-o", str(output_path), "--checker", "prompt:Verify the build"]
+        )
+        args.plain = True
+
+        assert cmd_plan(args) == 0
+
+        data = yaml.safe_load(output_path.read_text())
+        phase = data["phases"][0]
+        assert "checkers" not in phase
+        assert phase["checks"] == [{"prompt": "Verify the build"}]
+
+        workflow = load_workflow(output_path)
+        assert [p.id for p in workflow.phases] == ["build", "build~check-1"]
+        assert workflow.phases[1].type == "check"
+        assert workflow.phases[1].prompt == "Verify the build"
+        assert workflow.phases[1].bounce_target == "build"
+
     def test_status_subprocess_exit_1_on_failure(self, tmp_path):
         """Failed pipeline exits 1 as a real process."""
         state_file = tmp_path / "state.json"
@@ -477,3 +545,51 @@ class TestStatusExitCodeSubprocess:
             capture_output=True,
         )
         assert result.returncode == 1
+
+    def test_validate_subprocess_rejects_run_checker_cleanly(self, tmp_path):
+        """Unsupported run: checker exits cleanly instead of raising a traceback."""
+        workflow_path = tmp_path / "workflow.yaml"
+        workflow_path.write_text(
+            """\
+name: test
+phases:
+  - id: build
+    prompt: "Build it."
+""",
+        )
+
+        result = subprocess.run(
+            [sys.executable, "-m", "juvenal.cli", "validate", str(workflow_path), "--checker", "run:pytest -x"],
+            capture_output=True,
+            text=True,
+        )
+
+        assert result.returncode == 1
+        assert "Error: Invalid --checker spec" in result.stdout
+        assert "Traceback" not in result.stderr
+
+    def test_do_rejects_run_checker_before_planning(self, monkeypatch, capsys):
+        """Invalid checker specs fail before planning starts on do."""
+        import juvenal.engine
+
+        called = False
+
+        def mock_plan_workflow(goal, output, backend, plain=False, interactive=False, resume=False):
+            nonlocal called
+            called = True
+
+        monkeypatch.setattr(juvenal.engine, "plan_workflow", mock_plan_workflow)
+
+        parser = build_parser()
+        args = parser.parse_args(["do", "build something", "--checker", "run:pytest -x"])
+        args.plain = True
+
+        from juvenal.cli import cmd_do
+
+        with pytest.raises(SystemExit) as excinfo:
+            cmd_do(args)
+
+        captured = capsys.readouterr()
+        assert excinfo.value.code == 1
+        assert called is False
+        assert "Error: Invalid --checker spec" in captured.out

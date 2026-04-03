@@ -7,7 +7,15 @@ import pytest
 
 from juvenal.checkers import parse_verdict
 from juvenal.engine import BounceCounter, Engine, _extract_yaml, _plan_workflow_internal
-from juvenal.workflow import ParallelGroup, Phase, Workflow, expand_multi_vars, inject_checkers, inject_implementer
+from juvenal.workflow import (
+    ParallelGroup,
+    Phase,
+    Workflow,
+    expand_multi_vars,
+    inject_checkers,
+    inject_implementer,
+    make_command_check_prompt,
+)
 from tests.conftest import MockBackend
 
 
@@ -75,14 +83,14 @@ class TestEngineWithMockedBackend:
         return engine
 
     def test_single_phase_pass(self, tmp_path):
-        """Implement phase followed by a script phase, both pass."""
+        """Implement phase followed by a run-based check, both pass."""
         backend = MockBackend()
         backend.add_response(exit_code=0, output="done")  # implement
         workflow = Workflow(
             name="test",
             phases=[
                 Phase(id="setup", type="implement", prompt="Do it."),
-                Phase(id="setup-check", type="script", run="true"),
+                Phase(id="setup-check", type="check", prompt=make_command_check_prompt("true")),
             ],
             max_bounces=3,
         )
@@ -98,7 +106,7 @@ class TestEngineWithMockedBackend:
             name="test",
             phases=[
                 Phase(id="setup", type="implement", prompt="Do it."),
-                Phase(id="setup-check", type="script", run="true"),
+                Phase(id="setup-check", type="check", prompt=make_command_check_prompt("true")),
             ],
             max_bounces=3,
         )
@@ -106,17 +114,17 @@ class TestEngineWithMockedBackend:
         assert engine.run() == 0
 
     def test_script_checker_failure_bounces(self, tmp_path):
-        """Script failure bounces back; global bounce counter exhausts."""
+        """Run-based check failure bounces back; global bounce counter exhausts."""
         backend = MockBackend()
         backend.add_response(exit_code=0, output="done")  # implement attempt 1
-        # Script fails -> bounce 1 -> back to implement
+        backend.add_response(exit_code=0, output="VERDICT: FAIL: tests failed")  # check fails -> bounce 1
         backend.add_response(exit_code=0, output="done")  # implement attempt 2
-        # Script fails -> bounce 2 -> exhausted (max_bounces=2)
+        backend.add_response(exit_code=0, output="VERDICT: FAIL: still failing")  # check fails -> exhausted
         workflow = Workflow(
             name="test",
             phases=[
                 Phase(id="setup", type="implement", prompt="Do it."),
-                Phase(id="setup-check", type="script", run="false"),  # always fails
+                Phase(id="setup-check", type="check", prompt=make_command_check_prompt("false")),
             ],
             max_bounces=2,
         )
@@ -167,9 +175,9 @@ class TestEngineWithMockedBackend:
             name="test",
             phases=[
                 Phase(id="phase1", type="implement", prompt="Do phase 1."),
-                Phase(id="phase1-check", type="script", run="true"),
+                Phase(id="phase1-check", type="check", prompt=make_command_check_prompt("true")),
                 Phase(id="phase2", type="implement", prompt="Do phase 2."),
-                Phase(id="phase2-check", type="script", run="true"),
+                Phase(id="phase2-check", type="check", prompt=make_command_check_prompt("true")),
             ],
             max_bounces=3,
         )
@@ -311,7 +319,7 @@ class TestEngineWithMockedBackend:
             name="test",
             phases=[
                 Phase(id="setup", type="implement", prompt="Do the thing."),
-                Phase(id="setup-check", type="script", run="true"),
+                Phase(id="setup-check", type="check", prompt=make_command_check_prompt("true")),
             ],
         )
         engine = self._make_engine(workflow, MockBackend(), tmp_path, dry_run=True)
@@ -320,7 +328,7 @@ class TestEngineWithMockedBackend:
         assert "test" in captured.out
         assert "setup" in captured.out
         assert "implement" in captured.out
-        assert "script" in captured.out
+        assert "check" in captured.out
 
     def test_run_summary_on_success(self, tmp_path, capsys):
         """Successful run prints a summary with phase info and bounce count."""
@@ -330,7 +338,7 @@ class TestEngineWithMockedBackend:
             name="test",
             phases=[
                 Phase(id="setup", type="implement", prompt="Do it."),
-                Phase(id="setup-check", type="script", run="true"),
+                Phase(id="setup-check", type="check", prompt=make_command_check_prompt("true")),
             ],
             max_bounces=3,
         )
@@ -345,12 +353,12 @@ class TestEngineWithMockedBackend:
         """Failed run also prints a summary with bounce count."""
         backend = MockBackend()
         backend.add_response(exit_code=0, output="done")
-        # Script always fails
+        backend.add_response(exit_code=0, output="VERDICT: FAIL: automated check failed")
         workflow = Workflow(
             name="test",
             phases=[
                 Phase(id="setup", type="implement", prompt="Do it."),
-                Phase(id="setup-check", type="script", run="false"),
+                Phase(id="setup-check", type="check", prompt=make_command_check_prompt("false")),
             ],
             max_bounces=1,
         )
@@ -368,7 +376,7 @@ class TestEngineWithMockedBackend:
             name="test",
             phases=[
                 Phase(id="setup", type="implement", prompt="Do it."),
-                Phase(id="setup-check", type="script", run="true"),
+                Phase(id="setup-check", type="check", prompt=make_command_check_prompt("true")),
             ],
             max_bounces=3,
         )
@@ -595,18 +603,17 @@ class TestPreserveContextOnBounce:
         assert len(backend.calls) == 4
         assert len(backend.resume_calls) == 0
 
-    def test_script_bounce_uses_resume(self, tmp_path):
-        """Script failure bounces back and resumes the implement session."""
+    def test_run_based_check_bounce_uses_resume(self, tmp_path):
+        """Run-based check failure bounces back and resumes the implement session."""
         backend = MockBackend()
         backend.add_response(exit_code=0, output="built it", session_id="sess-1")  # implement attempt 1
-        # script "false" fails -> bounce
+        backend.add_response(exit_code=0, output="VERDICT: FAIL: tests failed")  # check fails -> bounce
         backend.add_response(exit_code=0, output="fixed it", session_id="sess-2")  # implement attempt 2 (resumed)
-        # script "true" would pass — use a workflow where it passes on second try
         workflow = Workflow(
             name="test",
             phases=[
                 Phase(id="build", type="implement", prompt="Build it."),
-                Phase(id="build-check", type="script", run="false", bounce_target="build"),
+                Phase(id="build-check", type="check", prompt=make_command_check_prompt("false"), bounce_target="build"),
             ],
             max_bounces=2,
         )
@@ -617,28 +624,36 @@ class TestPreserveContextOnBounce:
         assert len(backend.resume_calls) == 1
         assert backend.resume_calls[0][0] == "sess-1"
 
-    def test_multi_var_script_bounce_uses_rendered_command_in_failure_context(self, tmp_path):
-        """Expanded script phases should report the rendered command on bounce."""
+    def test_multi_var_check_bounce_uses_rendered_command(self, tmp_path):
+        """Expanded command-check prompts should render templated commands before checking and bouncing."""
         backend = MockBackend()
         backend.add_response(exit_code=0, output="built it", session_id="sess-1")  # implement attempt 1
+        backend.add_response(exit_code=0, output="VERDICT: FAIL: command failed")  # check attempt 1
         backend.add_response(exit_code=0, output="fixed it", session_id="sess-2")  # implement attempt 2 (resumed)
+        backend.add_response(exit_code=0, output="VERDICT: FAIL: command failed")  # check attempt 2
         workflow = Workflow(
             name="test",
             phases=[
                 Phase(id="build", type="implement", prompt="Build {{TARGET}}."),
-                Phase(id="build~script-1", type="script", run="pytest {{TARGET}} -x", bounce_target="build"),
+                Phase(
+                    id="build~check-1",
+                    type="check",
+                    prompt=make_command_check_prompt("pytest {{TARGET}} -x"),
+                    bounce_target="build",
+                ),
             ],
             max_bounces=2,
         )
         workflow = expand_multi_vars(workflow, {"TARGET": ["linux"]})
         engine = self._make_engine(workflow, backend, tmp_path)
-        with patch("juvenal.engine.run_script") as mock_run:
-            mock_run.return_value = type("R", (), {"exit_code": 1, "output": "boom"})()
-            assert engine.run() == 1
+        assert engine.run() == 0
 
+        check_prompts = [prompt for prompt in backend.calls if "Run the following command" in prompt]
+        assert check_prompts
+        assert all("pytest linux -x" in prompt for prompt in check_prompts)
+        assert all("{{TARGET}}" not in prompt for prompt in check_prompts)
         assert len(backend.resume_calls) == 2
         assert backend.resume_calls[0][0] == "sess-1"
-        assert all("pytest linux -x" in prompt for _, prompt in backend.resume_calls)
         assert all("{{TARGET}}" not in prompt for _, prompt in backend.resume_calls)
 
     def test_crash_bounce_to_self_uses_resume(self, tmp_path):
@@ -650,7 +665,7 @@ class TestPreserveContextOnBounce:
             name="test",
             phases=[
                 Phase(id="setup", type="implement", prompt="Do it."),
-                Phase(id="check", type="script", run="true"),
+                Phase(id="check", type="check", prompt=make_command_check_prompt("true")),
             ],
             max_bounces=3,
         )
@@ -701,6 +716,81 @@ class TestWorkflowPhase:
             result = engine.run()
 
         assert result == 0
+
+    def test_dynamic_workflow_inherits_parent_vars(self, tmp_path):
+        """Parent workflow vars are propagated to planned sub-workflows."""
+        from unittest.mock import patch
+
+        from juvenal.engine import PlanResult
+
+        backend = MockBackend()
+        backend.add_response(exit_code=0, output="deployed")
+
+        workflow = Workflow(
+            name="test",
+            phases=[Phase(id="dynamic", type="workflow", prompt="Plan a deploy workflow.")],
+            max_bounces=1,
+            vars={"ENV": "prod"},
+        )
+        engine = self._make_engine(workflow, backend, tmp_path)
+
+        sub_yaml = tmp_path / "sub" / "workflow.yaml"
+        sub_yaml.parent.mkdir(parents=True)
+        sub_yaml.write_text("name: sub\nphases:\n  - id: deploy\n    prompt: 'Deploy {{ENV}}.'\n")
+
+        plan_result = PlanResult(
+            success=True,
+            workflow_yaml_path=str(sub_yaml),
+            temp_dir=str(sub_yaml.parent),
+            input_tokens=0,
+            output_tokens=0,
+        )
+
+        with patch("juvenal.engine._plan_workflow_internal", return_value=plan_result):
+            assert engine.run() == 0
+
+        assert backend.calls == ["Deploy prod."]
+
+    def test_dynamic_workflow_inherits_phase_template_vars(self, tmp_path):
+        """Planned sub-workflows inherit workflow-phase template vars with phase-local precedence."""
+        from unittest.mock import patch
+
+        from juvenal.engine import PlanResult
+
+        backend = MockBackend()
+        backend.add_response(exit_code=0, output="deployed")
+
+        workflow = Workflow(
+            name="test",
+            phases=[
+                Phase(
+                    id="dynamic",
+                    type="workflow",
+                    prompt="Plan deploy for {{ENV}}.",
+                    template_vars={"ENV": "prod"},
+                )
+            ],
+            max_bounces=1,
+            vars={"ENV": "staging"},
+        )
+        engine = self._make_engine(workflow, backend, tmp_path)
+
+        sub_yaml = tmp_path / "sub-template-vars" / "workflow.yaml"
+        sub_yaml.parent.mkdir(parents=True)
+        sub_yaml.write_text("name: sub\nphases:\n  - id: deploy\n    prompt: 'Deploy {{ENV}}.'\n")
+
+        plan_result = PlanResult(
+            success=True,
+            workflow_yaml_path=str(sub_yaml),
+            temp_dir=str(sub_yaml.parent),
+            input_tokens=0,
+            output_tokens=0,
+        )
+
+        with patch("juvenal.engine._plan_workflow_internal", return_value=plan_result):
+            assert engine.run() == 0
+
+        assert backend.calls == ["Deploy prod."]
 
     def test_workflow_phase_planning_failure_bounces(self, tmp_path):
         """When sub-workflow planning fails, the phase bounces."""
@@ -939,18 +1029,23 @@ class TestCheckersShorthandEngine:
         engine = self._make_engine(workflow, backend, tmp_path)
         assert engine.run() == 0
 
-    def test_checkers_script_bounce_on_fail(self, tmp_path):
-        """Implement passes, inline script checker fails, bounces back to implement."""
+    def test_checkers_run_checker_bounce_on_fail(self, tmp_path):
+        """Implement passes, inline run-based checker fails, bounces back to implement."""
         backend = MockBackend()
         backend.add_response(exit_code=0, output="built it")  # implement attempt 1
-        # script "false" fails -> bounce
+        backend.add_response(exit_code=0, output="VERDICT: FAIL: tests failed")  # check fails -> bounce
         backend.add_response(exit_code=0, output="fixed it")  # implement attempt 2
-        # script "true" would pass but we use "false" always -> bounce 2 -> exhausted
+        backend.add_response(exit_code=0, output="VERDICT: FAIL: still failing")  # check fails -> exhausted
         workflow = Workflow(
             name="test",
             phases=[
                 Phase(id="build", type="implement", prompt="Build it."),
-                Phase(id="build~script-1", type="script", run="false", bounce_target="build"),
+                Phase(
+                    id="build~check-1",
+                    type="check",
+                    prompt=make_command_check_prompt("false"),
+                    bounce_target="build",
+                ),
             ],
             max_bounces=2,
         )
@@ -1330,7 +1425,7 @@ class TestBaselineSha:
             name="test",
             phases=[
                 Phase(id="setup", type="implement", prompt="Do it."),
-                Phase(id="check", type="script", run="true"),
+                Phase(id="check", type="check", prompt=make_command_check_prompt("true")),
             ],
             max_bounces=3,
         )
@@ -1501,6 +1596,69 @@ class TestBaselineSha:
         loaded = PipelineState.load(state_file)
         assert loaded.phases["phase1"].baseline_sha == "persist-sha"
 
+    def test_workflow_phase_check_receives_parent_prompt_and_baseline(self, tmp_path):
+        backend = MockBackend()
+        backend.add_response(exit_code=0, output="sub-workflow done")
+        backend.add_response(exit_code=0, output="VERDICT: PASS")
+        subworkflow = tmp_path / "subworkflow.yaml"
+        subworkflow.write_text(
+            """\
+name: sub
+phases:
+  - id: inner
+    prompt: "Do the sub-work."
+"""
+        )
+        workflow = Workflow(
+            name="test",
+            phases=[
+                Phase(id="sub", type="workflow", prompt="Build the full feature.", workflow_file=str(subworkflow)),
+                Phase(id="review", type="check", prompt="Review the workflow output.", bounce_target="sub"),
+            ],
+            max_bounces=3,
+        )
+        engine = self._make_engine(workflow, backend, tmp_path)
+
+        with patch.object(engine, "_get_git_head", return_value="workflow-sha"):
+            assert engine.run() == 0
+
+        assert engine.state.phases["sub"].baseline_sha == "workflow-sha"
+        check_prompt = backend.calls[1]
+        assert "Build the full feature." in check_prompt
+        assert "git diff workflow-sha..HEAD" in check_prompt
+
+    def test_check_after_workflow_defaults_bounce_target_to_workflow_phase(self, tmp_path):
+        backend = MockBackend()
+        backend.add_response(exit_code=0, output="sub-workflow done")
+        backend.add_response(exit_code=0, output="VERDICT: FAIL: incomplete")
+        backend.add_response(exit_code=0, output="sub-workflow fixed")
+        backend.add_response(exit_code=0, output="VERDICT: PASS")
+        subworkflow = tmp_path / "subworkflow.yaml"
+        subworkflow.write_text(
+            """\
+name: sub
+phases:
+  - id: inner
+    prompt: "Do the sub-work."
+"""
+        )
+        workflow = Workflow(
+            name="test",
+            phases=[
+                Phase(id="sub", type="workflow", prompt="Build the full feature.", workflow_file=str(subworkflow)),
+                Phase(id="review", type="check", prompt="Review the workflow output."),
+            ],
+            max_bounces=3,
+        )
+        engine = self._make_engine(workflow, backend, tmp_path)
+
+        with patch.object(engine, "_get_git_head", return_value="workflow-sha"):
+            assert engine.run() == 0
+
+        assert engine.state.phases["sub"].attempt == 2
+        assert "Build the full feature." in backend.calls[1]
+        assert "Build the full feature." in backend.calls[3]
+
 
 class TestLaneGroups:
     def test_lane_group_both_pass(self, tmp_path):
@@ -1658,14 +1816,14 @@ class TestResumeWithParallelPhases:
         backend.add_response(exit_code=0, output="done a")
         backend.add_response(exit_code=0, output="done b")
         backend.add_response(exit_code=0, output="done c")
-        # Then the post-group script passes
+        # Then the post-group check passes
         workflow = Workflow(
             name="test",
             phases=[
                 Phase(id="a", type="implement", prompt="A."),
                 Phase(id="b", type="implement", prompt="B."),
                 Phase(id="c", type="implement", prompt="C."),
-                Phase(id="final", type="script", run="true"),
+                Phase(id="final", type="check", prompt=make_command_check_prompt("true")),
             ],
             parallel_groups=[ParallelGroup(phases=["a", "b", "c"])],
             max_bounces=3,
@@ -1717,13 +1875,13 @@ class TestResumeWithParallelPhases:
     def test_resume_all_parallel_completed_skips_group(self, tmp_path):
         """If all phases in a flat parallel group are completed, skip the entire group."""
         backend = MockBackend()
-        # No backend calls expected for the parallel group — only the post-group script
+        # No backend calls expected for the parallel group — only the post-group check
         workflow = Workflow(
             name="test",
             phases=[
                 Phase(id="a", type="implement", prompt="A."),
                 Phase(id="b", type="implement", prompt="B."),
-                Phase(id="post", type="script", run="true"),
+                Phase(id="post", type="check", prompt=make_command_check_prompt("true")),
             ],
             parallel_groups=[ParallelGroup(phases=["a", "b"])],
             max_bounces=3,
@@ -1740,7 +1898,7 @@ class TestResumeWithParallelPhases:
         engine.backend = backend
         exit_code = engine.run()
         assert exit_code == 0
-        assert len(backend.calls) == 0
+        assert len(backend.calls) == 1
 
     def test_resume_snaps_to_lane_group_start(self, tmp_path):
         """When resume lands inside a lane group, snap to first phase of first lane."""
@@ -1948,24 +2106,27 @@ class TestTemplateVarsEngine:
         # Check phase prompt should contain the substituted var
         assert "Verify myservice works." in mock_backend.calls[1]
 
-    def test_vars_substituted_in_script_run(self, mock_backend, tmp_path):
-        """Vars are substituted in script phase run commands."""
+    def test_vars_substituted_in_check_run(self, mock_backend, tmp_path):
+        """Vars are substituted in run-based check commands."""
         mock_backend.add_response(exit_code=0, output="done")
+        mock_backend.add_response(exit_code=0, output="VERDICT: PASS")
         workflow = Workflow(
             name="test",
             phases=[
                 Phase(id="build", type="implement", prompt="Build it."),
-                Phase(id="test", type="script", run="pytest {{TEST_DIR}} -x", bounce_target="build"),
+                Phase(
+                    id="test",
+                    type="check",
+                    prompt=make_command_check_prompt("pytest {{TEST_DIR}} -x"),
+                    bounce_target="build",
+                ),
             ],
             vars={"TEST_DIR": "tests/unit"},
         )
         engine = Engine(workflow, state_file=str(tmp_path / "state.json"), plain=True)
         engine.backend = mock_backend
-        with patch("juvenal.engine.run_script") as mock_run:
-            mock_run.return_value = type("R", (), {"exit_code": 0, "output": "ok"})()
-            engine.run()
-            mock_run.assert_called_once()
-            assert mock_run.call_args[0][0] == "pytest tests/unit -x"
+        engine.run()
+        assert "pytest tests/unit -x" in mock_backend.calls[1]
 
     def test_default_filter_allows_undefined_var_at_runtime(self, mock_backend, tmp_path):
         """Valid Jinja2 undefined handling should not be blocked by validation."""
@@ -1992,6 +2153,32 @@ class TestTemplateVarsEngine:
         engine.backend = mock_backend
         assert engine.run() == 0
         assert mock_backend.calls == [""]
+
+    def test_unreachable_else_branch_missing_var_allows_runtime(self, mock_backend, tmp_path):
+        """Undefined vars in branches pruned by current vars should not fail validation."""
+        mock_backend.add_response(exit_code=0, output="done")
+        workflow = Workflow(
+            name="test",
+            phases=[Phase(id="build", type="implement", prompt="{% if ok %}A{% else %}{{ missing }}{% endif %}")],
+            vars={"ok": True},
+        )
+        engine = Engine(workflow, state_file=str(tmp_path / "state.json"), plain=True)
+        engine.backend = mock_backend
+        assert engine.run() == 0
+        assert mock_backend.calls == ["A"]
+
+    def test_unreachable_else_branch_missing_nested_var_allows_runtime(self, mock_backend, tmp_path):
+        """Nested undefined lookups in dead branches should not fail validation or rendering."""
+        mock_backend.add_response(exit_code=0, output="done")
+        workflow = Workflow(
+            name="test",
+            phases=[Phase(id="build", type="implement", prompt="{% if ok %}A{% else %}{{ missing.foo }}{% endif %}")],
+            vars={"ok": True},
+        )
+        engine = Engine(workflow, state_file=str(tmp_path / "state.json"), plain=True)
+        engine.backend = mock_backend
+        assert engine.run() == 0
+        assert mock_backend.calls == ["A"]
 
     def test_vars_unrecognized_passthrough_fails_validation(self, mock_backend, tmp_path, capsys):
         """Undefined template vars fail validation before execution."""
@@ -2035,21 +2222,21 @@ class TestInvalidJinjaRuntime:
         assert "invalid Jinja2 prompt" in captured.out
         assert "Traceback" not in captured.out
 
-    def test_invalid_jinja_in_script_phase_fails_cleanly(self, tmp_path, capsys):
+    def test_invalid_jinja_in_check_phase_fails_cleanly(self, tmp_path, capsys):
         backend = MockBackend()
         backend.add_response(exit_code=0, output="done")
         workflow = Workflow(
             name="test",
             phases=[
                 Phase(id="build", type="implement", prompt="Build it."),
-                Phase(id="test", type="script", run="echo {{ PROJECT", bounce_target="build"),
+                Phase(id="test", type="check", prompt="echo {{ PROJECT", bounce_target="build"),
             ],
         )
         engine = Engine(workflow, state_file=str(tmp_path / "state.json"), plain=True)
         engine.backend = backend
         assert engine.run() == 1
         captured = capsys.readouterr()
-        assert "invalid Jinja2 run" in captured.out
+        assert "invalid Jinja2 prompt" in captured.out
         assert "Traceback" not in captured.out
 
     def test_invalid_jinja_in_dynamic_workflow_phase_fails_cleanly(self, tmp_path, capsys):
@@ -2076,21 +2263,21 @@ class TestInvalidJinjaRuntime:
         assert "Jinja2 render error in prompt for phase 'build'" in captured.out
         assert "Traceback" not in captured.out
 
-    def test_render_error_in_script_phase_fails_cleanly(self, tmp_path, capsys):
+    def test_render_error_in_check_phase_fails_cleanly(self, tmp_path, capsys):
         backend = MockBackend()
         backend.add_response(exit_code=0, output="done")
         workflow = Workflow(
             name="test",
             phases=[
                 Phase(id="build", type="implement", prompt="Build it."),
-                Phase(id="test", type="script", run="echo {{ 1 / 0 }}", bounce_target="build"),
+                Phase(id="test", type="check", prompt="echo {{ 1 / 0 }}", bounce_target="build"),
             ],
         )
         engine = Engine(workflow, state_file=str(tmp_path / "state.json"), plain=True)
         engine.backend = backend
         assert engine.run() == 1
         captured = capsys.readouterr()
-        assert "Jinja2 render error in script command for phase 'test'" in captured.out
+        assert "Jinja2 render error in checker prompt for phase 'test'" in captured.out
         assert "Traceback" not in captured.out
 
     def test_render_error_in_dynamic_workflow_phase_fails_cleanly(self, tmp_path, capsys):
@@ -2483,6 +2670,53 @@ class TestStaticWorkflowPhase:
         engine.backend = backend
         assert engine.run() == 0
         assert "Deploy prod." in backend.calls[0]
+
+    def test_static_workflow_inherits_phase_template_vars(self, tmp_path):
+        """Static sub-workflows inherit workflow-phase template vars with phase-local precedence."""
+        sub_yaml = tmp_path / "sub.yaml"
+        sub_yaml.write_text("name: sub\nphases:\n  - id: inner\n    prompt: 'Deploy {{ENV}}.'\n")
+
+        backend = MockBackend()
+        backend.add_response(exit_code=0, output="deployed")
+
+        workflow = Workflow(
+            name="test",
+            phases=[
+                Phase(
+                    id="sub-wf",
+                    type="workflow",
+                    workflow_file=str(sub_yaml),
+                    template_vars={"ENV": "prod"},
+                )
+            ],
+            vars={"ENV": "staging"},
+        )
+        engine = Engine(workflow, state_file=str(tmp_path / "state.json"), plain=True)
+        engine.backend = backend
+        assert engine.run() == 0
+        assert backend.calls == ["Deploy prod."]
+
+    def test_static_workflow_lane_runs(self, tmp_path):
+        """Workflow phases can execute inside lane groups created by expansion."""
+        sub_yaml = tmp_path / "sub.yaml"
+        sub_yaml.write_text("name: sub\nphases:\n  - id: inner\n    prompt: 'Inner task.'\n")
+
+        backend = MockBackend()
+        backend.add_response(exit_code=0, output="inner done")
+        backend.add_response(exit_code=0, output="built")
+
+        workflow = Workflow(
+            name="test",
+            phases=[
+                Phase(id="sub-wf", type="workflow", workflow_file=str(sub_yaml)),
+                Phase(id="build", type="implement", prompt="Build outer."),
+            ],
+            parallel_groups=[ParallelGroup(lanes=[["sub-wf"], ["build"]])],
+        )
+        engine = Engine(workflow, state_file=str(tmp_path / "state.json"), plain=True, serialize=True)
+        engine.backend = backend
+        assert engine.run() == 0
+        assert backend.calls == ["Inner task.", "Build outer."]
 
     def test_static_workflow_dry_run(self, tmp_path, capsys):
         """Dry run shows workflow_file path."""
