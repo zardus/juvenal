@@ -901,6 +901,7 @@ VALID_ROLES = {
     "senior-engineer",
     "security-engineer",
     "technical-writer",
+    "llm-writing",
     "professor",
     "grant-reviewer",
 }

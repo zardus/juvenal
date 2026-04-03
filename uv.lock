@@ -46,7 +46,7 @@ wheels = [
 
 [[package]]
 name = "juvenal"
-version = "0.28.10"
+version = "0.28.12"
 source = { editable = "." }
 dependencies = [
     { name = "jinja2" },

@@ -699,6 +699,9 @@ class TestParseCheckerString:
     def test_role_technical_writer(self):
         assert parse_checker_string("technical-writer") == "technical-writer"
 
+    def test_role_llm_writing(self):
+        assert parse_checker_string("llm-writing") == "llm-writing"
+
     def test_role_professor(self):
         assert parse_checker_string("professor") == "professor"
 
@@ -765,6 +768,18 @@ class TestInjectCheckers:
         assert result.phases[1].id == "build~check-1"
         assert result.phases[1].type == "check"
         assert result.phases[1].role == "professor"
+        assert result.phases[1].bounce_target == "build"
+
+    def test_single_implement_llm_writing_checker(self):
+        wf = Workflow(
+            name="test",
+            phases=[Phase(id="build", type="implement", prompt="Build it.")],
+        )
+        result = inject_checkers(wf, ["llm-writing"])
+        assert len(result.phases) == 2
+        assert result.phases[1].id == "build~check-1"
+        assert result.phases[1].type == "check"
+        assert result.phases[1].role == "llm-writing"
         assert result.phases[1].bounce_target == "build"
 
     def test_single_implement_run_checker_rejected(self):
@@ -1456,6 +1471,14 @@ class TestLoadRolePrompt:
         assert "Technical Writer REVIEWING" in prompt
         assert "Technical correctness" in prompt
         assert "Framing and flow" in prompt
+
+    def test_llm_writing_role(self):
+        from juvenal.workflow import _load_role_prompt
+
+        prompt = _load_role_prompt("llm-writing")
+        assert "LLM Writing Reviewer CHECKING" in prompt
+        assert "excessive evidence of AI writing" in prompt
+        assert "rule-of-three phrasing" in prompt
 
     def test_professor_role(self):
         from juvenal.workflow import _load_role_prompt

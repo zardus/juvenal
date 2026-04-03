@@ -240,6 +240,7 @@ Agent checkers can use built-in verification personas:
 - `senior-engineer` — reviews code quality, completeness, security
 - `security-engineer` — reviews security boundaries, exploitability, and risky defaults
 - `technical-writer` — reviews technical accuracy, structure, and clarity of written output
+- `llm-writing` — reviews English prose for excessive evidence of AI-style writing and generic LLM phrasing
 - `professor` — reviews research vision, experiment design, and scientific rigor
 - `grant-reviewer` — reviews grant proposals for significance, feasibility, and reviewer-facing gaps
 
