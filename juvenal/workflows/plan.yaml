@@ -60,14 +60,16 @@ phases:
     type: check
     bounce_target: write-workflow
     prompt: |
-      Run this command from the working directory to validate `workflow.yaml` against `.plan/workflow-structure.yaml`:
+      Run this command from the working directory to validate `workflow.yaml` against `.plan/workflow-structure.yaml`
+      and the standard Juvenal workflow rules, including Jinja2 syntax and renderability checks:
 
       ```bash
       python -m juvenal.plan_validation .plan/workflow-structure.yaml workflow.yaml
       ```
 
       Do not modify any files while checking.
-      If the command fails or reports any topology or structure mismatch, emit `VERDICT: FAIL: <reason>`.
+      If the command fails or reports any topology, structure, loadability, or template-validation mismatch, emit
+      `VERDICT: FAIL: <reason>`.
       If it succeeds and the generated workflow matches the plan contract, emit `VERDICT: PASS`.
 
   - id: workflow-review

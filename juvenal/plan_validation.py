@@ -8,6 +8,8 @@ from typing import Any
 
 import yaml
 
+from juvenal.workflow import load_workflow, validate_workflow
+
 _VERIFIER_TYPES = {"check"}
 _ALLOWED_PHASE_TYPES = {"implement", "check"}
 _INLINE_ONLY_FORBIDDEN_PHASE_KEYS = ("prompt_file", "workflow_file", "workflow_dir")
@@ -35,6 +37,14 @@ def _validate_required_input_list(value: Any, label: str, errors: list[str]) -> 
         errors.append(f"{label} must be a list of strings")
         return False
     return True
+
+
+def _validate_loaded_workflow(workflow_path: Path) -> list[str]:
+    try:
+        workflow = load_workflow(workflow_path)
+    except Exception as exc:
+        return [f"Workflow load failed: {exc}"]
+    return validate_workflow(workflow)
 
 
 def validate_planned_workflow(structure_path: Path, workflow_path: Path) -> list[str]:
@@ -209,11 +219,17 @@ def validate_planned_workflow(structure_path: Path, workflow_path: Path) -> list
                 f"{last_implement_id!r}, got {bounce_target!r}"
             )
 
+    if errors:
+        return errors
+
+    errors.extend(_validate_loaded_workflow(workflow_path))
     return errors
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Validate planner-generated workflow structure and topology.")
+    parser = argparse.ArgumentParser(
+        description="Validate planner-generated workflow structure, loadability, and template integrity."
+    )
     parser.add_argument("structure", help="Path to .plan/workflow-structure.yaml")
     parser.add_argument("workflow", help="Path to generated workflow.yaml")
     args = parser.parse_args(argv)

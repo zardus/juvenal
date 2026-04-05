@@ -175,6 +175,34 @@ def test_validate_planned_workflow_rejects_phase_level_run_key(tmp_path):
     assert any("run is not supported" in error for error in errors)
 
 
+def test_validate_planned_workflow_rejects_invalid_jinja_syntax(tmp_path):
+    structure = _base_structure()
+    workflow = _base_workflow()
+    workflow["phases"][0]["prompt"] = "{{ PROJECT"
+
+    structure_path, workflow_path = _write_case(tmp_path, structure, workflow)
+    errors = validate_planned_workflow(structure_path, workflow_path)
+
+    assert any("invalid Jinja2 prompt" in error for error in errors)
+
+
+def test_plan_validation_module_entrypoint_rejects_invalid_jinja_syntax(tmp_path):
+    structure = _smoke_structure()
+    workflow = _smoke_workflow()
+    workflow["phases"][0]["prompt"] = "{{ PROJECT"
+    structure_path, workflow_path = _write_case(tmp_path, structure, workflow)
+
+    result = subprocess.run(
+        [sys.executable, "-m", "juvenal.plan_validation", str(structure_path), str(workflow_path)],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 1
+    assert "invalid Jinja2 prompt" in result.stdout
+
+
 def test_validate_planned_workflow_rejects_deferred_verifier(tmp_path):
     structure = {
         "linear": True,
