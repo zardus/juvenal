@@ -1071,6 +1071,37 @@ def inject_implementer(workflow: Workflow, role: str) -> Workflow:
     )
 
 
+def linearize_implement_workflow(workflow: Workflow) -> Workflow:
+    """Keep only implement phases from an explicit implement/check workflow.
+
+    This is used by phased runs that reuse the built-in planner for decomposition
+    but intentionally discard planner-authored check phases so the caller's own
+    checker set can be injected deterministically afterward.
+    """
+    unsupported = sorted({phase.type for phase in workflow.phases if phase.type not in {"implement", "check"}})
+    if unsupported:
+        raise ValueError(
+            f"Phased implementer mode only supports planned workflows with implement/check phases, got: {unsupported}"
+        )
+
+    implement_phases = [phase for phase in workflow.phases if phase.type == "implement"]
+    if not implement_phases:
+        raise ValueError("Phased implementer mode requires at least one implement phase in the planned workflow")
+
+    return Workflow(
+        name=workflow.name,
+        phases=implement_phases,
+        backend=workflow.backend,
+        working_dir=workflow.working_dir,
+        max_bounces=workflow.max_bounces,
+        parallel_groups=[],
+        backoff=workflow.backoff,
+        max_backoff=workflow.max_backoff,
+        notify=list(workflow.notify),
+        vars=dict(workflow.vars),
+    )
+
+
 def expand_multi_vars(workflow: Workflow, multi_vars: dict[str, list[str]]) -> Workflow:
     """Expand phases that reference multi-value vars into parallel duplicates.
 

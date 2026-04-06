@@ -2,6 +2,7 @@
 
 import argparse
 import sys
+from pathlib import Path
 
 from juvenal import __version__
 
@@ -30,6 +31,10 @@ def build_parser() -> argparse.ArgumentParser:
     run_p.add_argument("--working-dir", help="Working directory for the agent")
     run_p.add_argument("--state-file", help="Path to state file (default: .juvenal-state.json)")
     run_p.add_argument(
+        "--phased-implementer",
+        help='Plan GOAL into linear implement phases, optionally as ROLE:"GOAL" to prepend an implementer role',
+    )
+    run_p.add_argument(
         "--backoff", type=float, default=None, help="Base backoff delay in seconds between bounces (exponential)"
     )
     run_p.add_argument("--notify", action="append", default=[], help="Webhook URL for completion/failure notifications")
@@ -57,6 +62,9 @@ def build_parser() -> argparse.ArgumentParser:
     )
     run_p.add_argument(
         "-D", action="append", default=[], metavar="VAR=VAL", dest="defines", help="Set template variable"
+    )
+    run_p.add_argument(
+        "-i", "--interactive", action="store_true", help="Interactive mode: chat with the agent during phased planning"
     )
     run_p.add_argument("--serialize", action="store_true", help="Disable all parallelization")
 
@@ -199,57 +207,126 @@ def _parse_implementer(spec: str) -> tuple[str, str | None]:
     return split_specialized_role(spec)
 
 
+def _parse_phased_implementer(spec: str) -> tuple[str | None, str]:
+    """Parse --phased-implementer into (role | None, goal text).
+
+    Only treat ROLE:GOAL specially when ROLE is a valid built-in implementer role.
+    Otherwise the whole string is treated as the goal so ordinary colons remain usable.
+    """
+    from juvenal.workflow import VALID_IMPLEMENTER_ROLES, split_specialized_role
+
+    if ":" in spec:
+        role, prompt = split_specialized_role(spec)
+        if role in VALID_IMPLEMENTER_ROLES and prompt is not None:
+            goal = prompt.strip()
+            if not goal:
+                raise ValueError("Invalid --phased-implementer value: goal text is empty")
+            return role, goal
+
+    goal = spec.strip()
+    if not goal:
+        raise ValueError("Invalid --phased-implementer value: goal text is empty")
+    return None, goal
+
+
 def _expand_standard_checkers(args: argparse.Namespace) -> None:
     """If --standard-checkers is set, prepend the standard checker roles to args.checker."""
     if getattr(args, "standard_checkers", False):
         args.checker = list(STANDARD_CHECKERS) + args.checker
 
 
+def _plan_phased_workflow_or_exit(args: argparse.Namespace, goal: str):
+    """Run the built-in planner, then keep only the planned implement phases."""
+    from juvenal.engine import _plan_workflow_internal
+    from juvenal.workflow import linearize_implement_workflow
+
+    project_dir = args.working_dir or "."
+    result = _plan_workflow_internal(
+        goal=goal,
+        backend_name=args.backend,
+        plain=args.plain,
+        interactive=args.interactive,
+        serialize=args.serialize,
+        project_dir=project_dir,
+        resume=args.resume,
+    )
+    if not result.success:
+        error_loc = Path(project_dir).resolve() / ".plan"
+        print(f"Planning failed: {result.error}. Working directory preserved at: {error_loc}")
+        sys.exit(1)
+
+    workflow = _load_workflow_or_exit(result.workflow_yaml_path)
+    try:
+        return linearize_implement_workflow(workflow)
+    except ValueError as e:
+        print(f"Error: {e}")
+        sys.exit(1)
+
+
 def cmd_run(args: argparse.Namespace) -> int:
     from juvenal.engine import Engine
     from juvenal.workflow import Phase, Workflow, inject_implementer, validate_workflow
 
-    # Parse --implementer flags into role-only vs inline phases
-    inline_phases: list[Phase] = []
-    role_only: str | None = None
-    for spec in args.implementer:
-        role, prompt = _parse_implementer(spec)
-        if prompt is not None:
-            inline_phases.append(Phase(id=f"implement-{len(inline_phases)}", prompt=prompt))
-            if role:
-                # Apply role preamble to just this phase
-                mini = Workflow(name="tmp", phases=[inline_phases[-1]])
-                mini = inject_implementer(mini, role)
-                inline_phases[-1] = mini.phases[0]
-        else:
-            role_only = role
-
-    # Build workflow: inline phases + workflow path phases
-    if args.workflow:
-        file_workflow = _load_workflow_or_exit(args.workflow)
-        if role_only:
-            file_workflow = inject_implementer(file_workflow, role_only)
-        all_phases = inline_phases + file_workflow.phases
-        workflow = Workflow(
-            name=file_workflow.name,
-            phases=all_phases,
-            backend=file_workflow.backend,
-            working_dir=file_workflow.working_dir,
-            max_bounces=file_workflow.max_bounces,
-            parallel_groups=file_workflow.parallel_groups,
-            backoff=file_workflow.backoff,
-            max_backoff=file_workflow.max_backoff,
-            notify=list(file_workflow.notify),
-            vars=dict(file_workflow.vars),
-        )
-    elif inline_phases:
-        workflow = Workflow(name="inline", phases=inline_phases)
+    implementer_role: str | None = None
+    apply_global_implementer = False
+    if args.phased_implementer:
+        if args.workflow:
+            print("Error: --phased-implementer cannot be used with a workflow path")
+            return 1
+        if args.implementer:
+            print("Error: --phased-implementer cannot be combined with --implementer")
+            return 1
+        try:
+            implementer_role, goal = _parse_phased_implementer(args.phased_implementer)
+        except ValueError as e:
+            print(f"Error: {e}")
+            return 1
+        apply_global_implementer = True
+        workflow = _plan_phased_workflow_or_exit(args, goal)
     else:
-        print('Error: workflow path is required (or use --implementer role:"prompt")')
-        return 1
+        # Parse --implementer flags into role-only vs inline phases
+        inline_phases: list[Phase] = []
+        for spec in args.implementer:
+            role, prompt = _parse_implementer(spec)
+            if prompt is not None:
+                inline_phases.append(Phase(id=f"implement-{len(inline_phases)}", prompt=prompt))
+                if role:
+                    # Apply role preamble to just this phase
+                    mini = Workflow(name="tmp", phases=[inline_phases[-1]])
+                    mini = inject_implementer(mini, role)
+                    inline_phases[-1] = mini.phases[0]
+            else:
+                implementer_role = role
+
+        # Build workflow: inline phases + workflow path phases
+        if args.workflow:
+            file_workflow = _load_workflow_or_exit(args.workflow)
+            if implementer_role:
+                file_workflow = inject_implementer(file_workflow, implementer_role)
+                implementer_role = None
+            all_phases = inline_phases + file_workflow.phases
+            workflow = Workflow(
+                name=file_workflow.name,
+                phases=all_phases,
+                backend=file_workflow.backend,
+                working_dir=file_workflow.working_dir,
+                max_bounces=file_workflow.max_bounces,
+                parallel_groups=file_workflow.parallel_groups,
+                backoff=file_workflow.backoff,
+                max_backoff=file_workflow.max_backoff,
+                notify=list(file_workflow.notify),
+                vars=dict(file_workflow.vars),
+            )
+        elif inline_phases:
+            workflow = Workflow(name="inline", phases=inline_phases)
+        else:
+            print('Error: workflow path is required (or use --implementer role:"prompt" or --phased-implementer)')
+            return 1
 
     if args.defines:
         workflow = _apply_defines(workflow, _parse_defines(args.defines))
+    if apply_global_implementer and implementer_role:
+        workflow = inject_implementer(workflow, implementer_role)
     _expand_standard_checkers(args)
     if args.checker:
         workflow = _inject_checkers_or_exit(workflow, args.checker)
@@ -281,6 +358,7 @@ def cmd_run(args: argparse.Namespace) -> int:
         plain=args.plain,
         clear_context_on_bounce=args.clear_context_on_bounce,
         serialize=args.serialize,
+        interactive=args.interactive,
     )
     return engine.run()
 

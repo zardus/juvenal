@@ -13,6 +13,7 @@ from juvenal.workflow import (
     expand_multi_vars,
     inject_checkers,
     inject_implementer,
+    linearize_implement_workflow,
     load_workflow,
     make_command_check_prompt,
     parse_checker_string,
@@ -1238,6 +1239,46 @@ vars:
 """)
         wf = load_workflow(tmp_path)
         assert wf.vars == {"PROJECT": "myapp"}
+
+
+class TestLinearizeImplementWorkflow:
+    def test_keeps_only_implement_phases_in_order(self):
+        wf = Workflow(
+            name="planned",
+            phases=[
+                Phase(id="discover", type="implement", prompt="Discover."),
+                Phase(id="discover~check-1", type="check", role="tester", bounce_target="discover"),
+                Phase(id="build", type="implement", prompt="Build."),
+                Phase(id="build~check-1", type="check", role="architect", bounce_target="build"),
+            ],
+            parallel_groups=[ParallelGroup(phases=["discover", "build"])],
+            vars={"ENV": "prod"},
+        )
+
+        result = linearize_implement_workflow(wf)
+
+        assert [phase.id for phase in result.phases] == ["discover", "build"]
+        assert all(phase.type == "implement" for phase in result.phases)
+        assert result.parallel_groups == []
+        assert result.vars == {"ENV": "prod"}
+
+    def test_rejects_non_planned_phase_types(self):
+        wf = Workflow(
+            name="planned",
+            phases=[Phase(id="subflow", type="workflow", prompt="Do more work.")],
+        )
+
+        with pytest.raises(ValueError, match="only supports planned workflows with implement/check phases"):
+            linearize_implement_workflow(wf)
+
+    def test_requires_at_least_one_implement_phase(self):
+        wf = Workflow(
+            name="planned",
+            phases=[Phase(id="review", type="check", role="tester", bounce_target="build")],
+        )
+
+        with pytest.raises(ValueError, match="requires at least one implement phase"):
+            linearize_implement_workflow(wf)
 
 
 class TestWorkflowFileDir:

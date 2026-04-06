@@ -6,7 +6,7 @@ import time
 
 import pytest
 
-from juvenal.cli import _parse_defines, build_parser, cmd_plan, cmd_status
+from juvenal.cli import _parse_defines, _parse_phased_implementer, build_parser, cmd_plan, cmd_run, cmd_status
 from juvenal.state import PipelineState
 
 
@@ -216,11 +216,22 @@ class TestArgumentParsing:
         args = parser.parse_args(["run", "workflow.yaml"])
         assert args.implementer == []
 
+    def test_run_phased_implementer(self):
+        parser = build_parser()
+        args = parser.parse_args(["run", "--phased-implementer", 'software-engineer:"build a thing"'])
+        assert args.phased_implementer == 'software-engineer:"build a thing"'
+
     def test_parse_implementer_strips_wrapping_quotes(self):
         from juvenal.cli import _parse_implementer
 
         assert _parse_implementer('software-engineer:"do X"') == ("software-engineer", "do X")
         assert _parse_implementer("software-engineer:'do Y'") == ("software-engineer", "do Y")
+
+    def test_parse_phased_implementer_strips_wrapping_quotes(self):
+        assert _parse_phased_implementer('software-engineer:"build a thing"') == ("software-engineer", "build a thing")
+
+    def test_parse_phased_implementer_keeps_plain_goal_colons(self):
+        assert _parse_phased_implementer("build API: auth flow") == (None, "build API: auth flow")
 
     def test_plan_implementer(self):
         parser = build_parser()
@@ -246,6 +257,16 @@ class TestArgumentParsing:
         parser = build_parser()
         args = parser.parse_args(["do", "build a thing", "--clear-context-on-bounce"])
         assert args.clear_context_on_bounce is True
+
+    def test_run_interactive_flag(self):
+        parser = build_parser()
+        args = parser.parse_args(["run", "workflow.yaml", "--interactive"])
+        assert args.interactive is True
+
+    def test_run_interactive_short_flag(self):
+        parser = build_parser()
+        args = parser.parse_args(["run", "workflow.yaml", "-i"])
+        assert args.interactive is True
 
     def test_run_defines_single(self):
         parser = build_parser()
@@ -334,6 +355,149 @@ class TestParseDefines:
     def test_equals_in_value(self):
         result = _parse_defines(["CMD=a=b=c"])
         assert result == {"CMD": ["a=b=c"]}
+
+
+class TestCmdRun:
+    def test_phased_implementer_reuses_planner_and_replaces_planned_checkers(self, monkeypatch, tmp_path):
+        import juvenal.engine
+        from juvenal.engine import PlanResult
+
+        project_dir = tmp_path / "project"
+        project_dir.mkdir()
+        workflow_path = project_dir / "workflow.yaml"
+        workflow_path.write_text(
+            """\
+name: planned
+phases:
+  - id: analyze
+    prompt: "Analyze the problem."
+  - id: analyze-review
+    type: check
+    role: architect
+    bounce_target: analyze
+  - id: build
+    prompt: "Build the solution."
+  - id: build-review
+    type: check
+    role: pm
+    bounce_target: build
+""",
+        )
+
+        planned_calls = {}
+        engine_calls = {}
+
+        def mock_plan_workflow_internal(
+            goal,
+            backend_name="codex",
+            plain=False,
+            interactive=False,
+            resume=False,
+            project_dir=None,
+            serialize=False,
+            **_,
+        ):
+            planned_calls["goal"] = goal
+            planned_calls["backend_name"] = backend_name
+            planned_calls["interactive"] = interactive
+            planned_calls["resume"] = resume
+            planned_calls["project_dir"] = project_dir
+            planned_calls["serialize"] = serialize
+            return PlanResult(success=True, workflow_yaml_path=str(workflow_path))
+
+        class DummyEngine:
+            def __init__(self, workflow, **kwargs):
+                engine_calls["workflow"] = workflow
+                engine_calls["kwargs"] = kwargs
+
+            def run(self):
+                return 0
+
+        monkeypatch.setattr(juvenal.engine, "_plan_workflow_internal", mock_plan_workflow_internal)
+        monkeypatch.setattr(juvenal.engine, "Engine", DummyEngine)
+
+        parser = build_parser()
+        args = parser.parse_args(
+            [
+                "run",
+                "--phased-implementer",
+                'software-engineer:"Build a multi-step feature"',
+                "--checker",
+                "tester",
+                "--working-dir",
+                str(project_dir),
+                "--interactive",
+            ]
+        )
+        args.plain = True
+
+        assert cmd_run(args) == 0
+        assert planned_calls == {
+            "goal": "Build a multi-step feature",
+            "backend_name": "codex",
+            "interactive": True,
+            "resume": False,
+            "project_dir": str(project_dir),
+            "serialize": False,
+        }
+
+        workflow = engine_calls["workflow"]
+        assert [phase.id for phase in workflow.phases] == ["analyze", "analyze~check-1", "build", "build~check-1"]
+        assert workflow.phases[1].role == "tester"
+        assert workflow.phases[3].role == "tester"
+        assert "expert software engineer" in workflow.phases[0].prompt
+        assert "expert software engineer" in workflow.phases[2].prompt
+        assert workflow.working_dir == str(project_dir)
+        assert engine_calls["kwargs"]["interactive"] is True
+
+    def test_phased_implementer_rejects_workflow_path(self, capsys):
+        parser = build_parser()
+        args = parser.parse_args(["run", "workflow.yaml", "--phased-implementer", "build a thing"])
+        args.plain = True
+
+        assert cmd_run(args) == 1
+        captured = capsys.readouterr()
+        assert "--phased-implementer cannot be used with a workflow path" in captured.out
+
+    def test_phased_implementer_rejects_implementer_flag(self, capsys):
+        parser = build_parser()
+        args = parser.parse_args(["run", "--phased-implementer", "build a thing", "--implementer", "software-engineer"])
+        args.plain = True
+
+        assert cmd_run(args) == 1
+        captured = capsys.readouterr()
+        assert "--phased-implementer cannot be combined with --implementer" in captured.out
+
+    def test_role_only_implementer_does_not_double_apply_to_inline_phase(self, monkeypatch):
+        import juvenal.engine
+
+        engine_calls = {}
+
+        class DummyEngine:
+            def __init__(self, workflow, **kwargs):
+                engine_calls["workflow"] = workflow
+                engine_calls["kwargs"] = kwargs
+
+            def run(self):
+                return 0
+
+        monkeypatch.setattr(juvenal.engine, "Engine", DummyEngine)
+
+        parser = build_parser()
+        args = parser.parse_args(
+            [
+                "run",
+                "--implementer",
+                'software-engineer:"Build it."',
+                "--implementer",
+                "software-engineer",
+            ]
+        )
+        args.plain = True
+
+        assert cmd_run(args) == 0
+        prompt = engine_calls["workflow"].phases[0].prompt
+        assert prompt.count("expert software engineer") == 1
 
 
 class TestStatusExitCode:
