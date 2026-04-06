@@ -235,6 +235,11 @@ def _expand_standard_checkers(args: argparse.Namespace) -> None:
         args.checker = list(STANDARD_CHECKERS) + args.checker
 
 
+def _planner_resume_requested(args: argparse.Namespace) -> bool:
+    """Mirror run-mode implicit resume semantics for phased planning."""
+    return args.resume or args.rewind is not None or args.rewind_to is not None
+
+
 def _plan_phased_workflow_or_exit(args: argparse.Namespace, goal: str):
     """Run the built-in planner, then keep only the planned implement phases."""
     from juvenal.engine import _plan_workflow_internal
@@ -248,7 +253,7 @@ def _plan_phased_workflow_or_exit(args: argparse.Namespace, goal: str):
         interactive=args.interactive,
         serialize=args.serialize,
         project_dir=project_dir,
-        resume=args.resume,
+        resume=_planner_resume_requested(args),
     )
     if not result.success:
         error_loc = Path(project_dir).resolve() / ".plan"

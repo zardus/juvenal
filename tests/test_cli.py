@@ -450,6 +450,73 @@ phases:
         assert workflow.working_dir == str(project_dir)
         assert engine_calls["kwargs"]["interactive"] is True
 
+    @pytest.mark.parametrize(
+        ("extra_args", "expected_resume"),
+        [
+            (["--resume"], True),
+            (["--rewind", "2"], True),
+            (["--rewind-to", "build"], True),
+        ],
+    )
+    def test_phased_implementer_uses_run_resume_semantics_for_planner(
+        self, monkeypatch, tmp_path, extra_args, expected_resume
+    ):
+        import juvenal.engine
+        from juvenal.engine import PlanResult
+
+        project_dir = tmp_path / "project"
+        project_dir.mkdir()
+        workflow_path = project_dir / "workflow.yaml"
+        workflow_path.write_text(
+            """\
+name: planned
+phases:
+  - id: build
+    prompt: "Build the solution."
+""",
+        )
+
+        planned_calls = {}
+
+        def mock_plan_workflow_internal(
+            goal,
+            backend_name="codex",
+            plain=False,
+            interactive=False,
+            resume=False,
+            project_dir=None,
+            serialize=False,
+            **_,
+        ):
+            planned_calls["resume"] = resume
+            return PlanResult(success=True, workflow_yaml_path=str(workflow_path))
+
+        class DummyEngine:
+            def __init__(self, workflow, **kwargs):
+                self.workflow = workflow
+
+            def run(self):
+                return 0
+
+        monkeypatch.setattr(juvenal.engine, "_plan_workflow_internal", mock_plan_workflow_internal)
+        monkeypatch.setattr(juvenal.engine, "Engine", DummyEngine)
+
+        parser = build_parser()
+        args = parser.parse_args(
+            [
+                "run",
+                "--phased-implementer",
+                "build something",
+                "--working-dir",
+                str(project_dir),
+                *extra_args,
+            ]
+        )
+        args.plain = True
+
+        assert cmd_run(args) == 0
+        assert planned_calls["resume"] is expected_resume
+
     def test_phased_implementer_rejects_invalid_checker_before_planning(self, monkeypatch, capsys):
         import juvenal.engine
 
