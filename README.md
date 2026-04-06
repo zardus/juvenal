@@ -76,6 +76,9 @@ juvenal init my-project
 # Run a workflow
 juvenal run workflow.yaml
 
+# Decompose a complex goal into linear implement phases, then run your fixed checker stack
+juvenal run --standard-checkers --phased-implementer 'software-engineer:add authentication to the Flask app'
+
 # Generate a workflow from a goal
 juvenal plan "implement a REST API with tests" -o workflow.yaml
 
@@ -349,9 +352,11 @@ juvenal run <workflow> [--resume] [--rewind N] [--rewind-to PHASE_ID] [--phase X
                        [--max-bounces N] [--backend claude|codex] [--dry-run]
                        [--backoff SECONDS] [--notify URL] [--working-dir DIR]
                        [--state-file PATH] [--checker SPEC] [--implementer ROLE]
-                       [--clear-context-on-bounce] [-D VAR=VAL] [--serialize]
-juvenal plan "goal" [-o output.yaml] [--backend claude|codex]
-juvenal do "goal" [--backend claude|codex] [--max-bounces N] [-D VAR=VAL] [--serialize]
+                       [--phased-implementer SPEC] [--clear-context-on-bounce]
+                       [-D VAR=VAL] [-i|--interactive] [--serialize]
+juvenal plan "goal" [-o output.yaml] [--backend claude|codex] [-i|--interactive]
+juvenal do "goal" [--backend claude|codex] [--max-bounces N] [-D VAR=VAL]
+                  [-i|--interactive] [--serialize]
 juvenal status [--state-file path]
 juvenal init [directory] [--template name]
 juvenal validate <workflow>
@@ -368,6 +373,8 @@ juvenal validate <workflow>
 | `--dry-run` | Print execution plan without running |
 | `--checker SPEC` | Inject checker on every implement phase (`tester`, `tester:"extra instructions"`, or `prompt:"TEXT"`). Repeatable. |
 | `--implementer ROLE` | Prepend implementer role prompt to every implement phase |
+| `--phased-implementer SPEC` | On `run`, first plan a complex goal into linear implement phases, then execute them with your CLI-injected checker stack. Accepts either `GOAL` or `ROLE:"GOAL"`. |
+| `-i`, `--interactive` | For `run --phased-implementer`, `plan`, and `do`, allow the planner/refinement phase to ask the user one question at a time before execution continues. |
 | `--clear-context-on-bounce` | Start fresh agent session on bounce (default: resume session) |
 | `-D VAR=VAL` | Set a Jinja2 template variable. Repeatable. |
 | `--backoff SECONDS` | Exponential backoff base delay between bounces |
@@ -405,6 +412,33 @@ juvenal run workflow.yaml --checker 'tester:"Focus on API error handling and reg
 
 # Add both
 juvenal run workflow.yaml --checker tester --checker "prompt:Run make lint and emit VERDICT based on the result."
+```
+
+### Phased Complex Goals
+
+If you want the built-in planner to split a large goal into multiple **linear** implement phases, but you do **not** want planner-authored checkers, use `run --phased-implementer`.
+
+Juvenal will:
+
+1. plan the goal using the same planning pipeline that powers `do`
+2. keep only the planned implement phases
+3. inject your CLI-selected checkers after each implement phase
+
+Example:
+
+```bash
+juvenal run \
+  --standard-checkers \
+  --phased-implementer 'software-engineer:add authentication, audit logging, and tests to the Flask app' \
+  --interactive
+```
+
+That produces an execution shape like:
+
+```text
+implement-a -> tester -> senior-tester -> senior-engineer -> architect -> pm
+implement-b -> tester -> senior-tester -> senior-engineer -> architect -> pm
+implement-c -> tester -> senior-tester -> senior-engineer -> architect -> pm
 ```
 
 ## License
