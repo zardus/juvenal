@@ -450,6 +450,29 @@ phases:
         assert workflow.working_dir == str(project_dir)
         assert engine_calls["kwargs"]["interactive"] is True
 
+    def test_phased_implementer_rejects_invalid_checker_before_planning(self, monkeypatch, capsys):
+        import juvenal.engine
+
+        called = False
+
+        def mock_plan_workflow_internal(*args, **kwargs):
+            nonlocal called
+            called = True
+
+        monkeypatch.setattr(juvenal.engine, "_plan_workflow_internal", mock_plan_workflow_internal)
+
+        parser = build_parser()
+        args = parser.parse_args(["run", "--phased-implementer", "build something", "--checker", "run:pytest -x"])
+        args.plain = True
+
+        with pytest.raises(SystemExit) as excinfo:
+            cmd_run(args)
+
+        captured = capsys.readouterr()
+        assert excinfo.value.code == 1
+        assert called is False
+        assert "Error: Invalid --checker spec" in captured.out
+
     def test_phased_implementer_rejects_workflow_path(self, capsys):
         parser = build_parser()
         args = parser.parse_args(["run", "workflow.yaml", "--phased-implementer", "build a thing"])

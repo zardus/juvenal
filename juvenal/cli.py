@@ -267,6 +267,10 @@ def cmd_run(args: argparse.Namespace) -> int:
     from juvenal.engine import Engine
     from juvenal.workflow import Phase, Workflow, inject_implementer, validate_workflow
 
+    _expand_standard_checkers(args)
+    if args.checker:
+        _parse_checker_specs_or_exit(args.checker)
+
     implementer_role: str | None = None
     apply_global_implementer = False
     if args.phased_implementer:
@@ -327,7 +331,6 @@ def cmd_run(args: argparse.Namespace) -> int:
         workflow = _apply_defines(workflow, _parse_defines(args.defines))
     if apply_global_implementer and implementer_role:
         workflow = inject_implementer(workflow, implementer_role)
-    _expand_standard_checkers(args)
     if args.checker:
         workflow = _inject_checkers_or_exit(workflow, args.checker)
     errors = validate_workflow(workflow)
