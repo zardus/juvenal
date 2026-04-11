@@ -373,7 +373,8 @@ juvenal validate <workflow>
 | `--dry-run` | Print execution plan without running |
 | `--checker SPEC` | Inject checker on every implement phase (`tester`, `tester:"extra instructions"`, or `prompt:"TEXT"`). Repeatable. |
 | `--implementer ROLE` | Prepend implementer role prompt to every implement phase |
-| `--phased-implementer SPEC` | On `run`, first plan a complex goal into implement phases with their planner-authored checks, then execute them with your CLI-injected checker stack appended after each one. Accepts either `GOAL` or `ROLE:"GOAL"`. |
+| `--phased-implementer SPEC` | On `run`, first plan a complex goal into implement phases with their planner-authored checks, then execute them with your CLI-injected checker stack appended after each one. Accepts either `GOAL` or `ROLE:"GOAL"`. Implies `--linear`. |
+| `--linear` | On `run --phased-implementer` or `do`, enforce that the planner produces a strictly linear workflow (implement phases followed by check phases that bounce to the immediately preceding implement). Implied by `--phased-implementer`. |
 | `-i`, `--interactive` | For `run --phased-implementer`, `plan`, and `do`, allow the planner/refinement phase to ask the user one question at a time before execution continues. |
 | `--clear-context-on-bounce` | Start fresh agent session on bounce (default: resume session) |
 | `-D VAR=VAL` | Set a Jinja2 template variable. Repeatable. |

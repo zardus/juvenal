@@ -47,8 +47,17 @@ def _validate_loaded_workflow(workflow_path: Path) -> list[str]:
     return validate_workflow(workflow)
 
 
-def validate_planned_workflow(structure_path: Path, workflow_path: Path) -> list[str]:
-    """Validate planner-produced workflow rules that generic workflow validation does not cover."""
+def validate_planned_workflow(structure_path: Path, workflow_path: Path, linear_only: bool = True) -> list[str]:
+    """Validate planner-produced workflow rules that generic workflow validation does not cover.
+
+    When ``linear_only`` is True (the default), the generated workflow must be strictly
+    linear: the structure file must declare ``linear: true``, ``parallel_groups`` and
+    agent-guided ``bounce_targets`` lists are forbidden, and every verifier must bounce
+    to the immediately preceding implement phase. When ``linear_only`` is False these
+    structural constraints are skipped and only schema/inline-only/phase-consistency
+    rules are enforced — that is, the planner is free to emit non-linear shapes such as
+    parallel groups.
+    """
 
     errors: list[str] = []
 
@@ -74,7 +83,7 @@ def validate_planned_workflow(structure_path: Path, workflow_path: Path) -> list
         return errors
 
     linear = structure_raw.get("linear")
-    if linear is not True:
+    if linear_only and linear is not True:
         errors.append("Structure file must set linear: true")
 
     yaml_source_mode = structure_raw.get("yaml_source_mode")
@@ -94,8 +103,8 @@ def validate_planned_workflow(structure_path: Path, workflow_path: Path) -> list
                 errors,
             )
 
-    if linear is True and "parallel_groups" in workflow_raw:
-        errors.append("parallel_groups is not allowed when linear: true")
+    if linear_only and "parallel_groups" in workflow_raw:
+        errors.append("parallel_groups is not allowed when linear enforcement is on")
 
     if yaml_source_mode == "inline-only" and "include" in workflow_raw:
         errors.append("top-level include is not allowed when yaml_source_mode is inline-only")
@@ -174,8 +183,10 @@ def validate_planned_workflow(structure_path: Path, workflow_path: Path) -> list
                 f"bounce_target {structure_bounce!r}"
             )
 
-        if linear is True and "bounce_targets" in workflow_phase:
-            errors.append(f"Workflow phase {workflow_id!r}: bounce_targets lists are not allowed when linear: true")
+        if linear_only and "bounce_targets" in workflow_phase:
+            errors.append(
+                f"Workflow phase {workflow_id!r}: bounce_targets lists are not allowed when linear enforcement is on"
+            )
 
         if verifier_encoding == "explicit-phases" and "checks" in workflow_phase:
             errors.append(
@@ -197,27 +208,28 @@ def validate_planned_workflow(structure_path: Path, workflow_path: Path) -> list
                         "yaml_source_mode is inline-only"
                     )
 
-    last_implement_id: str | None = None
-    for phase_data in workflow_phases:
-        if not isinstance(phase_data, dict):
-            continue
-        phase_id = phase_data.get("id", "<unknown>")
-        phase_type = _phase_type(phase_data)
-        if phase_type == "implement":
-            last_implement_id = phase_id if isinstance(phase_id, str) and phase_id else None
-            continue
-        if phase_type not in _VERIFIER_TYPES:
-            continue
-        bounce_target = phase_data.get("bounce_target")
-        if not isinstance(bounce_target, str) or not bounce_target:
-            errors.append(f"Workflow verifier phase {phase_id!r} must define a single bounce_target")
-        if last_implement_id is None:
-            errors.append(f"Workflow verifier phase {phase_id!r} must follow an implement phase")
-        elif bounce_target != last_implement_id:
-            errors.append(
-                f"Workflow verifier phase {phase_id!r} must bounce to the immediately preceding implement phase "
-                f"{last_implement_id!r}, got {bounce_target!r}"
-            )
+    if linear_only:
+        last_implement_id: str | None = None
+        for phase_data in workflow_phases:
+            if not isinstance(phase_data, dict):
+                continue
+            phase_id = phase_data.get("id", "<unknown>")
+            phase_type = _phase_type(phase_data)
+            if phase_type == "implement":
+                last_implement_id = phase_id if isinstance(phase_id, str) and phase_id else None
+                continue
+            if phase_type not in _VERIFIER_TYPES:
+                continue
+            bounce_target = phase_data.get("bounce_target")
+            if not isinstance(bounce_target, str) or not bounce_target:
+                errors.append(f"Workflow verifier phase {phase_id!r} must define a single bounce_target")
+            if last_implement_id is None:
+                errors.append(f"Workflow verifier phase {phase_id!r} must follow an implement phase")
+            elif bounce_target != last_implement_id:
+                errors.append(
+                    f"Workflow verifier phase {phase_id!r} must bounce to the immediately preceding implement phase "
+                    f"{last_implement_id!r}, got {bounce_target!r}"
+                )
 
     if errors:
         return errors
@@ -232,9 +244,23 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("structure", help="Path to .plan/workflow-structure.yaml")
     parser.add_argument("workflow", help="Path to generated workflow.yaml")
+    linear_group = parser.add_mutually_exclusive_group()
+    linear_group.add_argument(
+        "--linear",
+        dest="linear_only",
+        action="store_true",
+        default=True,
+        help="Enforce linear workflow shape (default)",
+    )
+    linear_group.add_argument(
+        "--no-linear",
+        dest="linear_only",
+        action="store_false",
+        help="Relax linear-shape enforcement (allow parallel groups, non-adjacent verifiers, etc.)",
+    )
     args = parser.parse_args(argv)
 
-    errors = validate_planned_workflow(Path(args.structure), Path(args.workflow))
+    errors = validate_planned_workflow(Path(args.structure), Path(args.workflow), linear_only=args.linear_only)
     if errors:
         for error in errors:
             print(error)

@@ -426,3 +426,142 @@ def test_validate_planned_workflow_rejects_phase_level_workflow_dir(tmp_path):
     errors = validate_planned_workflow(structure_path, workflow_path)
 
     assert any("workflow_dir is not allowed" in error for error in errors)
+
+
+class TestLinearOnlyToggle:
+    def test_non_linear_mode_allows_parallel_groups(self, tmp_path):
+        structure = _base_structure()
+        workflow = _base_workflow()
+        workflow["parallel_groups"] = [{"phases": ["prepare", "prepare-review"]}]
+
+        structure_path, workflow_path = _write_case(tmp_path, structure, workflow)
+
+        strict_errors = validate_planned_workflow(structure_path, workflow_path, linear_only=True)
+        assert any("parallel_groups is not allowed" in error for error in strict_errors)
+
+        lax_errors = validate_planned_workflow(structure_path, workflow_path, linear_only=False)
+        assert not any("parallel_groups" in error for error in lax_errors)
+
+    def test_non_linear_mode_allows_deferred_verifier(self, tmp_path):
+        structure = {
+            "linear": True,
+            "yaml_source_mode": "inline-only",
+            "verifier_encoding": "explicit-phases",
+            "phases": [
+                {
+                    "order": 1,
+                    "id": "prepare",
+                    "type": "implement",
+                    "bounce_target": None,
+                    "required_preexisting_inputs": ["original/"],
+                },
+                {
+                    "order": 2,
+                    "id": "port",
+                    "type": "implement",
+                    "bounce_target": None,
+                    "required_preexisting_inputs": ["original/"],
+                },
+                {
+                    "order": 3,
+                    "id": "prepare-review",
+                    "type": "check",
+                    "bounce_target": "prepare",
+                    "required_preexisting_inputs": ["original/"],
+                },
+            ],
+        }
+        workflow = {
+            "name": "planned",
+            "backend": "codex",
+            "phases": [
+                {"id": "prepare", "prompt": "Commit work to git before yielding."},
+                {"id": "port", "prompt": "Commit work to git before yielding."},
+                {
+                    "id": "prepare-review",
+                    "type": "check",
+                    "bounce_target": "prepare",
+                    "prompt": "Role: Tester.\nRespond with VERDICT: PASS or VERDICT: FAIL: <reason>.",
+                },
+            ],
+        }
+
+        structure_path, workflow_path = _write_case(tmp_path, structure, workflow)
+
+        strict_errors = validate_planned_workflow(structure_path, workflow_path, linear_only=True)
+        assert any("immediately preceding implement phase" in error for error in strict_errors)
+
+        lax_errors = validate_planned_workflow(structure_path, workflow_path, linear_only=False)
+        assert not any("immediately preceding implement phase" in error for error in lax_errors)
+
+    def test_non_linear_mode_does_not_require_structure_linear_true(self, tmp_path):
+        structure = _base_structure()
+        structure["linear"] = False
+        workflow = _base_workflow()
+
+        structure_path, workflow_path = _write_case(tmp_path, structure, workflow)
+
+        strict_errors = validate_planned_workflow(structure_path, workflow_path, linear_only=True)
+        assert any("Structure file must set linear: true" in error for error in strict_errors)
+
+        lax_errors = validate_planned_workflow(structure_path, workflow_path, linear_only=False)
+        assert not any("Structure file must set linear: true" in error for error in lax_errors)
+
+    def test_non_linear_mode_still_enforces_inline_only_rules(self, tmp_path):
+        """Schema rules (prompt_file, workflow_file, workflow_dir, explicit-phases) still apply
+        in non-linear mode — only the *shape* constraints relax."""
+        structure = deepcopy(_base_structure())
+        structure["phases"] = [structure["phases"][0]]
+        workflow = {
+            "name": "planned",
+            "backend": "codex",
+            "phases": [
+                {
+                    "id": "prepare",
+                    "prompt": "Commit work to git before yielding.",
+                    "prompt_file": "prompt.md",
+                }
+            ],
+        }
+
+        structure_path, workflow_path = _write_case(tmp_path, structure, workflow)
+        errors = validate_planned_workflow(structure_path, workflow_path, linear_only=False)
+
+        assert any("prompt_file is not allowed" in error for error in errors)
+
+    def test_plan_validation_module_entrypoint_accepts_no_linear(self, tmp_path):
+        structure = _smoke_structure()
+        structure["linear"] = False
+        workflow = _smoke_workflow()
+        workflow["parallel_groups"] = [{"phases": ["analyze-prepared-inputs", "analyze-prepared-inputs-review"]}]
+        structure_path, workflow_path = _write_case(tmp_path, structure, workflow)
+
+        strict = subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "juvenal.plan_validation",
+                str(structure_path),
+                str(workflow_path),
+                "--linear",
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert strict.returncode == 1
+
+        lax = subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "juvenal.plan_validation",
+                str(structure_path),
+                str(workflow_path),
+                "--no-linear",
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert lax.returncode == 0, lax.stdout + lax.stderr

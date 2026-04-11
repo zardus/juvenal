@@ -395,6 +395,7 @@ phases:
             resume=False,
             project_dir=None,
             serialize=False,
+            linear=True,
             **_,
         ):
             planned_calls["goal"] = goal
@@ -403,6 +404,7 @@ phases:
             planned_calls["resume"] = resume
             planned_calls["project_dir"] = project_dir
             planned_calls["serialize"] = serialize
+            planned_calls["linear"] = linear
             return PlanResult(success=True, workflow_yaml_path=str(workflow_path))
 
         class DummyEngine:
@@ -439,6 +441,7 @@ phases:
             "resume": False,
             "project_dir": str(project_dir),
             "serialize": False,
+            "linear": True,
         }
 
         workflow = engine_calls["workflow"]
@@ -601,6 +604,65 @@ phases:
         assert cmd_run(args) == 0
         prompt = engine_calls["workflow"].phases[0].prompt
         assert prompt.count("expert software engineer") == 1
+
+    def test_run_linear_flag_parses(self):
+        parser = build_parser()
+        args = parser.parse_args(["run", "--phased-implementer", "build a thing", "--linear"])
+        assert args.linear is True
+        assert args.phased_implementer == "build a thing"
+
+    def test_run_linear_defaults_false(self):
+        parser = build_parser()
+        args = parser.parse_args(["run", "--phased-implementer", "build a thing"])
+        assert args.linear is False
+
+
+class TestCmdDoLinear:
+    def test_do_linear_flag_parses(self):
+        parser = build_parser()
+        args = parser.parse_args(["do", "build a thing", "--linear"])
+        assert args.linear is True
+
+    def test_do_linear_defaults_false(self):
+        parser = build_parser()
+        args = parser.parse_args(["do", "build a thing"])
+        assert args.linear is False
+
+    def test_do_threads_linear_flag_to_planner(self, monkeypatch, tmp_path):
+        """cmd_do should forward args.linear to plan_workflow so the planner sees it."""
+        import juvenal.engine
+        from juvenal.cli import cmd_do
+        from juvenal.workflow import Workflow
+
+        plan_calls: list[dict] = []
+
+        def mock_plan_workflow(goal, output, backend, plain=False, interactive=False, resume=False, linear=True):
+            plan_calls.append({"goal": goal, "linear": linear})
+            with open(output, "w") as fh:
+                fh.write('name: planned\nphases:\n  - id: build\n    prompt: "Build it."\n')
+
+        class DummyEngine:
+            def __init__(self, workflow: Workflow, **kwargs):
+                self.workflow = workflow
+
+            def run(self):
+                return 0
+
+        monkeypatch.setattr(juvenal.engine, "plan_workflow", mock_plan_workflow)
+        monkeypatch.setattr(juvenal.engine, "Engine", DummyEngine)
+        monkeypatch.chdir(tmp_path)
+
+        parser = build_parser()
+
+        args_no = parser.parse_args(["do", "build something"])
+        args_no.plain = True
+        assert cmd_do(args_no) == 0
+        assert plan_calls[-1]["linear"] is False
+
+        args_yes = parser.parse_args(["do", "build something", "--linear"])
+        args_yes.plain = True
+        assert cmd_do(args_yes) == 0
+        assert plan_calls[-1]["linear"] is True
 
 
 class TestStatusExitCode:

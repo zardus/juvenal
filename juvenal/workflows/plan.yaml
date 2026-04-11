@@ -4,6 +4,7 @@ max_bounces: 999
 
 vars:
   GOAL: ""
+  LINEAR: "true"
 
 phases:
   - id: plan-draft
@@ -65,7 +66,7 @@ phases:
       and renderability checks:
 
       ```bash
-      python -m juvenal.plan_validation .plan/workflow-structure.yaml workflow.yaml; echo "EXIT=$?"
+      python -m juvenal.plan_validation .plan/workflow-structure.yaml workflow.yaml {% if LINEAR == "true" %}--linear{% else %}--no-linear{% endif %}; echo "EXIT=$?"
       ```
 
       Do not skip this command. Do not substitute a different check (yaml.safe_load, a visual scan,

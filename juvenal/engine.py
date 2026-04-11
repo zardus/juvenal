@@ -1053,6 +1053,7 @@ def _plan_workflow_internal(
     interactive: bool = False,
     project_dir: str | None = None,
     resume: bool = False,
+    linear: bool = True,
 ) -> PlanResult:
     """Internal planning logic: generate a sub-workflow YAML from a goal.
 
@@ -1061,6 +1062,10 @@ def _plan_workflow_internal(
     run in the project directory (so they can read the codebase). When not set
     (dynamic sub-workflows), uses a temp dir.
     Callers are responsible for cleanup of temp_dir on success.
+
+    When ``linear`` is True (default) the programmatic validation gate enforces a
+    strictly linear workflow shape; when False the gate only applies basic schema
+    validation, allowing the planner to emit non-linear structures.
     """
     import yaml as _yaml
 
@@ -1089,6 +1094,7 @@ def _plan_workflow_internal(
         if backend_instance is None:
             workflow.backend = backend_name
         workflow.vars["GOAL"] = goal
+        workflow.vars["LINEAR"] = "true" if linear else "false"
         workflow.working_dir = work_dir
 
         state_path = str(plan_dir / ".juvenal-state.json")
@@ -1159,7 +1165,7 @@ def _plan_workflow_internal(
 
             try:
                 if structure_path.exists():
-                    validation_errors = validate_planned_workflow(structure_path, produced)
+                    validation_errors = validate_planned_workflow(structure_path, produced, linear_only=linear)
                 else:
                     # No structure file from this planner — still gate on the core
                     # workflow validator (template vars, loadability, etc.) so an
@@ -1215,6 +1221,7 @@ def plan_workflow(
     plain: bool = False,
     interactive: bool = False,
     resume: bool = False,
+    linear: bool = True,
 ) -> None:
     """Generate a workflow YAML from a goal description using a multi-phase pipeline."""
     import os
@@ -1226,6 +1233,7 @@ def plan_workflow(
         interactive=interactive,
         project_dir=os.getcwd(),
         resume=resume,
+        linear=linear,
     )
 
     if not result.success:

@@ -35,6 +35,11 @@ def build_parser() -> argparse.ArgumentParser:
         help='Plan GOAL into linear implement phases, optionally as ROLE:"GOAL" to prepend an implementer role',
     )
     run_p.add_argument(
+        "--linear",
+        action="store_true",
+        help="Enforce linear workflow shape during planning (implied by --phased-implementer)",
+    )
+    run_p.add_argument(
         "--backoff", type=float, default=None, help="Base backoff delay in seconds between bounces (exponential)"
     )
     run_p.add_argument("--notify", action="append", default=[], help="Webhook URL for completion/failure notifications")
@@ -114,6 +119,11 @@ def build_parser() -> argparse.ArgumentParser:
         "-D", action="append", default=[], metavar="VAR=VAL", dest="defines", help="Set template variable"
     )
     do_p.add_argument("--serialize", action="store_true", help="Disable all parallelization")
+    do_p.add_argument(
+        "--linear",
+        action="store_true",
+        help="Enforce linear workflow shape during planning",
+    )
 
     # status
     status_p = sub.add_parser("status", help="Show workflow progress")
@@ -254,6 +264,7 @@ def _plan_phased_workflow_or_exit(args: argparse.Namespace, goal: str):
         serialize=args.serialize,
         project_dir=project_dir,
         resume=_planner_resume_requested(args),
+        linear=True,
     )
     if not result.success:
         error_loc = Path(project_dir).resolve() / ".plan"
@@ -433,7 +444,14 @@ def cmd_do(args: argparse.Namespace) -> int:
         _parse_checker_specs_or_exit(args.checker)
 
     with tempfile.NamedTemporaryFile(suffix=".yaml", delete=False, mode="w") as f:
-        plan_workflow(args.goal, f.name, args.backend, plain=args.plain, interactive=args.interactive)
+        plan_workflow(
+            args.goal,
+            f.name,
+            args.backend,
+            plain=args.plain,
+            interactive=args.interactive,
+            linear=args.linear,
+        )
         workflow = _load_workflow_or_exit(f.name)
 
     if args.defines:
