@@ -241,9 +241,9 @@ def _planner_resume_requested(args: argparse.Namespace) -> bool:
 
 
 def _plan_phased_workflow_or_exit(args: argparse.Namespace, goal: str):
-    """Run the built-in planner, then keep only the planned implement phases."""
+    """Run the built-in planner and return the planned workflow for phased runs."""
     from juvenal.engine import _plan_workflow_internal
-    from juvenal.workflow import linearize_implement_workflow
+    from juvenal.workflow import validate_phased_planned_workflow
 
     project_dir = args.working_dir or "."
     result = _plan_workflow_internal(
@@ -262,7 +262,7 @@ def _plan_phased_workflow_or_exit(args: argparse.Namespace, goal: str):
 
     workflow = _load_workflow_or_exit(result.workflow_yaml_path)
     try:
-        return linearize_implement_workflow(workflow)
+        return validate_phased_planned_workflow(workflow)
     except ValueError as e:
         print(f"Error: {e}")
         sys.exit(1)

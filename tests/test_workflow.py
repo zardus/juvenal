@@ -13,11 +13,11 @@ from juvenal.workflow import (
     expand_multi_vars,
     inject_checkers,
     inject_implementer,
-    linearize_implement_workflow,
     load_workflow,
     make_command_check_prompt,
     parse_checker_string,
     scaffold_workflow,
+    validate_phased_planned_workflow,
 )
 
 
@@ -873,6 +873,28 @@ class TestInjectCheckers:
         assert result.phases[4].id == "build~check-4"
         assert result.phases[4].prompt == "Run pytest and verify the result."
 
+    def test_with_existing_custom_named_checks_by_bounce_target(self):
+        """Existing planner-style checks (custom IDs, bounce_target back to parent) are
+        collected as children so CLI checkers append *after* them with offset numbering."""
+        wf = Workflow(
+            name="planned",
+            phases=[
+                Phase(id="build", type="implement", prompt="Build it."),
+                Phase(id="build-review", type="check", role="architect", bounce_target="build"),
+                Phase(id="build-lint", type="check", role="senior-engineer", bounce_target="build"),
+            ],
+        )
+        result = inject_checkers(wf, ["tester"])
+
+        assert [p.id for p in result.phases] == [
+            "build",
+            "build-review",
+            "build-lint",
+            "build~check-3",
+        ]
+        assert result.phases[3].role == "tester"
+        assert result.phases[3].bounce_target == "build"
+
     def test_multiple_implement_phases(self):
         """Checkers are injected after each implement phase."""
         wf = Workflow(
@@ -1241,25 +1263,25 @@ vars:
         assert wf.vars == {"PROJECT": "myapp"}
 
 
-class TestLinearizeImplementWorkflow:
-    def test_keeps_only_implement_phases_in_order(self):
-        wf = Workflow(
-            name="planned",
-            phases=[
-                Phase(id="discover", type="implement", prompt="Discover."),
-                Phase(id="discover~check-1", type="check", role="tester", bounce_target="discover"),
-                Phase(id="build", type="implement", prompt="Build."),
-                Phase(id="build~check-1", type="check", role="architect", bounce_target="build"),
-            ],
-            parallel_groups=[ParallelGroup(phases=["discover", "build"])],
-            vars={"ENV": "prod"},
-        )
+class TestValidatePhasedPlannedWorkflow:
+    def test_returns_workflow_unchanged_preserving_planner_checks(self):
+        phases = [
+            Phase(id="discover", type="implement", prompt="Discover."),
+            Phase(id="discover~check-1", type="check", role="tester", bounce_target="discover"),
+            Phase(id="build", type="implement", prompt="Build."),
+            Phase(id="build-review", type="check", role="architect", bounce_target="build"),
+        ]
+        wf = Workflow(name="planned", phases=phases, vars={"ENV": "prod"})
 
-        result = linearize_implement_workflow(wf)
+        result = validate_phased_planned_workflow(wf)
 
-        assert [phase.id for phase in result.phases] == ["discover", "build"]
-        assert all(phase.type == "implement" for phase in result.phases)
-        assert result.parallel_groups == []
+        assert result is wf
+        assert [phase.id for phase in result.phases] == [
+            "discover",
+            "discover~check-1",
+            "build",
+            "build-review",
+        ]
         assert result.vars == {"ENV": "prod"}
 
     def test_rejects_non_planned_phase_types(self):
@@ -1269,7 +1291,7 @@ class TestLinearizeImplementWorkflow:
         )
 
         with pytest.raises(ValueError, match="only supports planned workflows with implement/check phases"):
-            linearize_implement_workflow(wf)
+            validate_phased_planned_workflow(wf)
 
     def test_requires_at_least_one_implement_phase(self):
         wf = Workflow(
@@ -1278,7 +1300,7 @@ class TestLinearizeImplementWorkflow:
         )
 
         with pytest.raises(ValueError, match="requires at least one implement phase"):
-            linearize_implement_workflow(wf)
+            validate_phased_planned_workflow(wf)
 
 
 class TestWorkflowFileDir:

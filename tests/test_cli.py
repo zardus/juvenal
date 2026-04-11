@@ -358,7 +358,7 @@ class TestParseDefines:
 
 
 class TestCmdRun:
-    def test_phased_implementer_reuses_planner_and_replaces_planned_checkers(self, monkeypatch, tmp_path):
+    def test_phased_implementer_reuses_planner_and_appends_cli_checkers(self, monkeypatch, tmp_path):
         import juvenal.engine
         from juvenal.engine import PlanResult
 
@@ -442,11 +442,24 @@ phases:
         }
 
         workflow = engine_calls["workflow"]
-        assert [phase.id for phase in workflow.phases] == ["analyze", "analyze~check-1", "build", "build~check-1"]
-        assert workflow.phases[1].role == "tester"
-        assert workflow.phases[3].role == "tester"
+        # Planner-authored checks are preserved; CLI checker is appended after them
+        # with an offset ID so it doesn't collide with existing phase IDs.
+        assert [phase.id for phase in workflow.phases] == [
+            "analyze",
+            "analyze-review",
+            "analyze~check-2",
+            "build",
+            "build-review",
+            "build~check-2",
+        ]
+        assert workflow.phases[1].role == "architect"
+        assert workflow.phases[2].role == "tester"
+        assert workflow.phases[2].bounce_target == "analyze"
+        assert workflow.phases[4].role == "pm"
+        assert workflow.phases[5].role == "tester"
+        assert workflow.phases[5].bounce_target == "build"
         assert "expert software engineer" in workflow.phases[0].prompt
-        assert "expert software engineer" in workflow.phases[2].prompt
+        assert "expert software engineer" in workflow.phases[3].prompt
         assert workflow.working_dir == str(project_dir)
         assert engine_calls["kwargs"]["interactive"] is True
 

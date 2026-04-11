@@ -963,21 +963,6 @@ def inject_checkers(workflow: Workflow, checker_specs: list[str]) -> Workflow:
     parsed = [parse_checker_string(s) for s in checker_specs]
 
     new_phases: list[Phase] = []
-    for phase in workflow.phases:
-        new_phases.append(phase)
-        if phase.type != "implement":
-            continue
-
-        # Count existing inline checkers for this parent to get offsets
-        parent_id = phase.id
-        existing_checks = 0
-        for p in workflow.phases:
-            if p.id.startswith(f"{parent_id}~check-"):
-                existing_checks += 1
-
-    # Rebuild with deferred expansion: process phases, when we see an implement
-    # phase, collect it and its children, then append expansions.
-    new_phases = []
     i = 0
     phases = workflow.phases
     while i < len(phases):
@@ -991,16 +976,23 @@ def inject_checkers(workflow: Workflow, checker_specs: list[str]) -> Workflow:
         parent_id = phase.id
         prefix = f"{parent_id}~"
 
-        # Collect existing children (they immediately follow the parent)
+        # Collect existing checks for this implement. A following phase counts
+        # as a child if it uses the canonical "{parent}~..." naming (CLI- or
+        # inline-generated) OR if it is a check phase that bounces back to this
+        # implement (covers planner-authored verifiers with their own IDs).
         existing_checks = 0
-        while i < len(phases) and phases[i].id.startswith(prefix):
+        while i < len(phases):
             child = phases[i]
+            is_named_child = child.id.startswith(prefix)
+            is_bounce_child = child.type == "check" and child.bounce_target == parent_id
+            if not (is_named_child or is_bounce_child):
+                break
             new_phases.append(child)
-            if child.id.startswith(f"{parent_id}~check-"):
+            if child.type == "check":
                 existing_checks += 1
             i += 1
 
-        # Expand CLI checkers with proper offsets
+        # Append CLI checkers after any existing children
         expanded = _expand_checkers(parent_id, parsed, check_offset=existing_checks, template_vars=phase.template_vars)
         new_phases.extend(expanded)
 
@@ -1071,12 +1063,14 @@ def inject_implementer(workflow: Workflow, role: str) -> Workflow:
     )
 
 
-def linearize_implement_workflow(workflow: Workflow) -> Workflow:
-    """Keep only implement phases from an explicit implement/check workflow.
+def validate_phased_planned_workflow(workflow: Workflow) -> Workflow:
+    """Validate a planner-produced workflow used by ``run --phased-implementer``.
 
-    This is used by phased runs that reuse the built-in planner for decomposition
-    but intentionally discard planner-authored check phases so the caller's own
-    checker set can be injected deterministically afterward.
+    Phased runs reuse the built-in planner for decomposition and then inject
+    the caller's CLI checker stack *on top of* any planner-authored verifiers.
+    The planned workflow must therefore be flat (only ``implement``/``check``
+    phases) and contain at least one implement phase. The workflow is returned
+    unchanged so that planner-authored check phases remain in place.
     """
     unsupported = sorted({phase.type for phase in workflow.phases if phase.type not in {"implement", "check"}})
     if unsupported:
@@ -1084,22 +1078,10 @@ def linearize_implement_workflow(workflow: Workflow) -> Workflow:
             f"Phased implementer mode only supports planned workflows with implement/check phases, got: {unsupported}"
         )
 
-    implement_phases = [phase for phase in workflow.phases if phase.type == "implement"]
-    if not implement_phases:
+    if not any(phase.type == "implement" for phase in workflow.phases):
         raise ValueError("Phased implementer mode requires at least one implement phase in the planned workflow")
 
-    return Workflow(
-        name=workflow.name,
-        phases=implement_phases,
-        backend=workflow.backend,
-        working_dir=workflow.working_dir,
-        max_bounces=workflow.max_bounces,
-        parallel_groups=[],
-        backoff=workflow.backoff,
-        max_backoff=workflow.max_backoff,
-        notify=list(workflow.notify),
-        vars=dict(workflow.vars),
-    )
+    return workflow
 
 
 def expand_multi_vars(workflow: Workflow, multi_vars: dict[str, list[str]]) -> Workflow:
