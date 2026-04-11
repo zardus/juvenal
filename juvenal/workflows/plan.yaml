@@ -5,6 +5,10 @@ max_bounces: 999
 vars:
   GOAL: ""
   LINEAR: "true"
+  # RAW_OPEN/RAW_END let plan-phases/09-write-workflow.md show literal
+  # {% raw %}/{% endraw %} tags to the planner LLM without confusing Jinja2.
+  RAW_OPEN: "{% raw %}"
+  RAW_END: "{% endraw %}"
 
 phases:
   - id: plan-draft

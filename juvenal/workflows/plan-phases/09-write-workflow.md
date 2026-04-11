@@ -26,7 +26,7 @@ Generated-workflow rules:
 - use only the fixed `bounce_target` values from `.plan/workflow-structure.yaml`
 - do not invent, rename, or reorder phase IDs
 
-Template-variable escaping (critical):
+{% raw %}Template-variable escaping (critical):
 Juvenal renders every prompt through Jinja2, so any `{{ ... }}` inside a prompt is
 interpreted as a template variable. Undefined variables make the entire workflow
 fail to load. The only template variables with values are the ones declared in the
@@ -37,24 +37,24 @@ Every other `{{` and `}}` that should appear literally in the generated prompt
 MUST be escaped. This includes, but is not limited to:
 - GitHub Actions expressions: `${{ secrets.FOO }}`, `${{ matrix.python-version }}`, `${{ github.sha }}`
 - Jinja/Liquid/Handlebars-style examples copied from docs
-- Any other double-braced sequence that is meant to be shown to the agent literally
+- Any other double-braced sequence that is meant to be shown to the agent literally{% endraw %}
 
-Wrap such content in `{% raw %}...{% endraw %}`. Example:
+Wrap such content in `{{ RAW_OPEN }}...{{ RAW_END }}`. Example:
 
 ```yaml
 prompt: |
   Add this step to the workflow:
 
-  {% raw %}
-  - run: echo "token=${{ secrets.GITHUB_TOKEN }}"
-  {% endraw %}
+  {{ RAW_OPEN }}
+  - run: echo "token=${{'{{'}} secrets.GITHUB_TOKEN {{'}}'}}"
+  {{ RAW_END }}
 ```
 
-Do not emit a prompt containing a bare `{{ secrets... }}`, `{{ matrix... }}`,
+{% raw %}Do not emit a prompt containing a bare `{{ secrets... }}`, `{{ matrix... }}`,
 `{{ github... }}`, `{{ env... }}`, `{{ inputs... }}`, `{{ steps... }}`, or any
 other double-braced identifier that is not declared in `vars:`. The generated
 workflow will be mechanically validated after you finish, and it will be rejected
-(and you will be asked to regenerate) if any such variable has no value defined.
+(and you will be asked to regenerate) if any such variable has no value defined.{% endraw %}
 
 For every implement phase prompt:
 - make it self-contained; the agent sees only that prompt

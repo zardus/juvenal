@@ -21,6 +21,39 @@ from juvenal.workflow import (
 )
 
 
+class TestBuiltinWorkflowsValidate:
+    """Every YAML shipped in juvenal/workflows/ must load and validate cleanly.
+
+    Regression guard: previously `plan.yaml` referenced `plan-phases/09-write-workflow.md`,
+    which contained literal `{{ ... }}` examples that Jinja2 could not parse. Because no
+    test loaded the built-in planner workflow and called ``validate_workflow`` on it, the
+    bug only surfaced when a user actually ran ``juvenal run --phased-implementer``. This
+    test sweeps every shipped workflow YAML so any future unescaped Jinja in a planner
+    prompt fails in CI instead of in the field.
+    """
+
+    def _builtin_workflows(self) -> list[Path]:
+        workflows_dir = Path(__file__).resolve().parent.parent / "juvenal" / "workflows"
+        yaml_files = sorted(workflows_dir.glob("*.yaml"))
+        assert yaml_files, f"no built-in workflows found under {workflows_dir}"
+        return yaml_files
+
+    def test_builtin_workflows_validate(self):
+        from juvenal.workflow import validate_workflow
+
+        failures: list[str] = []
+        for yaml_path in self._builtin_workflows():
+            wf = load_workflow(yaml_path)
+            # Provide values for any template vars the planner expects so rendering
+            # doesn't fail on a legitimately-declared variable.
+            wf.vars.setdefault("GOAL", "test goal")
+            wf.vars.setdefault("LINEAR", "true")
+            errors = validate_workflow(wf)
+            if errors:
+                failures.append(f"{yaml_path.name}: {errors}")
+        assert not failures, "built-in workflows failed validation:\n" + "\n".join(failures)
+
+
 class TestYAMLLoading:
     def test_load_basic_yaml(self, sample_yaml):
         wf = load_workflow(sample_yaml)
