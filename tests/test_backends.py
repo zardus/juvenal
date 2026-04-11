@@ -1,5 +1,8 @@
 """Unit tests for backend helper functions and factory."""
 
+import os
+import sys
+
 import pytest
 
 from juvenal.backends import (
@@ -9,6 +12,7 @@ from juvenal.backends import (
     _extract_claude_tokens,
     _extract_codex_tokens,
     _parse_json_event,
+    _prepend_juvenal_bin_to_path,
     _process_claude_event,
     _process_codex_event,
     create_backend,
@@ -188,3 +192,54 @@ class TestKillActive:
         backend = ClaudeBackend()
         backend.kill_active()  # should not raise
         assert backend._active_procs == []
+
+
+class TestPrependJuvenalBinToPath:
+    """Regression: agent subprocesses must see the running juvenal's venv bin first.
+
+    Without this, `pipx run juvenal …` launches an agent whose `python` resolves to
+    the system interpreter and imports a stale ~/.local/lib juvenal — exactly the
+    failure that produced 67 retries on `--linear` in the wild.
+    """
+
+    @pytest.fixture
+    def fake_bin(self, tmp_path, monkeypatch):
+        fake_python = tmp_path / "venv" / "bin" / "python"
+        fake_python.parent.mkdir(parents=True)
+        fake_python.touch()
+        monkeypatch.setattr(sys, "executable", str(fake_python))
+        return str(fake_python.parent)
+
+    def test_prepends_when_path_missing(self, fake_bin):
+        env: dict[str, str] = {}
+        _prepend_juvenal_bin_to_path(env)
+        assert env["PATH"] == fake_bin
+
+    def test_prepends_when_path_present(self, fake_bin):
+        env = {"PATH": os.pathsep.join(["/opt/a", "/opt/b"])}
+        _prepend_juvenal_bin_to_path(env)
+        parts = env["PATH"].split(os.pathsep)
+        assert parts == [fake_bin, "/opt/a", "/opt/b"]
+
+    def test_idempotent_when_already_first(self, fake_bin):
+        original = os.pathsep.join([fake_bin, "/opt/a"])
+        env = {"PATH": original}
+        _prepend_juvenal_bin_to_path(env)
+        assert env["PATH"] == original
+
+    def test_dedupes_when_present_later(self, fake_bin):
+        env = {"PATH": os.pathsep.join(["/opt/a", fake_bin, "/opt/b"])}
+        _prepend_juvenal_bin_to_path(env)
+        assert env["PATH"].split(os.pathsep) == [fake_bin, "/opt/a", "/opt/b"]
+
+    def test_resolves_symlink(self, tmp_path, monkeypatch):
+        real_bin = tmp_path / "real" / "bin"
+        real_bin.mkdir(parents=True)
+        (real_bin / "python").touch()
+        link_bin = tmp_path / "link"
+        link_bin.symlink_to(real_bin)
+        monkeypatch.setattr(sys, "executable", str(link_bin / "python"))
+
+        env: dict[str, str] = {}
+        _prepend_juvenal_bin_to_path(env)
+        assert env["PATH"] == str(real_bin)

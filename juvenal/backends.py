@@ -5,11 +5,28 @@ from __future__ import annotations
 import json
 import os
 import subprocess
+import sys
 import time
 import uuid
 from abc import ABC, abstractmethod
 from collections.abc import Callable
 from dataclasses import dataclass
+from pathlib import Path
+
+
+def _prepend_juvenal_bin_to_path(proc_env: dict[str, str]) -> None:
+    """Prepend the running juvenal's venv bin dir to PATH so spawned shells find the same `python`/`juvenal`.
+
+    Without this, an agent invoking `python -m juvenal.plan_validation` from a `pipx run`-launched
+    juvenal would resolve `python` to the system interpreter, which often has a stale juvenal in
+    `~/.local/lib/...` and rejects flags added in newer releases.
+    """
+    bin_dir = str(Path(sys.executable).resolve().parent)
+    existing = proc_env.get("PATH", "")
+    parts = existing.split(os.pathsep) if existing else []
+    if parts and parts[0] == bin_dir:
+        return
+    proc_env["PATH"] = os.pathsep.join([bin_dir, *[p for p in parts if p != bin_dir]])
 
 
 @dataclass
@@ -146,8 +163,6 @@ class ClaudeBackend(Backend):
         working_dir: str,
         env: dict[str, str] | None = None,
     ) -> InteractiveResult:
-        import sys
-
         session_id = str(uuid.uuid4())
         cmd = [
             "claude",
@@ -160,6 +175,7 @@ class ClaudeBackend(Backend):
         proc_env = {k: v for k, v in os.environ.items() if k != "CLAUDECODE"}
         if env:
             proc_env.update(env)
+        _prepend_juvenal_bin_to_path(proc_env)
 
         # Save terminal state before the interactive TUI takes over
         saved_termios = None
@@ -205,6 +221,7 @@ class ClaudeBackend(Backend):
         proc_env = {k: v for k, v in os.environ.items() if k != "CLAUDECODE"}
         if env:
             proc_env.update(env)
+        _prepend_juvenal_bin_to_path(proc_env)
 
         start = time.time()
         proc = subprocess.Popen(
@@ -344,6 +361,7 @@ class CodexBackend(Backend):
         proc_env = dict(os.environ)
         if env:
             proc_env.update(env)
+        _prepend_juvenal_bin_to_path(proc_env)
 
         start = time.time()
         proc = subprocess.Popen(
