@@ -60,17 +60,27 @@ phases:
     type: check
     bounce_target: write-workflow
     prompt: |
-      Run this command from the working directory to validate `workflow.yaml` against `.plan/workflow-structure.yaml`
-      and the standard Juvenal workflow rules, including Jinja2 syntax and renderability checks:
+      You MUST run this exact command from the working directory to validate `workflow.yaml` against
+      `.plan/workflow-structure.yaml` and the standard Juvenal workflow rules, including Jinja2 syntax
+      and renderability checks:
 
       ```bash
-      python -m juvenal.plan_validation .plan/workflow-structure.yaml workflow.yaml
+      python -m juvenal.plan_validation .plan/workflow-structure.yaml workflow.yaml; echo "EXIT=$?"
       ```
 
-      Do not modify any files while checking.
-      If the command fails or reports any topology, structure, loadability, or template-validation mismatch, emit
-      `VERDICT: FAIL: <reason>`.
-      If it succeeds and the generated workflow matches the plan contract, emit `VERDICT: PASS`.
+      Do not skip this command. Do not substitute a different check (yaml.safe_load, a visual scan,
+      etc.). Do not modify any files while checking.
+
+      In your response, you MUST paste the literal stdout/stderr of the command AND the `EXIT=` line
+      before your verdict, so the output can be audited.
+
+      Verdict rules:
+      - If the command prints any error line OR `EXIT=` is not `0`, emit
+        `VERDICT: FAIL: <first error line from the command output>`.
+      - Only if `EXIT=0` AND the command produced no error lines, emit `VERDICT: PASS`.
+
+      Note: a programmatic gate re-runs this same validator after your verdict. Lying about a clean
+      exit will not unblock the planner — it will just waste another retry cycle.
 
   - id: workflow-review
     type: check

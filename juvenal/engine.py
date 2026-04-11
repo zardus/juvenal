@@ -1081,6 +1081,9 @@ def _plan_workflow_internal(
         (plan_dir / "goal.md").write_text(goal)
 
     try:
+        from juvenal.plan_validation import validate_planned_workflow
+        from juvenal.workflow import validate_workflow
+
         plan_yaml = Path(__file__).parent / "workflows" / "plan.yaml"
         workflow = load_workflow(plan_yaml)
         if backend_instance is None:
@@ -1089,62 +1092,115 @@ def _plan_workflow_internal(
         workflow.working_dir = work_dir
 
         state_path = str(plan_dir / ".juvenal-state.json")
-
-        engine = Engine(
-            workflow,
-            backend_instance=backend_instance,
-            resume=resume,
-            state_file=state_path,
-            plain=plain,
-            serialize=serialize,
-            _depth=depth,
-            _max_depth=max_depth,
-            clear_context_on_bounce=True,
-            interactive=interactive,
-        )
-        # Share display if provided, otherwise use defaults
-        if display is not None:
-            engine.display = display
-
-        exit_code = engine.run()
-
-        # Aggregate tokens from planning engine
-        plan_inp, plan_out = engine.state.total_tokens()
-
-        if exit_code != 0:
-            return PlanResult(
-                success=False,
-                temp_dir=tmp_dir,
-                error="Planning engine returned non-zero",
-                input_tokens=plan_inp,
-                output_tokens=plan_out,
-            )
-
+        structure_path = plan_dir / "workflow-structure.yaml"
         produced = Path(work_dir) / "workflow.yaml"
-        if not produced.exists():
-            return PlanResult(
-                success=False,
-                temp_dir=tmp_dir,
-                error="No workflow.yaml produced",
-                input_tokens=plan_inp,
-                output_tokens=plan_out,
-            )
+        plan_inp = 0
+        plan_out = 0
 
-        yaml_content = produced.read_text()
-        parsed = _yaml.safe_load(yaml_content)
-        if not isinstance(parsed, dict) or "phases" not in parsed:
-            return PlanResult(
-                success=False,
-                temp_dir=tmp_dir,
-                error="Produced invalid YAML",
-                input_tokens=plan_inp,
-                output_tokens=plan_out,
+        # Programmatic validation gate. The planner's own `planned-workflow-validate`
+        # check phase is LLM-driven and has been observed to PASS while the generated
+        # workflow was unrunnable (e.g. unescaped `{{ secrets.X }}` becoming undefined
+        # Jinja2 vars). After the planning engine finishes, mechanically re-run the
+        # validator; on failure, rewind state to `write-workflow` with failure context
+        # and re-run the engine so the planner can retry. Mirrors the pattern in
+        # juvenal.api._finalize_staged_planning.
+        max_validation_retries = 3
+        last_errors: list[str] = []
+        for validation_attempt in range(max_validation_retries + 1):
+            engine = Engine(
+                workflow,
+                backend_instance=backend_instance,
+                resume=resume or validation_attempt > 0,
+                state_file=state_path,
+                plain=plain,
+                serialize=serialize,
+                _depth=depth,
+                _max_depth=max_depth,
+                clear_context_on_bounce=True,
+                interactive=interactive,
+            )
+            # Share display if provided, otherwise use defaults
+            if display is not None:
+                engine.display = display
+
+            exit_code = engine.run()
+
+            # Aggregate tokens from planning engine
+            plan_inp, plan_out = engine.state.total_tokens()
+
+            if exit_code != 0:
+                return PlanResult(
+                    success=False,
+                    temp_dir=tmp_dir,
+                    error="Planning engine returned non-zero",
+                    input_tokens=plan_inp,
+                    output_tokens=plan_out,
+                )
+
+            if not produced.exists():
+                return PlanResult(
+                    success=False,
+                    temp_dir=tmp_dir,
+                    error="No workflow.yaml produced",
+                    input_tokens=plan_inp,
+                    output_tokens=plan_out,
+                )
+
+            yaml_content = produced.read_text()
+            parsed = _yaml.safe_load(yaml_content)
+            if not isinstance(parsed, dict) or "phases" not in parsed:
+                return PlanResult(
+                    success=False,
+                    temp_dir=tmp_dir,
+                    error="Produced invalid YAML",
+                    input_tokens=plan_inp,
+                    output_tokens=plan_out,
+                )
+
+            try:
+                if structure_path.exists():
+                    validation_errors = validate_planned_workflow(structure_path, produced)
+                else:
+                    # No structure file from this planner — still gate on the core
+                    # workflow validator (template vars, loadability, etc.) so an
+                    # unrunnable workflow can't slip through.
+                    loaded = load_workflow(produced)
+                    validation_errors = validate_workflow(loaded)
+            except Exception as exc:
+                validation_errors = [f"Planned workflow load failed: {exc}"]
+
+            if not validation_errors:
+                return PlanResult(
+                    success=True,
+                    workflow_yaml_path=str(produced),
+                    temp_dir=tmp_dir,
+                    input_tokens=plan_inp,
+                    output_tokens=plan_out,
+                )
+
+            last_errors = validation_errors
+            if validation_attempt >= max_validation_retries:
+                break
+
+            # Rewind the planner state to write-workflow and attach the failure
+            # context so the next engine run can see what went wrong.
+            rewind_state = PipelineState.load(Path(state_path))
+            rewind_state.invalidate_from("write-workflow")
+            existing = rewind_state.phases.get("write-workflow")
+            failure_msg = (
+                "Programmatic validation of workflow.yaml failed after the planner reported success. "
+                "Fix these errors and regenerate workflow.yaml:\n  - " + "\n  - ".join(last_errors)
+            )
+            rewind_state.set_failure_context(
+                "write-workflow",
+                failure_msg,
+                attempt=existing.attempt if existing is not None and existing.attempt > 0 else None,
             )
 
         return PlanResult(
-            success=True,
-            workflow_yaml_path=str(produced),
+            success=False,
             temp_dir=tmp_dir,
+            error="Planned workflow validation failed: " + "; ".join(last_errors),
             input_tokens=plan_inp,
             output_tokens=plan_out,
         )

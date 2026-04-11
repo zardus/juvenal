@@ -1428,6 +1428,50 @@ class TestPlanWorkflow:
             with pytest.raises(SystemExit):
                 plan_workflow("goal", str(tmp_path / "out.yaml"))
 
+    def test_plan_rejects_workflow_with_undefined_template_var(self, tmp_path, monkeypatch):
+        """_plan_workflow_internal fails if the generated workflow has undefined Jinja vars.
+
+        Regression: the LLM-driven planned-workflow-validate phase can pass while the
+        generated workflow still references unescaped `{{ secrets.X }}` etc. The
+        programmatic gate at the end of planning must catch this before returning success.
+        """
+        from unittest.mock import MagicMock, patch
+
+        from juvenal.engine import _plan_workflow_internal
+
+        monkeypatch.chdir(tmp_path)
+
+        # Simulate a planner that writes a workflow.yaml whose prompt references
+        # an undefined Jinja variable (a literal `{{ secrets }}` copied from
+        # GitHub Actions syntax that should have been wrapped in {% raw %}).
+        bad_yaml = 'name: bad\nphases:\n  - id: impl\n    type: implement\n    prompt: "publish with {{ secrets }}"\n'
+
+        def fake_engine_init(self_engine, workflow, **kwargs):
+            wd = Path(workflow.working_dir)
+            (wd / "workflow.yaml").write_text(bad_yaml)
+            # Don't write a structure file — exercises the fallback path
+            # (validate_workflow) which is the core template-var gate.
+            self_engine.workflow = workflow
+            self_engine.backend = MagicMock()
+            self_engine.display = MagicMock()
+            self_engine.dry_run = False
+            self_engine.state = MagicMock(**{"total_tokens.return_value": (0, 0)})
+            self_engine._start_idx = 0
+
+        with (
+            patch.object(Engine, "__init__", fake_engine_init),
+            patch.object(Engine, "run", return_value=0),
+        ):
+            result = _plan_workflow_internal(
+                goal="goal",
+                project_dir=str(tmp_path),
+            )
+
+        assert result.success is False
+        assert result.error is not None
+        assert "secrets" in result.error
+        assert "template variable" in result.error
+
 
 class TestBaselineSha:
     def _make_engine(self, workflow, backend, tmp_path, **kwargs):

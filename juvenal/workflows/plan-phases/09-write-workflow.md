@@ -26,6 +26,36 @@ Generated-workflow rules:
 - use only the fixed `bounce_target` values from `.plan/workflow-structure.yaml`
 - do not invent, rename, or reorder phase IDs
 
+Template-variable escaping (critical):
+Juvenal renders every prompt through Jinja2, so any `{{ ... }}` inside a prompt is
+interpreted as a template variable. Undefined variables make the entire workflow
+fail to load. The only template variables with values are the ones declared in the
+workflow-level `vars:` block (typically `GOAL` and anything the caller passes via
+`-D`).
+
+Every other `{{` and `}}` that should appear literally in the generated prompt
+MUST be escaped. This includes, but is not limited to:
+- GitHub Actions expressions: `${{ secrets.FOO }}`, `${{ matrix.python-version }}`, `${{ github.sha }}`
+- Jinja/Liquid/Handlebars-style examples copied from docs
+- Any other double-braced sequence that is meant to be shown to the agent literally
+
+Wrap such content in `{% raw %}...{% endraw %}`. Example:
+
+```yaml
+prompt: |
+  Add this step to the workflow:
+
+  {% raw %}
+  - run: echo "token=${{ secrets.GITHUB_TOKEN }}"
+  {% endraw %}
+```
+
+Do not emit a prompt containing a bare `{{ secrets... }}`, `{{ matrix... }}`,
+`{{ github... }}`, `{{ env... }}`, `{{ inputs... }}`, `{{ steps... }}`, or any
+other double-braced identifier that is not declared in `vars:`. The generated
+workflow will be mechanically validated after you finish, and it will be rejected
+(and you will be asked to regenerate) if any such variable has no value defined.
+
 For every implement phase prompt:
 - make it self-contained; the agent sees only that prompt
 - include clearly labeled `Preexisting Inputs`
