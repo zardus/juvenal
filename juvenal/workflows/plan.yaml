@@ -5,6 +5,7 @@ max_bounces: 999
 vars:
   GOAL: ""
   LINEAR: "true"
+  PYTHON: "python"
   # RAW_OPEN/RAW_END let plan-phases/09-write-workflow.md show literal
   # {% raw %}/{% endraw %} tags to the planner LLM without confusing Jinja2.
   RAW_OPEN: "{% raw %}"
@@ -54,7 +55,7 @@ phases:
       Run this command from the working directory to verify that `workflow.yaml` is valid YAML with a top-level `phases` key:
 
       ```bash
-      python -c "import yaml, sys; d=yaml.safe_load(open('workflow.yaml')); assert isinstance(d,dict) and 'phases' in d, 'missing phases key'"
+      {{ PYTHON }} -c "import yaml, sys; d=yaml.safe_load(open('workflow.yaml')); assert isinstance(d,dict) and 'phases' in d, 'missing phases key'"
       ```
 
       Do not modify any files while checking.
@@ -70,7 +71,7 @@ phases:
       and renderability checks:
 
       ```bash
-      python -m juvenal.plan_validation .plan/workflow-structure.yaml workflow.yaml {% if LINEAR == "true" %}--linear{% else %}--no-linear{% endif %}; echo "EXIT=$?"
+      {{ PYTHON }} -m juvenal.plan_validation .plan/workflow-structure.yaml workflow.yaml {% if LINEAR == "true" %}--linear{% else %}--no-linear{% endif %}; echo "EXIT=$?"
       ```
 
       Do not skip this command. Do not substitute a different check (yaml.safe_load, a visual scan,

@@ -5,6 +5,7 @@ from __future__ import annotations
 import re
 import shutil
 import subprocess
+import sys
 import tempfile
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -1095,6 +1096,7 @@ def _plan_workflow_internal(
             workflow.backend = backend_name
         workflow.vars["GOAL"] = goal
         workflow.vars["LINEAR"] = "true" if linear else "false"
+        workflow.vars["PYTHON"] = sys.executable
         workflow.working_dir = work_dir
 
         state_path = str(plan_dir / ".juvenal-state.json")

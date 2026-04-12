@@ -1819,7 +1819,7 @@ class TestPlannerWorkflowAssets:
         assert phases["planned-workflow-validate"].type == "check"
         assert phases["planned-workflow-validate"].bounce_target == "write-workflow"
         assert (
-            "python -m juvenal.plan_validation .plan/workflow-structure.yaml workflow.yaml"
+            "{{ PYTHON }} -m juvenal.plan_validation .plan/workflow-structure.yaml workflow.yaml"
             in phases["planned-workflow-validate"].prompt
         )
         assert phases["workflow-review"].bounce_target == "write-workflow"

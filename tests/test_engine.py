@@ -3146,3 +3146,27 @@ class TestPlanWorkflowInternal:
         assert result.success is False
         assert backend_factory.call_count == 0
         assert seen_backends == [backend]
+
+    def test_python_var_injected_as_sys_executable(self, tmp_path):
+        """Regression: plan prompts that invoke `python -m juvenal.plan_validation` must
+        use the running interpreter, not whatever `python` the agent's shell resolves.
+        Without this, pipx-launched juvenal agents use a stale system juvenal."""
+        import sys
+
+        backend = MockBackend()
+        workflows_seen = []
+
+        def fake_run(self):
+            workflows_seen.append(self.workflow)
+            return 1
+
+        with patch.object(Engine, "run", autospec=True, side_effect=fake_run):
+            _plan_workflow_internal(
+                goal="test goal",
+                backend_instance=backend,
+                plain=True,
+                project_dir=str(tmp_path),
+            )
+
+        assert len(workflows_seen) == 1
+        assert workflows_seen[0].vars["PYTHON"] == sys.executable
