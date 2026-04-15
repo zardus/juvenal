@@ -616,6 +616,33 @@ phases:
         args = parser.parse_args(["run", "--phased-implementer", "build a thing"])
         assert args.linear is False
 
+    def test_resume_rejects_state_from_different_expanded_workflow(self, tmp_path, capsys):
+        workflow_path = tmp_path / "workflow.yaml"
+        workflow_path.write_text(
+            """\
+name: test
+phases:
+  - id: build
+    prompt: "Build it."
+""",
+        )
+
+        state_file = tmp_path / "state.json"
+        state = PipelineState(state_file=state_file)
+        state._ensure_phase("build")
+        state._ensure_phase("build~check-1")
+        state.mark_completed("build")
+        state.save()
+
+        parser = build_parser()
+        args = parser.parse_args(["run", str(workflow_path), "--resume", "--state-file", str(state_file)])
+        args.plain = True
+
+        assert cmd_run(args) == 1
+        captured = capsys.readouterr()
+        assert "different expanded workflow" in captured.out
+        assert "--standard-checkers" in captured.out
+
 
 class TestCmdDoLinear:
     def test_do_linear_flag_parses(self):

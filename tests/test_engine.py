@@ -6,7 +6,7 @@ from unittest.mock import Mock, patch
 import pytest
 
 from juvenal.checkers import parse_verdict
-from juvenal.engine import BounceCounter, Engine, _extract_yaml, _plan_workflow_internal
+from juvenal.engine import BounceCounter, Engine, ResumeWorkflowMismatchError, _extract_yaml, _plan_workflow_internal
 from juvenal.workflow import (
     ParallelGroup,
     Phase,
@@ -477,6 +477,22 @@ class TestEngineWithMockedBackend:
         engine2.backend = backend2
         assert engine2._start_idx == 0
         assert engine2.run() == 0
+
+    def test_resume_rejects_mismatched_expanded_workflow(self, tmp_path):
+        """Resume should fail closed when the saved phase list came from different checker injection."""
+        from juvenal.state import PipelineState
+
+        state_file = tmp_path / "state.json"
+        state = PipelineState(state_file=state_file)
+        state._ensure_phase("build")
+        state._ensure_phase("build~check-1")
+        state.mark_completed("build")
+        state.save()
+
+        workflow = Workflow(name="test", phases=[Phase(id="build", type="implement", prompt="Build.")], max_bounces=3)
+
+        with pytest.raises(ResumeWorkflowMismatchError, match="--standard-checkers"):
+            Engine(workflow, resume=True, state_file=str(state_file), plain=True)
 
     def test_timeout_on_phase(self, tmp_path):
         """Phase timeout field is stored correctly."""

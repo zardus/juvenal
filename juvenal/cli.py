@@ -280,7 +280,7 @@ def _plan_phased_workflow_or_exit(args: argparse.Namespace, goal: str):
 
 
 def cmd_run(args: argparse.Namespace) -> int:
-    from juvenal.engine import Engine
+    from juvenal.engine import Engine, ResumeWorkflowMismatchError
     from juvenal.workflow import Phase, Workflow, inject_implementer, validate_workflow
 
     _expand_standard_checkers(args)
@@ -367,18 +367,22 @@ def cmd_run(args: argparse.Namespace) -> int:
         workflow.notify.extend(args.notify)
 
     state_file = getattr(args, "state_file", None)
-    engine = Engine(
-        workflow,
-        resume=args.resume,
-        rewind=args.rewind,
-        rewind_to=args.rewind_to,
-        start_phase=args.phase,
-        state_file=state_file,
-        plain=args.plain,
-        clear_context_on_bounce=args.clear_context_on_bounce,
-        serialize=args.serialize,
-        interactive=args.interactive,
-    )
+    try:
+        engine = Engine(
+            workflow,
+            resume=args.resume,
+            rewind=args.rewind,
+            rewind_to=args.rewind_to,
+            start_phase=args.phase,
+            state_file=state_file,
+            plain=args.plain,
+            clear_context_on_bounce=args.clear_context_on_bounce,
+            serialize=args.serialize,
+            interactive=args.interactive,
+        )
+    except ResumeWorkflowMismatchError as e:
+        print(f"Error: {e}")
+        return 1
     return engine.run()
 
 
