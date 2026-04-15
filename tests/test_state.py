@@ -40,6 +40,18 @@ class TestAtomicPersistence:
         assert "setup" in data["phases"]
         assert data["phases"]["setup"]["attempt"] == 1
 
+    def test_save_and_load_preserves_workflow_phase_order(self, tmp_path):
+        state_file = tmp_path / "state.json"
+        state = PipelineState(state_file=state_file)
+        state._ensure_phase("zeta")
+        state._ensure_phase("alpha")
+        state.workflow_phase_ids = ["zeta", "alpha"]
+        state.save()
+
+        loaded = PipelineState.load(state_file)
+        assert loaded.workflow_phase_ids == ["zeta", "alpha"]
+        assert list(loaded.phases.keys()) == ["zeta", "alpha"]
+
 
 class TestResumeLogic:
     def test_resume_from_beginning(self, tmp_path):

@@ -860,35 +860,45 @@ class Engine:
             if pid not in ordered:
                 ordered[pid] = ps
         self.state.phases = ordered
+        self.state.workflow_phase_ids = [phase.id for phase in self.workflow.phases]
 
     def _validate_resume_state_matches_workflow(self) -> None:
         """Refuse resume/rewind when the saved state came from a different phase list."""
         if not self.state.phases:
             return
 
-        saved_phase_ids = list(self.state.phases.keys())
         workflow_phase_ids = [phase.id for phase in self.workflow.phases]
-        if saved_phase_ids == workflow_phase_ids or saved_phase_ids == workflow_phase_ids[: len(saved_phase_ids)]:
+        saved_phase_ids = self.state.workflow_phase_ids or list(self.state.phases.keys())
+
+        # Legacy state files did not record phase order, and the JSON serializer
+        # sorted dict keys alphabetically. For those files, only membership is
+        # trustworthy; exact ordering is not.
+        if self.state.workflow_phase_ids is None:
+            if all(pid in workflow_phase_ids for pid in saved_phase_ids):
+                return
+        elif saved_phase_ids == workflow_phase_ids or saved_phase_ids == workflow_phase_ids[: len(saved_phase_ids)]:
             return
 
         only_in_state = [pid for pid in saved_phase_ids if pid not in workflow_phase_ids]
         only_in_workflow = [pid for pid in workflow_phase_ids if pid not in saved_phase_ids]
-        mismatch_idx = next(
-            (
-                i
-                for i, (saved_id, workflow_id) in enumerate(zip(saved_phase_ids, workflow_phase_ids))
-                if saved_id != workflow_id
-            ),
-            min(len(saved_phase_ids), len(workflow_phase_ids)),
-        )
 
         details: list[str] = []
-        if mismatch_idx < len(saved_phase_ids) or mismatch_idx < len(workflow_phase_ids):
-            saved_id = saved_phase_ids[mismatch_idx] if mismatch_idx < len(saved_phase_ids) else "<end>"
-            workflow_id = workflow_phase_ids[mismatch_idx] if mismatch_idx < len(workflow_phase_ids) else "<end>"
-            details.append(
-                f"first mismatch at position {mismatch_idx + 1}: state has {saved_id!r}, workflow has {workflow_id!r}"
+        if self.state.workflow_phase_ids is not None:
+            mismatch_idx = next(
+                (
+                    i
+                    for i, (saved_id, workflow_id) in enumerate(zip(saved_phase_ids, workflow_phase_ids))
+                    if saved_id != workflow_id
+                ),
+                min(len(saved_phase_ids), len(workflow_phase_ids)),
             )
+            if mismatch_idx < len(saved_phase_ids) or mismatch_idx < len(workflow_phase_ids):
+                saved_id = saved_phase_ids[mismatch_idx] if mismatch_idx < len(saved_phase_ids) else "<end>"
+                workflow_id = workflow_phase_ids[mismatch_idx] if mismatch_idx < len(workflow_phase_ids) else "<end>"
+                details.append(
+                    f"first mismatch at position {mismatch_idx + 1}: "
+                    f"state has {saved_id!r}, workflow has {workflow_id!r}"
+                )
         if only_in_state:
             details.append(f"phases only in saved state: {', '.join(only_in_state[:5])}")
         if only_in_workflow:

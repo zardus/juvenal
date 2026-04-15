@@ -35,6 +35,7 @@ class PipelineState:
 
     state_file: Path
     phases: dict[str, PhaseState] = field(default_factory=dict)
+    workflow_phase_ids: list[str] | None = None
     started_at: float | None = None
     completed_at: float | None = None
     _lock: RLock = field(init=False, repr=False, default_factory=RLock)
@@ -172,7 +173,19 @@ class PipelineState:
             data = json.loads(state_file.read_text())
             state.started_at = data.get("started_at")
             state.completed_at = data.get("completed_at")
-            for pid, pdata in data.get("phases", {}).items():
+            raw_phases = data.get("phases", {})
+            raw_workflow_phase_ids = data.get("workflow_phase_ids", data.get("phase_order"))
+            ordered_phase_ids: list[str]
+            if isinstance(raw_workflow_phase_ids, list):
+                ordered_phase_ids = [pid for pid in raw_workflow_phase_ids if pid in raw_phases]
+                ordered_phase_ids.extend(pid for pid in raw_phases if pid not in ordered_phase_ids)
+                state.workflow_phase_ids = list(raw_workflow_phase_ids)
+            else:
+                ordered_phase_ids = list(raw_phases.keys())
+                state.workflow_phase_ids = None
+
+            for pid in ordered_phase_ids:
+                pdata = raw_phases[pid]
                 # Backwards compat: migrate scalar failure_context to list
                 fc_raw = pdata.get("failure_contexts", [])
                 if not fc_raw and pdata.get("failure_context"):
@@ -224,6 +237,7 @@ class PipelineState:
         return {
             "started_at": self.started_at,
             "completed_at": self.completed_at,
+            "workflow_phase_ids": self.workflow_phase_ids,
             "phases": {
                 pid: {
                     "status": ps.status,

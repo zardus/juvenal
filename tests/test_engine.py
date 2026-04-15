@@ -494,6 +494,46 @@ class TestEngineWithMockedBackend:
         with pytest.raises(ResumeWorkflowMismatchError, match="--standard-checkers"):
             Engine(workflow, resume=True, state_file=str(state_file), plain=True)
 
+    def test_resume_accepts_legacy_sorted_state_without_phase_order(self, tmp_path):
+        """Legacy state files sorted by JSON key order should still resume against the same workflow."""
+        state_file = tmp_path / "state.json"
+        state_file.write_text(
+            """\
+{
+  "completed_at": null,
+  "phases": {
+    "alpha": {
+      "attempt": 0,
+      "failure_contexts": [],
+      "logs": [],
+      "status": "pending"
+    },
+    "zeta": {
+      "attempt": 1,
+      "completed_at": 1.0,
+      "failure_contexts": [],
+      "logs": [],
+      "started_at": 0.0,
+      "status": "completed"
+    }
+  },
+  "started_at": null
+}
+""",
+        )
+
+        workflow = Workflow(
+            name="test",
+            phases=[
+                Phase(id="zeta", type="implement", prompt="Do zeta."),
+                Phase(id="alpha", type="implement", prompt="Do alpha."),
+            ],
+            max_bounces=3,
+        )
+
+        engine = Engine(workflow, resume=True, state_file=str(state_file), plain=True)
+        assert engine._start_idx == 1
+
     def test_timeout_on_phase(self, tmp_path):
         """Phase timeout field is stored correctly."""
         workflow = Workflow(
