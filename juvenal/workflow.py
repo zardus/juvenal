@@ -875,13 +875,26 @@ def _expand_checkers(
     return result
 
 
+def _eager_load_prompts() -> dict[str, str]:
+    """Read every built-in prompt file into memory at import time.
+
+    Why: `pipx run --no-cache` marks its venv for deletion on the next `pipx run`
+    invocation, so lazy filesystem reads against package-data files can fail
+    mid-run if any unrelated `pipx run` sweeps the expired venv. Reading once
+    up front means the running process survives the venv vanishing.
+    """
+    prompts_dir = Path(__file__).parent / "prompts"
+    return {p.name: p.read_text() for p in prompts_dir.glob("*.md")}
+
+
+_BUILTIN_PROMPTS: dict[str, str] = _eager_load_prompts()
+
+
 def _load_role_prompt(role: str) -> str:
     """Load a built-in role prompt from the prompts directory."""
     role_file = f"checker-{role}.md"
-    prompts_dir = Path(__file__).parent / "prompts"
-    role_path = prompts_dir / role_file
-    if role_path.exists():
-        return role_path.read_text()
+    if role_file in _BUILTIN_PROMPTS:
+        return _BUILTIN_PROMPTS[role_file]
     raise FileNotFoundError(f"Built-in role prompt not found: {role_file}")
 
 
@@ -1013,10 +1026,8 @@ def inject_checkers(workflow: Workflow, checker_specs: list[str]) -> Workflow:
 def _load_implementer_prompt(role: str) -> str:
     """Load a built-in implementer role prompt from the prompts directory."""
     role_file = f"implementer-{role}.md"
-    prompts_dir = Path(__file__).parent / "prompts"
-    role_path = prompts_dir / role_file
-    if role_path.exists():
-        return role_path.read_text()
+    if role_file in _BUILTIN_PROMPTS:
+        return _BUILTIN_PROMPTS[role_file]
     raise FileNotFoundError(f"Built-in implementer prompt not found: {role_file}")
 
 
