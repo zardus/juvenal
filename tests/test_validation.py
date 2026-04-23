@@ -646,6 +646,39 @@ class TestValidateCLI:
         assert "Execution plan:" in captured.out
         assert "Phase summary:" in captured.out
 
+    def test_validate_push_main_rewrites_injected_implementer_prompt(self, monkeypatch, tmp_path):
+        import juvenal.engine
+
+        yaml_path = tmp_path / "workflow.yaml"
+        yaml_path.write_text(
+            """\
+name: test
+phases:
+  - id: build
+    prompt: "Build it."
+""",
+        )
+        engine_calls = {}
+
+        class DummyEngine:
+            def __init__(self, workflow, **kwargs):
+                engine_calls["workflow"] = workflow
+                engine_calls["kwargs"] = kwargs
+
+            def run(self):
+                return 0
+
+        monkeypatch.setattr(juvenal.engine, "Engine", DummyEngine)
+
+        parser = build_parser()
+        args = parser.parse_args(["validate", str(yaml_path), "--implementer", "software-engineer", "--push-main"])
+        args.plain = True
+
+        assert cmd_validate(args) == 0
+        prompt = engine_calls["workflow"].phases[0].prompt
+        assert "Push your changes after committing, even if the branch is `main` or `master`." in prompt
+        assert "If you are on a branch (not `main` or `master`), push your changes." not in prompt
+
     def test_validate_undefined_template_var(self, tmp_path, capsys):
         yaml_content = """\
 name: test

@@ -591,6 +591,17 @@ class TestInjectImplementer:
         result = inject_implementer(wf, "software-engineer")
         assert result.phases[0].prompt.endswith("Build the feature.")
         assert "expert software engineer" in result.phases[0].prompt
+        assert "If you are on a branch (not `main` or `master`), push your changes." in result.phases[0].prompt
+
+    def test_push_main_rewrites_software_engineer_push_guard(self):
+        wf = Workflow(
+            name="test",
+            phases=[Phase(id="build", type="implement", prompt="Build the feature.")],
+        )
+        result = inject_implementer(wf, "software-engineer", push_main=True)
+        prompt = result.phases[0].prompt
+        assert "Push your changes after committing, even if the branch is `main` or `master`." in prompt
+        assert "If you are on a branch (not `main` or `master`), push your changes." not in prompt
 
     def test_prepends_professor_writer_prompt(self):
         wf = Workflow(
@@ -600,6 +611,16 @@ class TestInjectImplementer:
         result = inject_implementer(wf, "professor-writer")
         assert result.phases[0].prompt.endswith("Write the paper.")
         assert "expert professor-level writer for grants and scientific papers" in result.phases[0].prompt
+
+    def test_push_main_rewrites_professor_writer_push_guard(self):
+        wf = Workflow(
+            name="test",
+            phases=[Phase(id="build", type="implement", prompt="Write the paper.")],
+        )
+        result = inject_implementer(wf, "professor-writer", push_main=True)
+        prompt = result.phases[0].prompt
+        assert "Push your changes after committing, even if the branch is `main` or `master`." in prompt
+        assert "If you are on a branch (not `main` or `master`), push your changes." not in prompt
 
     def test_only_affects_implement_phases(self):
         """Non-implement phases are left untouched."""

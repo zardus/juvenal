@@ -56,6 +56,11 @@ def build_parser() -> argparse.ArgumentParser:
         help='Implementer role, or role:"prompt" to add an inline implement phase',
     )
     run_p.add_argument(
+        "--push-main",
+        action="store_true",
+        help="When injecting implementer roles, tell them to push even on main or master",
+    )
+    run_p.add_argument(
         "--clear-context-on-bounce",
         action="store_true",
         help="Start a fresh agent session when bouncing back (default: resume session)",
@@ -86,6 +91,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     plan_p.add_argument("--implementer", help="Prepend implementer role prompt to every implement phase")
     plan_p.add_argument(
+        "--push-main",
+        action="store_true",
+        help="When injecting implementer roles, tell them to push even on main or master",
+    )
+    plan_p.add_argument(
         "-i", "--interactive", action="store_true", help="Interactive mode: chat with the agent during plan refinement"
     )
     plan_p.add_argument("--resume", action="store_true", help="Resume a previously interrupted plan")
@@ -102,6 +112,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="Inject standard checkers: tester, senior-tester, senior-engineer, architect, pm",
     )
     do_p.add_argument("--implementer", help="Prepend implementer role prompt to every implement phase")
+    do_p.add_argument(
+        "--push-main",
+        action="store_true",
+        help="When injecting implementer roles, tell them to push even on main or master",
+    )
     do_p.add_argument(
         "-i", "--interactive", action="store_true", help="Interactive mode: chat with the agent during plan refinement"
     )
@@ -145,6 +160,11 @@ def build_parser() -> argparse.ArgumentParser:
     validate_p.add_argument("--checker", action="append", default=[], help=CHECKER_HELP)
     validate_p.add_argument("--standard-checkers", action="store_true")
     validate_p.add_argument("--implementer")
+    validate_p.add_argument(
+        "--push-main",
+        action="store_true",
+        help="When injecting implementer roles, tell them to push even on main or master",
+    )
     validate_p.add_argument("-D", action="append", default=[], metavar="VAR=VAL", dest="defines")
 
     return parser
@@ -250,6 +270,11 @@ def _planner_resume_requested(args: argparse.Namespace) -> bool:
     return args.resume or args.rewind is not None or args.rewind_to is not None
 
 
+def _push_main_enabled(args: argparse.Namespace) -> bool:
+    """Return whether injected implementer prompts should push from main/master."""
+    return bool(getattr(args, "push_main", False))
+
+
 def _plan_phased_workflow_or_exit(args: argparse.Namespace, goal: str):
     """Run the built-in planner and return the planned workflow for phased runs."""
     from juvenal.engine import _plan_workflow_internal
@@ -313,7 +338,7 @@ def cmd_run(args: argparse.Namespace) -> int:
                 if role:
                     # Apply role preamble to just this phase
                     mini = Workflow(name="tmp", phases=[inline_phases[-1]])
-                    mini = inject_implementer(mini, role)
+                    mini = inject_implementer(mini, role, push_main=_push_main_enabled(args))
                     inline_phases[-1] = mini.phases[0]
             else:
                 implementer_role = role
@@ -322,7 +347,7 @@ def cmd_run(args: argparse.Namespace) -> int:
         if args.workflow:
             file_workflow = _load_workflow_or_exit(args.workflow)
             if implementer_role:
-                file_workflow = inject_implementer(file_workflow, implementer_role)
+                file_workflow = inject_implementer(file_workflow, implementer_role, push_main=_push_main_enabled(args))
                 implementer_role = None
             all_phases = inline_phases + file_workflow.phases
             workflow = Workflow(
@@ -346,7 +371,7 @@ def cmd_run(args: argparse.Namespace) -> int:
     if args.defines:
         workflow = _apply_defines(workflow, _parse_defines(args.defines))
     if apply_global_implementer and implementer_role:
-        workflow = inject_implementer(workflow, implementer_role)
+        workflow = inject_implementer(workflow, implementer_role, push_main=_push_main_enabled(args))
     if args.checker:
         workflow = _inject_checkers_or_exit(workflow, args.checker)
     errors = validate_workflow(workflow)
@@ -395,7 +420,7 @@ def cmd_plan(args: argparse.Namespace) -> int:
         args.goal, args.output, args.backend, plain=args.plain, interactive=args.interactive, resume=args.resume
     )
     if args.implementer:
-        _inject_implementer_into_yaml(args.output, args.implementer)
+        _inject_implementer_into_yaml(args.output, args.implementer, push_main=_push_main_enabled(args))
     if parsed_checkers:
         _inject_checkers_into_yaml(args.output, parsed_checkers)
     return 0
@@ -418,13 +443,13 @@ def _inject_checkers_into_yaml(yaml_path: str, parsed_checkers: list[dict | str]
         yaml.dump(data, f, default_flow_style=False, sort_keys=False)
 
 
-def _inject_implementer_into_yaml(yaml_path: str, role: str) -> None:
+def _inject_implementer_into_yaml(yaml_path: str, role: str, *, push_main: bool = False) -> None:
     """Post-process a generated YAML file to prepend an implementer role prompt to each implement phase."""
     import yaml
 
     from juvenal.workflow import _load_implementer_prompt
 
-    preamble = _load_implementer_prompt(role)
+    preamble = _load_implementer_prompt(role, push_main=push_main)
 
     with open(yaml_path) as f:
         data = yaml.safe_load(f)
@@ -461,7 +486,7 @@ def cmd_do(args: argparse.Namespace) -> int:
     if args.defines:
         workflow = _apply_defines(workflow, _parse_defines(args.defines))
     if args.implementer:
-        workflow = inject_implementer(workflow, args.implementer)
+        workflow = inject_implementer(workflow, args.implementer, push_main=_push_main_enabled(args))
     if args.checker:
         workflow = _inject_checkers_or_exit(workflow, args.checker)
     if args.backend:
@@ -503,7 +528,7 @@ def cmd_validate(args: argparse.Namespace) -> int:
     if args.defines:
         workflow = _apply_defines(workflow, _parse_defines(args.defines))
     if args.implementer:
-        workflow = inject_implementer(workflow, args.implementer)
+        workflow = inject_implementer(workflow, args.implementer, push_main=_push_main_enabled(args))
     _expand_standard_checkers(args)
     if args.checker:
         workflow = _inject_checkers_or_exit(workflow, args.checker)

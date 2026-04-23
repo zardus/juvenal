@@ -352,11 +352,11 @@ juvenal run <workflow> [--resume] [--rewind N] [--rewind-to PHASE_ID] [--phase X
                        [--max-bounces N] [--backend claude|codex] [--dry-run]
                        [--backoff SECONDS] [--notify URL] [--working-dir DIR]
                        [--state-file PATH] [--checker SPEC] [--implementer ROLE]
-                       [--phased-implementer SPEC] [--clear-context-on-bounce]
+                       [--phased-implementer SPEC] [--push-main] [--clear-context-on-bounce]
                        [-D VAR=VAL] [-i|--interactive] [--serialize]
-juvenal plan "goal" [-o output.yaml] [--backend claude|codex] [-i|--interactive]
+juvenal plan "goal" [-o output.yaml] [--backend claude|codex] [--push-main] [-i|--interactive]
 juvenal do "goal" [--backend claude|codex] [--max-bounces N] [-D VAR=VAL]
-                  [-i|--interactive] [--serialize]
+                  [--push-main] [-i|--interactive] [--serialize]
 juvenal status [--state-file path]
 juvenal init [directory] [--template name]
 juvenal validate <workflow>
@@ -374,6 +374,7 @@ juvenal validate <workflow>
 | `--checker SPEC` | Inject checker on every implement phase (`tester`, `tester:"extra instructions"`, or `prompt:"TEXT"`). Repeatable. |
 | `--implementer ROLE` | Prepend implementer role prompt to every implement phase |
 | `--phased-implementer SPEC` | On `run`, first plan a complex goal into implement phases with their planner-authored checks, then execute them with your CLI-injected checker stack appended after each one. Accepts either `GOAL` or `ROLE:"GOAL"`. Implies `--linear`. |
+| `--push-main` | When injecting implementer roles, tell them to push after committing even on `main` or `master`. |
 | `--linear` | On `run --phased-implementer` or `do`, enforce that the planner produces a strictly linear workflow (implement phases followed by check phases that bounce to the immediately preceding implement). Implied by `--phased-implementer`. |
 | `-i`, `--interactive` | For `run --phased-implementer`, `plan`, and `do`, allow the planner/refinement phase to ask the user one question at a time before execution continues. |
 | `--clear-context-on-bounce` | Start fresh agent session on bounce (default: resume session) |

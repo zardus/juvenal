@@ -236,9 +236,9 @@ juvenal run <workflow> [--resume] [--rewind N] [--rewind-to PHASE_ID] [--phase X
                        [--max-bounces N] [--backend claude|codex] [--dry-run]
                        [--backoff SECONDS] [--notify URL] [--working-dir DIR]
                        [--state-file PATH] [--checker SPEC] [--implementer ROLE]
-                       [--clear-context-on-bounce] [-D VAR=VAL] [--serialize]
-juvenal plan "goal" [-o output.yaml] [--backend claude|codex]
-juvenal do "goal" [--backend claude|codex] [--max-bounces N] [-D VAR=VAL] [--serialize]
+                       [--push-main] [--clear-context-on-bounce] [-D VAR=VAL] [--serialize]
+juvenal plan "goal" [-o output.yaml] [--backend claude|codex] [--push-main]
+juvenal do "goal" [--backend claude|codex] [--max-bounces N] [-D VAR=VAL] [--push-main] [--serialize]
 juvenal status [--state-file path]
 juvenal init [directory] [--template name]
 juvenal validate <workflow>
@@ -248,6 +248,7 @@ juvenal validate <workflow>
 
 - **`--checker SPEC`**: Inject a checker on every implement phase. SPEC is `tester`, `tester:extra instructions`, or `prompt:TEXT`. Repeatable.
 - **`--implementer ROLE`**: Prepend an implementer role prompt to every implement phase (e.g., `software-engineer`, `professor-writer`).
+- **`--push-main`**: When injecting implementer roles, tell them to push after committing even on `main` or `master`.
 - **`--clear-context-on-bounce`**: Start a fresh agent session on bounce instead of resuming (default: resume session, preserving conversation context).
 - **`-D VAR=VAL`**: Set a template variable. Use `{{VAR}}` in prompts. Repeatable. Overrides `vars:` defaults in YAML. Multiple values for the same key (`-D T=a -D T=b`) duplicate phases into parallel lanes.
 - **`--serialize`**: Disable all parallelization (run parallel groups and lanes sequentially).

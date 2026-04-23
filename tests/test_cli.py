@@ -216,6 +216,25 @@ class TestArgumentParsing:
         args = parser.parse_args(["run", "workflow.yaml"])
         assert args.implementer == []
 
+    @pytest.mark.parametrize(
+        "argv",
+        [
+            ["run", "workflow.yaml", "--push-main"],
+            ["plan", "build an API", "--push-main"],
+            ["do", "build a thing", "--push-main"],
+            ["validate", "workflow.yaml", "--push-main"],
+        ],
+    )
+    def test_push_main_flag_parses(self, argv):
+        parser = build_parser()
+        args = parser.parse_args(argv)
+        assert args.push_main is True
+
+    def test_push_main_defaults_false(self):
+        parser = build_parser()
+        args = parser.parse_args(["run", "workflow.yaml"])
+        assert args.push_main is False
+
     def test_run_phased_implementer(self):
         parser = build_parser()
         args = parser.parse_args(["run", "--phased-implementer", 'software-engineer:"build a thing"'])
@@ -429,6 +448,7 @@ phases:
                 "--working-dir",
                 str(project_dir),
                 "--interactive",
+                "--push-main",
             ]
         )
         args.plain = True
@@ -463,6 +483,10 @@ phases:
         assert workflow.phases[5].bounce_target == "build"
         assert "expert software engineer" in workflow.phases[0].prompt
         assert "expert software engineer" in workflow.phases[3].prompt
+        assert (
+            "Push your changes after committing, even if the branch is `main` or `master`." in workflow.phases[0].prompt
+        )
+        assert "If you are on a branch (not `main` or `master`), push your changes." not in workflow.phases[0].prompt
         assert workflow.working_dir == str(project_dir)
         assert engine_calls["kwargs"]["interactive"] is True
 
@@ -605,6 +629,37 @@ phases:
         prompt = engine_calls["workflow"].phases[0].prompt
         assert prompt.count("expert software engineer") == 1
 
+    def test_run_push_main_rewrites_inline_implementer_prompt(self, monkeypatch):
+        import juvenal.engine
+
+        engine_calls = {}
+
+        class DummyEngine:
+            def __init__(self, workflow, **kwargs):
+                engine_calls["workflow"] = workflow
+                engine_calls["kwargs"] = kwargs
+
+            def run(self):
+                return 0
+
+        monkeypatch.setattr(juvenal.engine, "Engine", DummyEngine)
+
+        parser = build_parser()
+        args = parser.parse_args(
+            [
+                "run",
+                "--push-main",
+                "--implementer",
+                'software-engineer:"Build it."',
+            ]
+        )
+        args.plain = True
+
+        assert cmd_run(args) == 0
+        prompt = engine_calls["workflow"].phases[0].prompt
+        assert "Push your changes after committing, even if the branch is `main` or `master`." in prompt
+        assert "If you are on a branch (not `main` or `master`), push your changes." not in prompt
+
     def test_run_linear_flag_parses(self):
         parser = build_parser()
         args = parser.parse_args(["run", "--phased-implementer", "build a thing", "--linear"])
@@ -690,6 +745,37 @@ class TestCmdDoLinear:
         args_yes.plain = True
         assert cmd_do(args_yes) == 0
         assert plan_calls[-1]["linear"] is True
+
+    def test_do_push_main_rewrites_injected_implementer_prompt(self, monkeypatch, tmp_path):
+        import juvenal.engine
+        from juvenal.cli import cmd_do
+
+        engine_calls = {}
+
+        def mock_plan_workflow(goal, output, backend, plain=False, interactive=False, resume=False, linear=True):
+            with open(output, "w") as fh:
+                fh.write('name: planned\nphases:\n  - id: build\n    prompt: "Build it."\n')
+
+        class DummyEngine:
+            def __init__(self, workflow, **kwargs):
+                engine_calls["workflow"] = workflow
+                engine_calls["kwargs"] = kwargs
+
+            def run(self):
+                return 0
+
+        monkeypatch.setattr(juvenal.engine, "plan_workflow", mock_plan_workflow)
+        monkeypatch.setattr(juvenal.engine, "Engine", DummyEngine)
+        monkeypatch.chdir(tmp_path)
+
+        parser = build_parser()
+        args = parser.parse_args(["do", "build something", "--implementer", "software-engineer", "--push-main"])
+        args.plain = True
+
+        assert cmd_do(args) == 0
+        prompt = engine_calls["workflow"].phases[0].prompt
+        assert "Push your changes after committing, even if the branch is `main` or `master`." in prompt
+        assert "If you are on a branch (not `main` or `master`), push your changes." not in prompt
 
 
 class TestStatusExitCode:
@@ -851,6 +937,46 @@ class TestStatusExitCodeSubprocess:
         assert excinfo.value.code == 1
         assert called is False
         assert "Error: Invalid --checker spec" in captured.out
+
+    def test_plan_push_main_rewrites_injected_implementer_prompt(self, monkeypatch, tmp_path):
+        import yaml
+
+        import juvenal.engine
+
+        def mock_plan_workflow(goal, output, backend, plain=False, interactive=False, resume=False):
+            with open(output, "w") as f:
+                f.write(
+                    """\
+name: test
+phases:
+  - id: build
+    prompt: "Build it."
+""",
+                )
+
+        monkeypatch.setattr(juvenal.engine, "plan_workflow", mock_plan_workflow)
+
+        output_path = tmp_path / "workflow.yaml"
+        parser = build_parser()
+        args = parser.parse_args(
+            [
+                "plan",
+                "build something",
+                "-o",
+                str(output_path),
+                "--implementer",
+                "software-engineer",
+                "--push-main",
+            ]
+        )
+        args.plain = True
+
+        assert cmd_plan(args) == 0
+
+        data = yaml.safe_load(output_path.read_text())
+        prompt = data["phases"][0]["prompt"]
+        assert "Push your changes after committing, even if the branch is `main` or `master`." in prompt
+        assert "If you are on a branch (not `main` or `master`), push your changes." not in prompt
 
     def test_plan_prompt_checker_writes_checks_and_loads(self, monkeypatch, tmp_path):
         """Prompt checkers injected by plan use the supported checks: schema."""

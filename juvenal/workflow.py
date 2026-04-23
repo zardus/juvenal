@@ -924,6 +924,8 @@ VALID_ROLES = {
     "grant-reviewer",
 }
 VALID_IMPLEMENTER_ROLES = {"software-engineer", "professor-writer"}
+_IMPLEMENTER_DEFAULT_PUSH_INSTRUCTION = "If you are on a branch (not `main` or `master`), push your changes."
+_IMPLEMENTER_PUSH_MAIN_INSTRUCTION = "Push your changes after committing, even if the branch is `main` or `master`."
 
 
 def _strip_wrapping_quotes(text: str) -> str:
@@ -1023,15 +1025,27 @@ def inject_checkers(workflow: Workflow, checker_specs: list[str]) -> Workflow:
     )
 
 
-def _load_implementer_prompt(role: str) -> str:
+def _apply_push_main_instruction(prompt: str) -> str:
+    """Override a built-in implementer's default main-branch push guard."""
+    if _IMPLEMENTER_DEFAULT_PUSH_INSTRUCTION in prompt:
+        return prompt.replace(_IMPLEMENTER_DEFAULT_PUSH_INSTRUCTION, _IMPLEMENTER_PUSH_MAIN_INSTRUCTION, 1)
+
+    separator = "\n---\n"
+    if prompt.endswith(separator):
+        return f"{prompt[: -len(separator)].rstrip()}\n\n{_IMPLEMENTER_PUSH_MAIN_INSTRUCTION}\n\n---\n"
+    return f"{prompt.rstrip()}\n\n{_IMPLEMENTER_PUSH_MAIN_INSTRUCTION}\n"
+
+
+def _load_implementer_prompt(role: str, *, push_main: bool = False) -> str:
     """Load a built-in implementer role prompt from the prompts directory."""
     role_file = f"implementer-{role}.md"
     if role_file in _BUILTIN_PROMPTS:
-        return _BUILTIN_PROMPTS[role_file]
+        prompt = _BUILTIN_PROMPTS[role_file]
+        return _apply_push_main_instruction(prompt) if push_main else prompt
     raise FileNotFoundError(f"Built-in implementer prompt not found: {role_file}")
 
 
-def inject_implementer(workflow: Workflow, role: str) -> Workflow:
+def inject_implementer(workflow: Workflow, role: str, *, push_main: bool = False) -> Workflow:
     """Prepend an implementer role prompt to every implement phase in the workflow.
 
     Returns a new Workflow with modified prompts.
@@ -1039,7 +1053,7 @@ def inject_implementer(workflow: Workflow, role: str) -> Workflow:
     if role not in VALID_IMPLEMENTER_ROLES:
         raise ValueError(f"Invalid --implementer role {role!r}: must be one of {sorted(VALID_IMPLEMENTER_ROLES)}")
 
-    preamble = _load_implementer_prompt(role)
+    preamble = _load_implementer_prompt(role, push_main=push_main)
     new_phases = []
     for phase in workflow.phases:
         if phase.type == "implement":
