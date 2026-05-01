@@ -93,9 +93,58 @@ class TestProcessClaudeEvent:
         assert display == ""
         assert assistant == ""
 
-    def test_tool_use(self):
-        display, assistant = _process_claude_event({"type": "tool_use", "name": "Write"})
-        assert "Write" in display
+    def test_assistant_tool_use_block(self):
+        event = {
+            "type": "assistant",
+            "message": {
+                "content": [
+                    {"type": "tool_use", "name": "Write", "input": {"file_path": "/tmp/x.txt"}},
+                ]
+            },
+        }
+        display, assistant = _process_claude_event(event)
+        assert "[tool: Write]" in display
+        assert "/tmp/x.txt" in display
+        assert assistant == ""
+
+    def test_assistant_thinking_block(self):
+        event = {
+            "type": "assistant",
+            "message": {"content": [{"type": "thinking", "thinking": "let me consider this"}]},
+        }
+        display, assistant = _process_claude_event(event)
+        assert "[thinking]" in display
+        assert "let me consider this" in display
+        assert assistant == ""
+
+    def test_assistant_mixed_text_and_tool(self):
+        event = {
+            "type": "assistant",
+            "message": {
+                "content": [
+                    {"type": "text", "text": "I'll read it"},
+                    {"type": "tool_use", "name": "Read", "input": {"file_path": "a.py"}},
+                ]
+            },
+        }
+        display, assistant = _process_claude_event(event)
+        assert "I'll read it" in display
+        assert "[tool: Read]" in display
+        assert "a.py" in display
+        assert assistant == "I'll read it"
+
+    def test_user_tool_result(self):
+        event = {
+            "type": "user",
+            "message": {
+                "content": [
+                    {"type": "tool_result", "content": [{"type": "text", "text": "hello world"}]},
+                ]
+            },
+        }
+        display, assistant = _process_claude_event(event)
+        assert "[tool_result]" in display
+        assert "hello world" in display
         assert assistant == ""
 
     def test_system_event(self):

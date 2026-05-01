@@ -475,19 +475,59 @@ def _process_claude_event(event: dict) -> tuple[str, str]:
     """
     event_type = event.get("type", "")
 
-    # Claude stream-json types
+    # Claude stream-json types. An `assistant` event's `message.content` is a
+    # list of blocks: text, tool_use, thinking. We surface all of them so the
+    # live display moves while Claude is mid-tool-call, not just when it
+    # produces prose.
     if event_type == "assistant":
-        text = event.get("message", "")
-        if isinstance(text, dict):
-            text = text.get("content", "")
-        if isinstance(text, list):
+        message = event.get("message", "")
+        if isinstance(message, dict):
+            content = message.get("content", "")
+        else:
+            content = message
+        display_parts: list[str] = []
+        assistant_parts: list[str] = []
+        if isinstance(content, list):
+            for block in content:
+                if not isinstance(block, dict):
+                    continue
+                btype = block.get("type")
+                if btype == "text":
+                    txt = block.get("text", "")
+                    if txt:
+                        display_parts.append(txt)
+                        assistant_parts.append(txt)
+                elif btype == "thinking":
+                    thinking = block.get("thinking", "") or block.get("text", "")
+                    if thinking:
+                        display_parts.append(f"[thinking] {_truncate(thinking, 200)}")
+                elif btype == "tool_use":
+                    tool_name = block.get("name", "unknown")
+                    summary = _summarize_tool_input(tool_name, block.get("input", {}))
+                    display_parts.append(f"[tool: {tool_name}]{(' ' + summary) if summary else ''}")
+        elif isinstance(content, str) and content:
+            display_parts.append(content)
+            assistant_parts.append(content)
+        return "\n".join(display_parts), "\n".join(assistant_parts)
+
+    # `user` events carry tool results back to the model.
+    if event_type == "user":
+        message = event.get("message", "")
+        content = message.get("content", "") if isinstance(message, dict) else message
+        if isinstance(content, list):
             parts = []
-            for block in text:
-                if isinstance(block, dict) and block.get("type") == "text":
-                    parts.append(block.get("text", ""))
-            text = "\n".join(parts)
-        if text:
-            return text, text
+            for block in content:
+                if not isinstance(block, dict):
+                    continue
+                if block.get("type") == "tool_result":
+                    inner = block.get("content", "")
+                    if isinstance(inner, list):
+                        texts = [b.get("text", "") for b in inner if isinstance(b, dict) and b.get("type") == "text"]
+                        inner = "\n".join(t for t in texts if t)
+                    if isinstance(inner, str) and inner:
+                        parts.append(f"[tool_result] {_truncate(inner, 200)}")
+            if parts:
+                return "\n".join(parts), ""
         return "", ""
 
     if event_type == "content_block_delta":
@@ -506,15 +546,28 @@ def _process_claude_event(event: dict) -> tuple[str, str]:
             return "", ""
         return "", ""
 
-    if event_type == "tool_use":
-        tool_name = event.get("name", event.get("tool", "unknown"))
-        return f"[tool: {tool_name}]", ""
-
     if event_type == "system":
         msg = event.get("message", "")
         return f"[system] {msg}" if msg else "", ""
 
     return "", ""
+
+
+def _truncate(text: str, limit: int) -> str:
+    """Single-line, length-capped rendering for live display."""
+    flat = " ".join(text.split())
+    return flat if len(flat) <= limit else flat[: limit - 1] + "…"
+
+
+def _summarize_tool_input(tool_name: str, tool_input: dict) -> str:
+    """Pick a short, useful field from a tool_use input for the live buffer."""
+    if not isinstance(tool_input, dict):
+        return ""
+    for key in ("file_path", "path", "command", "pattern", "url", "query", "description"):
+        val = tool_input.get(key)
+        if isinstance(val, str) and val:
+            return _truncate(val, 160)
+    return ""
 
 
 def _process_codex_event(event: dict) -> tuple[str, str]:
