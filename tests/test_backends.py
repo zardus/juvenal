@@ -93,7 +93,8 @@ class TestProcessClaudeEvent:
         assert display == ""
         assert assistant == ""
 
-    def test_assistant_tool_use_block(self):
+    def test_assistant_tool_use_block_skipped(self):
+        # tool_use blocks are intentionally not rendered — too noisy.
         event = {
             "type": "assistant",
             "message": {
@@ -103,8 +104,7 @@ class TestProcessClaudeEvent:
             },
         }
         display, assistant = _process_claude_event(event)
-        assert "[tool: Write]" in display
-        assert "/tmp/x.txt" in display
+        assert display == ""
         assert assistant == ""
 
     def test_assistant_thinking_block(self):
@@ -128,12 +128,11 @@ class TestProcessClaudeEvent:
             },
         }
         display, assistant = _process_claude_event(event)
-        assert "I'll read it" in display
-        assert "[tool: Read]" in display
-        assert "a.py" in display
+        assert display == "I'll read it"
         assert assistant == "I'll read it"
 
-    def test_user_tool_result(self):
+    def test_user_tool_result_skipped(self):
+        # tool_result events from `user` messages are intentionally not rendered.
         event = {
             "type": "user",
             "message": {
@@ -143,8 +142,7 @@ class TestProcessClaudeEvent:
             },
         }
         display, assistant = _process_claude_event(event)
-        assert "[tool_result]" in display
-        assert "hello world" in display
+        assert display == ""
         assert assistant == ""
 
     def test_system_event(self):
