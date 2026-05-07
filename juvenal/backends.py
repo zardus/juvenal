@@ -513,15 +513,12 @@ def _process_claude_event(event: dict) -> tuple[str, str]:
         return text, ""
 
     if event_type == "result":
-        # Final result message
+        # Final result message — Claude always echoes the last assistant text here,
+        # and prior `assistant` events have already streamed it to the display.
+        # Keep it in assistant_text as a fallback for `output`, but don't re-emit
+        # to display_text (would duplicate the verdict / final message in the buffer).
         text = event.get("result", "")
-        if text:
-            return text, text
-        # Handle subtype
-        subtype = event.get("subtype", "")
-        if subtype == "success":
-            return "", ""
-        return "", ""
+        return "", text
 
     if event_type == "system":
         msg = event.get("message", "")

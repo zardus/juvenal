@@ -84,8 +84,11 @@ class TestProcessClaudeEvent:
         assert assistant == ""
 
     def test_result_event(self):
+        # The `result` event echoes the final assistant text; prior `assistant`
+        # events already streamed it to display, so we must NOT re-emit it as
+        # display_text or it shows twice in the live buffer.
         display, assistant = _process_claude_event({"type": "result", "result": "final output"})
-        assert display == "final output"
+        assert display == ""
         assert assistant == "final output"
 
     def test_result_success_subtype(self):
