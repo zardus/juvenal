@@ -6,6 +6,7 @@ import json
 import os
 import subprocess
 import sys
+import threading
 import time
 import uuid
 from abc import ABC, abstractmethod
@@ -240,6 +241,27 @@ class ClaudeBackend(Backend):
         total_input_tokens = 0
         total_output_tokens = 0
 
+        # Drain stderr in a background thread. A blocking `proc.stderr.read()`
+        # after the stdout loop deadlocks when claude has spawned a child that
+        # inherited stderr (e.g. a long-running Docker / build subprocess) —
+        # the kernel won't deliver EOF until every fd referencing the pipe is
+        # closed, so we'd hang indefinitely waiting on a grandchild.
+        stderr_chunks: list[str] = []
+
+        def _drain_stderr() -> None:
+            try:
+                while True:
+                    chunk = proc.stderr.read(4096)
+                    if not chunk:
+                        break
+                    stderr_chunks.append(chunk)
+            except (ValueError, OSError):
+                # Pipe closed from the main thread; exit cleanly.
+                pass
+
+        stderr_thread = threading.Thread(target=_drain_stderr, daemon=True)
+        stderr_thread.start()
+
         try:
             for raw_line in proc.stdout:
                 if timeout and (time.time() - start) > timeout:
@@ -277,9 +299,19 @@ class ClaudeBackend(Backend):
             proc.wait()
             raise
 
-        stderr_output = proc.stderr.read()
         returncode = proc.wait()
         duration = time.time() - start
+        # Give the drain thread a brief grace period to flush buffered stderr.
+        # If a grandchild still holds the pipe open, close our end to unblock
+        # the read so we don't leak threads on subsequent phases.
+        stderr_thread.join(timeout=2.0)
+        if stderr_thread.is_alive():
+            try:
+                proc.stderr.close()
+            except Exception:
+                pass
+            stderr_thread.join(timeout=1.0)
+        stderr_output = "".join(stderr_chunks)
         if proc in self._active_procs:
             self._active_procs.remove(proc)
 
