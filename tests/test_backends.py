@@ -1,7 +1,9 @@
 """Unit tests for backend helper functions and factory."""
 
 import os
+import subprocess
 import sys
+import time
 
 import pytest
 
@@ -15,6 +17,8 @@ from juvenal.backends import (
     _prepend_juvenal_bin_to_path,
     _process_claude_event,
     _process_codex_event,
+    _stall_timeout_seconds,
+    _StallWatchdog,
     create_backend,
 )
 
@@ -293,3 +297,87 @@ class TestPrependJuvenalBinToPath:
         env: dict[str, str] = {}
         _prepend_juvenal_bin_to_path(env)
         assert env["PATH"] == str(real_bin)
+
+
+class TestStallTimeoutSeconds:
+    def test_default(self, monkeypatch):
+        monkeypatch.delenv("JUVENAL_STALL_TIMEOUT_SEC", raising=False)
+        assert _stall_timeout_seconds() == 3600.0
+
+    def test_override(self, monkeypatch):
+        monkeypatch.setenv("JUVENAL_STALL_TIMEOUT_SEC", "42")
+        assert _stall_timeout_seconds() == 42.0
+
+    def test_zero_disables(self, monkeypatch):
+        monkeypatch.setenv("JUVENAL_STALL_TIMEOUT_SEC", "0")
+        assert _stall_timeout_seconds() == 0.0
+
+    def test_invalid_falls_back_to_default(self, monkeypatch):
+        monkeypatch.setenv("JUVENAL_STALL_TIMEOUT_SEC", "not-a-number")
+        assert _stall_timeout_seconds() == 3600.0
+
+
+class TestStallWatchdog:
+    def test_kills_silent_process(self):
+        # `sleep 30` writes nothing to stdout; watchdog should kill it quickly.
+        proc = subprocess.Popen(["sleep", "30"], stdout=subprocess.PIPE)
+        try:
+            wd = _StallWatchdog(proc, stall_timeout=0.3)
+            wd.start()
+            rc = proc.wait(timeout=10)
+            wd.stop()
+            assert wd.fired is True
+            assert rc != 0  # killed
+        finally:
+            if proc.poll() is None:
+                proc.kill()
+                proc.wait()
+
+    def test_disabled_when_zero(self):
+        proc = subprocess.Popen(["true"], stdout=subprocess.PIPE)
+        try:
+            wd = _StallWatchdog(proc, stall_timeout=0)
+            wd.start()
+            proc.wait(timeout=5)
+            wd.stop()
+            assert wd.fired is False
+        finally:
+            if proc.poll() is None:
+                proc.kill()
+                proc.wait()
+
+    def test_beat_resets_timer(self):
+        # Process exits cleanly after writing output; watchdog should NOT fire
+        # if we beat it during the run.
+        proc = subprocess.Popen(
+            ["bash", "-c", "for i in 1 2 3 4 5; do echo $i; sleep 0.1; done"],
+            stdout=subprocess.PIPE,
+            text=True,
+        )
+        try:
+            wd = _StallWatchdog(proc, stall_timeout=0.5)
+            wd.start()
+            for _line in proc.stdout:
+                wd.beat()
+            rc = proc.wait(timeout=5)
+            wd.stop()
+            assert rc == 0
+            assert wd.fired is False
+        finally:
+            if proc.poll() is None:
+                proc.kill()
+                proc.wait()
+
+    def test_stop_prevents_kill(self):
+        proc = subprocess.Popen(["sleep", "30"], stdout=subprocess.PIPE)
+        try:
+            wd = _StallWatchdog(proc, stall_timeout=0.3)
+            wd.start()
+            time.sleep(0.05)
+            wd.stop()
+            time.sleep(0.6)
+            assert wd.fired is False
+            assert proc.poll() is None
+        finally:
+            proc.kill()
+            proc.wait()

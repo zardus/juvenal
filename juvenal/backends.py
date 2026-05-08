@@ -14,6 +14,70 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
+# Default stall timeout: kill the agent if its stdout has been silent for this
+# many seconds. A long bash tool call (build, test suite) emits no events
+# during execution, so this must be high enough to tolerate legitimate work.
+# 1 hour is well past what any reasonable single tool call should take and
+# catches the case where the agent's event loop is stuck waiting on a child
+# process that won't exit (observed: bash grandchildren stuck in
+# `pgrep -f`-self-match polling loops).
+_DEFAULT_STALL_TIMEOUT = 3600
+
+
+def _stall_timeout_seconds() -> float:
+    """Read the stall timeout from $JUVENAL_STALL_TIMEOUT_SEC, falling back to the default. 0 disables."""
+    raw = os.environ.get("JUVENAL_STALL_TIMEOUT_SEC")
+    if raw is None:
+        return float(_DEFAULT_STALL_TIMEOUT)
+    try:
+        return max(0.0, float(raw))
+    except ValueError:
+        return float(_DEFAULT_STALL_TIMEOUT)
+
+
+class _StallWatchdog:
+    """Kills `proc` if no `beat()` happens within `stall_timeout` seconds.
+
+    Used to escape hangs where the agent stops emitting stdout but won't exit
+    (e.g. its event loop is blocked on a stuck child process). Without this,
+    the surrounding `for raw_line in proc.stdout` loop blocks forever.
+    """
+
+    def __init__(self, proc: subprocess.Popen, stall_timeout: float) -> None:
+        self._proc = proc
+        self._stall_timeout = stall_timeout
+        self._last_activity = time.time()
+        self._stop = threading.Event()
+        self._thread: threading.Thread | None = None
+        self.fired = False
+
+    def start(self) -> None:
+        if self._stall_timeout <= 0:
+            return
+        self._thread = threading.Thread(target=self._watch, daemon=True)
+        self._thread.start()
+
+    def beat(self) -> None:
+        self._last_activity = time.time()
+
+    def stop(self) -> None:
+        self._stop.set()
+
+    def _watch(self) -> None:
+        # Wake every ~30s (or 1/4 of the timeout, whichever is smaller) to
+        # check progress without burning CPU.
+        tick = max(1.0, min(30.0, self._stall_timeout / 4))
+        while not self._stop.wait(tick):
+            if self._proc.poll() is not None:
+                return
+            if (time.time() - self._last_activity) > self._stall_timeout:
+                self.fired = True
+                try:
+                    self._proc.kill()
+                except (ProcessLookupError, OSError):
+                    pass
+                return
+
 
 def _prepend_juvenal_bin_to_path(proc_env: dict[str, str]) -> None:
     """Prepend the running juvenal's venv bin dir to PATH so spawned shells find the same `python`/`juvenal`.
@@ -262,11 +326,17 @@ class ClaudeBackend(Backend):
         stderr_thread = threading.Thread(target=_drain_stderr, daemon=True)
         stderr_thread.start()
 
+        stall_timeout = _stall_timeout_seconds()
+        watchdog = _StallWatchdog(proc, stall_timeout)
+        watchdog.start()
+
         try:
             for raw_line in proc.stdout:
+                watchdog.beat()
                 if timeout and (time.time() - start) > timeout:
                     proc.kill()
                     proc.wait()
+                    watchdog.stop()
                     return AgentResult(
                         exit_code=1,
                         output=f"Agent timed out after {timeout}s",
@@ -297,9 +367,11 @@ class ClaudeBackend(Backend):
         except Exception:
             proc.kill()
             proc.wait()
+            watchdog.stop()
             raise
 
         returncode = proc.wait()
+        watchdog.stop()
         duration = time.time() - start
         # Give the drain thread a brief grace period to flush buffered stderr.
         # If a grandchild still holds the pipe open, close our end to unblock
@@ -317,10 +389,16 @@ class ClaudeBackend(Backend):
 
         if stderr_output:
             transcript_lines.append(f"[stderr] {stderr_output}")
+        if watchdog.fired:
+            note = f"[juvenal] killed after {stall_timeout:.0f}s of stdout silence (JUVENAL_STALL_TIMEOUT_SEC)"
+            transcript_lines.append(note)
 
         output = "\n".join(assistant_messages)
         if returncode != 0 and not output:
-            output = stderr_output or "\n".join(transcript_lines)
+            if watchdog.fired:
+                output = f"Agent stalled — no stdout for {stall_timeout:.0f}s"
+            else:
+                output = stderr_output or "\n".join(transcript_lines)
 
         return AgentResult(
             exit_code=returncode,
@@ -418,11 +496,17 @@ class CodexBackend(Backend):
         total_output_tokens = 0
         thread_id: str | None = None
 
+        stall_timeout = _stall_timeout_seconds()
+        watchdog = _StallWatchdog(proc, stall_timeout)
+        watchdog.start()
+
         try:
             for raw_line in proc.stdout:
+                watchdog.beat()
                 if timeout and (time.time() - start) > timeout:
                     proc.kill()
                     proc.wait()
+                    watchdog.stop()
                     return AgentResult(
                         exit_code=1,
                         output=f"Agent timed out after {timeout}s",
@@ -456,16 +540,26 @@ class CodexBackend(Backend):
         except Exception:
             proc.kill()
             proc.wait()
+            watchdog.stop()
             raise
 
         returncode = proc.wait()
+        watchdog.stop()
         duration = time.time() - start
         if proc in self._active_procs:
             self._active_procs.remove(proc)
 
+        if watchdog.fired:
+            transcript_lines.append(
+                f"[juvenal] killed after {stall_timeout:.0f}s of stdout silence (JUVENAL_STALL_TIMEOUT_SEC)"
+            )
+
         output = "\n".join(assistant_messages)
         if returncode != 0 and not output:
-            output = "\n".join(transcript_lines)
+            if watchdog.fired:
+                output = f"Agent stalled — no stdout for {stall_timeout:.0f}s"
+            else:
+                output = "\n".join(transcript_lines)
 
         return AgentResult(
             exit_code=returncode,
