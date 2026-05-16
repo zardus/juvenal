@@ -310,9 +310,9 @@ def test_replan_prompt_includes_checker_transcript(tmp_path):
     # The third backend call (index 4) is the replan agent. Its prompt must include
     # the most recent CHECKER transcript (which lives under state.phases["setup-check"]).
     replan_prompt = backend.calls[4]
-    assert (
-        "checker output 2" in replan_prompt
-    ), "replan prompt missing checker transcript — _tail_last_transcripts didn't search across phases"
+    assert "checker output 2" in replan_prompt, (
+        "replan prompt missing checker transcript — _tail_last_transcripts didn't search across phases"
+    )
     assert "distinctive-reason-2" in replan_prompt
     # And the implementer transcript from the last attempt.
     assert "implement attempt 2" in replan_prompt
@@ -465,9 +465,9 @@ phases:
     # If it had been skipped, the backend's "new setup ran" response would be unused,
     # and "VERDICT: PASS" would land on a different phase.
     setup_logs = engine.state.phases["setup"].logs
-    assert any(
-        "new setup ran" in (log.get("output") or "") for log in setup_logs
-    ), f"new 'setup' phase did not execute fresh; logs={setup_logs}"
+    assert any("new setup ran" in (log.get("output") or "") for log in setup_logs), (
+        f"new 'setup' phase did not execute fresh; logs={setup_logs}"
+    )
 
     # Old phase records were snapshotted into replan_history.
     assert "old_phases" in engine.state.replan_history[0]
