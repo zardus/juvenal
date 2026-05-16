@@ -328,15 +328,21 @@ class Engine:
         idx = self.state.get_resume_phase_index(self.workflow.phases)
         return self._snap_to_group_start(idx)
 
-    _REPLAN_MAX_ATTEMPTS = 3
-
     def _try_replan(self, triggered_phase: str, last_failure_context: str) -> bool:
-        """Invoke the replan agent and swap the workflow on success.
+        """Re-plan the workflow by running the full plan pipeline and swap on success.
 
-        Returns True if a new workflow was successfully validated and installed.
-        Returns False if the agent failed to produce a valid workflow within
-        _REPLAN_MAX_ATTEMPTS, or if --max-replans has been exhausted.
+        Drives the same multi-phase planning workflow used by `juvenal plan` (draft →
+        smokecheck → refine → review → cleanup → split → write → validate → review),
+        feeding it a GOAL that describes the stuck state. The resulting workflow.yaml
+        is loaded, validated, and installed in place of the current workflow.
+
+        Returns True if a new workflow was successfully planned and installed.
+        Returns False if --max-replans has been exhausted or the planning pipeline
+        failed to produce a valid workflow.
         """
+        import os
+        import shutil as _shutil
+
         from juvenal.workflow import dump_workflow, validate_workflow
 
         if self.max_replans is not None and self.state.replan_count >= self.max_replans:
@@ -347,93 +353,151 @@ class Engine:
             return False
 
         current_yaml = dump_workflow(self.workflow)
-        prompt = self._build_replan_prompt(triggered_phase, current_yaml, last_failure_context)
+        cycle = self.state.replan_count + 1
+        goal = self._build_replan_goal(triggered_phase, current_yaml, last_failure_context)
 
-        last_error = ""
-        retry_prompt = prompt
-        for _attempt in range(self._REPLAN_MAX_ATTEMPTS):
-            self.display.step_start(f"replan: cycle #{self.state.replan_count + 1}")
-            result = self.backend.run_agent(
-                retry_prompt,
-                working_dir=self.workflow.working_dir,
-                display_callback=self.display.live_update,
-                timeout=None,
+        self.display.step_start(f"replan: cycle #{cycle} (full plan workflow)")
+
+        project_dir = self.workflow.working_dir or os.getcwd()
+        project_path = Path(project_dir)
+
+        # Archive existing .plan/ and workflow.yaml so the user's prior planning
+        # artifacts (and any state file from an earlier replan cycle) survive —
+        # the plan workflow writes .plan/* and workflow.yaml in working_dir and
+        # would otherwise clobber them. Only create the archive dir when there
+        # is actually something to move; otherwise we'd leave empty cycle dirs
+        # scattered in the project root (and trip up tests that share a cwd).
+        plan_dir = project_path / ".plan"
+        wf_yaml = project_path / "workflow.yaml"
+        if plan_dir.exists() or wf_yaml.exists():
+            archive_root = project_path / ".juvenal-replan-archive" / f"cycle-{cycle:03d}"
+            archive_root.mkdir(parents=True, exist_ok=True)
+            if plan_dir.exists():
+                _shutil.move(str(plan_dir), str(archive_root / "plan"))
+            if wf_yaml.exists():
+                _shutil.move(str(wf_yaml), str(archive_root / "workflow.yaml.bak"))
+
+        # Pause the parent display so the inner plan engine can drive the
+        # terminal; resume() is a no-op (next step_start creates a fresh Live).
+        self.display.pause()
+        try:
+            plan_result = _plan_workflow_internal(
+                goal=goal,
+                backend_name=self.workflow.backend,
+                plain=self.display._plain,
+                serialize=self.serialize,
+                project_dir=project_dir,
+                resume=False,
+                linear=True,
+                # Disable nested replan inside the planning sub-engine: it has its
+                # own internal review/refine loops, and recursive replan would
+                # spawn another full plan workflow on every stuck phase.
+                replan_after=None,
+                max_replans=None,
+                interactive=False,
             )
-            self.state.add_tokens(triggered_phase, result.input_tokens, result.output_tokens)
+        finally:
+            self.display.resume()
 
-            if result.exit_code != 0:
-                last_error = f"replan agent crashed (exit {result.exit_code})"
-                retry_prompt = prompt + f"\n\nThe previous attempt failed: {last_error}. Try again."
-                continue
+        self.state.add_tokens(triggered_phase, plan_result.input_tokens, plan_result.output_tokens)
 
-            yaml_text = _extract_yaml(result.output).strip()
-            if not yaml_text:
-                last_error = "no YAML found in replan agent output"
-                retry_prompt = prompt + f"\n\nThe previous attempt failed: {last_error}. Try again."
-                continue
+        if not plan_result.success or not plan_result.workflow_yaml_path:
+            self.display.step_fail("replan", (plan_result.error or "planning pipeline failed")[:500])
+            return False
 
-            try:
-                new_workflow = self._load_workflow_from_yaml_text(yaml_text)
-            except Exception as exc:
-                last_error = f"replan yaml failed to load: {exc}"
-                retry_prompt = prompt + f"\n\nThe previous attempt failed: {last_error}. Try again."
-                continue
+        yaml_text = Path(plan_result.workflow_yaml_path).read_text()
+        try:
+            new_workflow = self._load_workflow_from_yaml_text(yaml_text)
+        except Exception as exc:
+            self.display.step_fail("replan", f"planned yaml failed to load: {exc}"[:500])
+            return False
 
-            errors = validate_workflow(new_workflow)
-            if errors:
-                last_error = "replan workflow validation failed: " + "; ".join(errors)
-                retry_prompt = prompt + f"\n\nThe previous attempt failed: {last_error}. Try again."
-                continue
+        errors = validate_workflow(new_workflow)
+        if errors:
+            self.display.step_fail("replan", ("planned workflow validation failed: " + "; ".join(errors))[:500])
+            return False
 
-            # Success — install the new workflow. record_replan snapshots the old
-            # phase records into replan_history and clears the live phase state, so
-            # the new workflow starts with a clean slate even if it reuses phase ids.
-            # _align_state_phases then materializes fresh PhaseState entries for the
-            # new workflow's phase ids and reseats state.workflow_phase_ids.
-            new_workflow.working_dir = self.workflow.working_dir
-            new_workflow.backend = new_workflow.backend or self.workflow.backend
-            old_yaml = current_yaml
-            prior_backend = self.workflow.backend
-            self.workflow = new_workflow
-            # If the replan agent switched backends (claude → codex or vice-versa), the
-            # cached self.backend instance points at the old CLI; rebuild it so subsequent
-            # phases run on the requested backend.
-            if new_workflow.backend != prior_backend:
-                self.backend = create_backend(new_workflow.backend)
-            self._bounce_targets.clear()
-            self._session_ids.clear()
-            # record_replan clears state.phase_bounces (and state.phases), so the new
-            # workflow starts with a clean per-phase counter and clean phase records.
-            self.state.record_replan(triggered_phase, old_yaml, yaml_text)
-            self._align_state_phases()
-            self.display.step_pass(f"replan: cycle #{self.state.replan_count}")
-            return True
+        # Success — install the new workflow. record_replan snapshots the old
+        # phase records into replan_history and clears the live phase state, so
+        # the new workflow starts with a clean slate even if it reuses phase ids.
+        # _align_state_phases then materializes fresh PhaseState entries for the
+        # new workflow's phase ids and reseats state.workflow_phase_ids.
+        new_workflow.working_dir = self.workflow.working_dir
+        new_workflow.backend = new_workflow.backend or self.workflow.backend
+        old_yaml = current_yaml
+        prior_backend = self.workflow.backend
+        self.workflow = new_workflow
+        # If the planner switched backends (claude → codex or vice-versa), the
+        # cached self.backend instance points at the old CLI; rebuild it so
+        # subsequent phases run on the requested backend.
+        if new_workflow.backend != prior_backend:
+            self.backend = create_backend(new_workflow.backend)
+        self._bounce_targets.clear()
+        self._session_ids.clear()
+        # record_replan clears state.phase_bounces (and state.phases), so the new
+        # workflow starts with a clean per-phase counter and clean phase records.
+        self.state.record_replan(triggered_phase, old_yaml, yaml_text)
+        self._align_state_phases()
+        self.display.step_pass(f"replan: cycle #{self.state.replan_count}")
+        return True
 
-        self.display.step_fail("replan", last_error[:500])
-        return False
+    def _build_replan_goal(self, triggered_phase: str, current_yaml: str, last_failure_context: str) -> str:
+        """Compose the GOAL fed to the plan workflow when re-planning a stuck pipeline.
 
-    def _build_replan_prompt(self, triggered_phase: str, current_yaml: str, last_failure_context: str) -> str:
-        """Render the replan prompt template with bounce history baked in."""
-        template = self._read_replan_template()
+        The plan workflow's plan-draft phase substitutes this into its prompt as
+        ``{{GOAL}}``. The text describes what to produce (a replacement workflow)
+        and supplies the diagnostic context (stuck phase, bounce history, last
+        agent outputs, current YAML) the planner needs to diagnose the root cause.
+        """
         bounce_history = self._format_bounce_history()
         last_impl, last_check = self._tail_last_transcripts(triggered_phase)
-        replacements = {
-            "{{BOUNCE_COUNT}}": str(self._phase_bounces.get(triggered_phase, 0)),
-            "{{REPLAN_CYCLE}}": str(self.state.replan_count + 1),
-            "{{STUCK_PHASE_ID}}": triggered_phase,
-            "{{CURRENT_WORKFLOW_YAML}}": current_yaml,
-            "{{BOUNCE_HISTORY}}": bounce_history or "(no per-phase bounce records)",
-            "{{LAST_IMPLEMENT_OUTPUT}}": last_impl or "(no recent implement output captured)",
-            "{{LAST_CHECK_OUTPUT}}": last_check or last_failure_context or "(no recent check output captured)",
-        }
-        out = template
-        for key, val in replacements.items():
-            out = out.replace(key, val)
-        return out
+        cycle = self.state.replan_count + 1
+        bounce_count = self._phase_bounces.get(triggered_phase, 0)
 
-    @staticmethod
-    def _read_replan_template() -> str:
-        return (Path(__file__).parent / "prompts" / "replan.md").read_text()
+        return (
+            "We are RE-PLANNING a workflow that has gotten stuck.\n\n"
+            f"The previously-running workflow has been bouncing on phase `{triggered_phase}` "
+            f"({bounce_count} bounces) without ever passing its checker. This means the current "
+            f"plan is not working. This is replan cycle #{cycle}.\n\n"
+            "Your job is to diagnose WHY the loop is stuck and produce a complete REPLACEMENT "
+            "plan and workflow that will succeed. Follow the standard plan workflow steps "
+            "(draft → refine → split → write-workflow → review). The replacement workflow "
+            "REPLACES the current one — any phases from the original that should still run "
+            "must appear in your output. Phase ids may differ from the original.\n\n"
+            "## Common causes of a stuck phase\n\n"
+            "1. The checker has an impossible contract (asks for two mutually exclusive things).\n"
+            "2. The phase prompt is missing a key constraint that the checker enforces, so the "
+            "implementer keeps producing work the checker rejects.\n"
+            "3. The phase is too large — split it into smaller phases each with their own checker.\n"
+            "4. The wrong starting assumption — the upstream/setup phase produced state that "
+            "prevents this phase from ever passing, and the right move is to redo earlier phases "
+            "differently.\n"
+            "5. The checker is over-strict on something orthogonal to the goal and should be "
+            "loosened.\n\n"
+            "## The current (stuck) workflow YAML\n\n"
+            "````yaml\n"
+            f"{current_yaml}\n"
+            "````\n\n"
+            "## What has been tried (per-phase summary)\n\n"
+            f"{bounce_history or '(no per-phase bounce records)'}\n\n"
+            "## Last implementer output (truncated)\n\n"
+            "````\n"
+            f"{last_impl or '(no recent implement output captured)'}\n"
+            "````\n\n"
+            "## Last checker output (truncated)\n\n"
+            "````\n"
+            f"{last_check or last_failure_context or '(no recent check output captured)'}\n"
+            "````\n\n"
+            "## Constraints\n\n"
+            "- Reuse the same `backend` and `working_dir` as the current workflow unless changing "
+            "them is part of the fix.\n"
+            "- Each phase must be a discrete, verifiable step with an agentic `check` phase as its "
+            "verifier.\n"
+            "- If a checker should run tests, lint, build, or other commands, put those commands "
+            "in the checker instructions.\n"
+            "- Order phases from setup/scaffolding to implementation to polish.\n"
+            "- Keep prompts specific and actionable.\n"
+        )
 
     def _format_bounce_history(self) -> str:
         """Summarize attempts and most recent failure reasons for every phase with attempts."""

@@ -1,11 +1,18 @@
-"""Tests for the --replan-after / --max-replans workflow rewrite feature."""
+"""Tests for the --replan-after / --max-replans workflow rewrite feature.
+
+Replan now runs the full plan workflow (draft → refine → split → write → review)
+in a sub-engine. These tests mock that sub-engine by monkeypatching
+``juvenal.engine._plan_workflow_internal`` to return a canned ``PlanResult``
+pointing at a pre-baked workflow YAML, so they don't need to feed dozens of
+mock backend responses to satisfy the planner.
+"""
 
 from __future__ import annotations
 
 import json
 from pathlib import Path
 
-from juvenal.engine import Engine
+from juvenal.engine import Engine, PlanResult
 from juvenal.state import PipelineState
 from juvenal.workflow import Phase, Workflow, make_command_check_prompt
 from tests.conftest import MockBackend
@@ -17,7 +24,9 @@ def _make_engine(workflow, backend, tmp_path, **kwargs):
     return engine
 
 
-def _base_workflow():
+def _base_workflow(tmp_path=None):
+    """Build a minimal stuck-prone workflow. ``tmp_path``, when supplied, becomes
+    ``working_dir`` so the replan-archive logic can never touch the repo root."""
     return Workflow(
         name="orig",
         phases=[
@@ -25,13 +34,14 @@ def _base_workflow():
             Phase(id="setup-check", type="check", prompt=make_command_check_prompt("true")),
         ],
         backend="claude",
+        working_dir=str(tmp_path) if tmp_path is not None else ".",
         max_bounces=999,
     )
 
 
 def _passing_replan_yaml(name: str = "replanned") -> str:
-    return f"""```yaml
-name: {name}
+    """Plain (unfenced) replan YAML — written directly to disk by the fake planner."""
+    return f"""name: {name}
 backend: claude
 working_dir: "."
 max_bounces: 999
@@ -44,24 +54,58 @@ phases:
     prompt: |
       Confirm the work is done.
       VERDICT: PASS
-```
 """
 
 
-def test_replan_triggers_at_per_phase_threshold(tmp_path):
-    """After replan_after bounces on the same phase, an agent replans and the new workflow runs."""
+def _install_fake_replanner(
+    monkeypatch,
+    tmp_path,
+    yaml_factory=_passing_replan_yaml,
+    input_tokens: int = 0,
+    output_tokens: int = 0,
+    capture: list | None = None,
+):
+    """Patch ``juvenal.engine._plan_workflow_internal`` to skip the real plan workflow.
+
+    The fake writes ``yaml_factory()`` to a temp file and returns a ``PlanResult``
+    pointing at it, so the engine's replan path treats it as a successfully
+    planned workflow. ``capture`` (if provided) receives one dict per call with
+    the kwargs (notably ``goal``) the engine passed to the planner.
+    """
+    import juvenal.engine as je
+
+    counter = {"n": 0}
+
+    def fake(*args, **kwargs):
+        counter["n"] += 1
+        if capture is not None:
+            capture.append(dict(kwargs))
+        out_path = tmp_path / f"replan-{counter['n']}.yaml"
+        out_path.write_text(yaml_factory())
+        return PlanResult(
+            success=True,
+            workflow_yaml_path=str(out_path),
+            temp_dir=None,
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+        )
+
+    monkeypatch.setattr(je, "_plan_workflow_internal", fake)
+
+
+def test_replan_triggers_at_per_phase_threshold(tmp_path, monkeypatch):
+    """After replan_after bounces on the same phase, the planner runs and the new workflow runs."""
     backend = MockBackend()
     # Cycle 1: bounce 3 times (each: implement-pass + check-fail = 2 backend calls per bounce)
     for _ in range(3):
         backend.add_response(exit_code=0, output="implementing...")  # implement
         backend.add_response(exit_code=0, output="VERDICT: FAIL: still broken")  # check
-    # Replan agent returns a working workflow
-    backend.add_response(exit_code=0, output=_passing_replan_yaml())
     # New workflow runs to completion: 1 implement + 1 check
     backend.add_response(exit_code=0, output="new implementation done")
     backend.add_response(exit_code=0, output="VERDICT: PASS")
 
-    workflow = _base_workflow()
+    _install_fake_replanner(monkeypatch, tmp_path)
+    workflow = _base_workflow(tmp_path)
     engine = _make_engine(workflow, backend, tmp_path, replan_after=3)
     assert engine.run() == 0
 
@@ -80,17 +124,17 @@ def test_replan_triggers_at_per_phase_threshold(tmp_path):
     assert "orig" in entry["old_workflow_yaml"]
 
 
-def test_replan_persisted_to_state_file(tmp_path):
+def test_replan_persisted_to_state_file(tmp_path, monkeypatch):
     """The swapped workflow and history land in the state JSON for --resume."""
     backend = MockBackend()
     for _ in range(2):
         backend.add_response(exit_code=0, output="implementing...")
         backend.add_response(exit_code=0, output="VERDICT: FAIL: nope")
-    backend.add_response(exit_code=0, output=_passing_replan_yaml())
     backend.add_response(exit_code=0, output="done")
     backend.add_response(exit_code=0, output="VERDICT: PASS")
 
-    workflow = _base_workflow()
+    _install_fake_replanner(monkeypatch, tmp_path)
+    workflow = _base_workflow(tmp_path)
     engine = _make_engine(workflow, backend, tmp_path, replan_after=2)
     engine.run()
 
@@ -100,7 +144,7 @@ def test_replan_persisted_to_state_file(tmp_path):
     assert raw["replan_history"][0]["triggered_phase"] == "setup"
 
 
-def test_resume_loads_replanned_workflow(tmp_path):
+def test_resume_loads_replanned_workflow(tmp_path, monkeypatch):
     """--resume uses the persisted replanned workflow, not the original workflow on disk."""
     state_path = tmp_path / "state.json"
 
@@ -109,11 +153,11 @@ def test_resume_loads_replanned_workflow(tmp_path):
     for _ in range(2):
         backend1.add_response(exit_code=0, output="implementing...")
         backend1.add_response(exit_code=0, output="VERDICT: FAIL: nope")
-    backend1.add_response(exit_code=0, output=_passing_replan_yaml())
     backend1.add_response(exit_code=0, output="done")
     backend1.add_response(exit_code=0, output="VERDICT: PASS")
 
-    engine1 = Engine(_base_workflow(), state_file=str(state_path), replan_after=2)
+    _install_fake_replanner(monkeypatch, tmp_path)
+    engine1 = Engine(_base_workflow(tmp_path), state_file=str(state_path), replan_after=2)
     engine1.backend = backend1
     assert engine1.run() == 0
 
@@ -123,13 +167,13 @@ def test_resume_loads_replanned_workflow(tmp_path):
 
     # Second run with --resume: pass the ORIGINAL workflow on the CLI;
     # engine should swap it out for the persisted replanned workflow at __init__ time.
-    engine2 = Engine(_base_workflow(), state_file=str(state_path), resume=True)
+    engine2 = Engine(_base_workflow(tmp_path), state_file=str(state_path), resume=True)
     # Engine should now have the replanned workflow installed.
     assert engine2.workflow.name == "replanned"
     assert [p.id for p in engine2.workflow.phases] == ["new-setup", "new-setup-check"]
 
 
-def test_max_replans_enforced(tmp_path):
+def test_max_replans_enforced(tmp_path, monkeypatch):
     """With max_replans=1, the second replan trigger fails the pipeline."""
     backend = MockBackend()
 
@@ -137,9 +181,15 @@ def test_max_replans_enforced(tmp_path):
     for _ in range(2):
         backend.add_response(exit_code=0, output="implementing...")
         backend.add_response(exit_code=0, output="VERDICT: FAIL: still bad")
-    # Replan #1: a workflow whose check also fails.
-    failing_replan_yaml = """```yaml
-name: replanned-1
+    # New workflow bounces 2 times, triggering replan #2 which exceeds max_replans=1
+    for _ in range(2):
+        backend.add_response(exit_code=0, output="trying...")
+        backend.add_response(exit_code=0, output="VERDICT: FAIL: still bad")
+    # Subsequent calls return default PASS but they shouldn't be needed —
+    # pipeline should exhaust before max_replans is exceeded.
+
+    def failing_replan_yaml():
+        return """name: replanned-1
 backend: claude
 working_dir: "."
 max_bounces: 999
@@ -150,33 +200,26 @@ phases:
   - id: phase-a-check
     type: check
     prompt: "Check."
-```
 """
-    backend.add_response(exit_code=0, output=failing_replan_yaml)
-    # New workflow bounces 2 times, triggering replan #2 which exceeds max_replans=1
-    for _ in range(2):
-        backend.add_response(exit_code=0, output="trying...")
-        backend.add_response(exit_code=0, output="VERDICT: FAIL: still bad")
-    # Subsequent calls return default PASS but they shouldn't be needed —
-    # pipeline should exhaust before max_replans is exceeded.
 
-    workflow = _base_workflow()
+    _install_fake_replanner(monkeypatch, tmp_path, yaml_factory=failing_replan_yaml)
+    workflow = _base_workflow(tmp_path)
     engine = _make_engine(workflow, backend, tmp_path, replan_after=2, max_replans=1)
     assert engine.run() == 1
     assert engine.state.replan_count == 1  # only one replan was allowed
 
 
-def test_replan_resets_per_phase_bounce_counter(tmp_path):
+def test_replan_resets_per_phase_bounce_counter(tmp_path, monkeypatch):
     """After a successful replan, prior bounce counts on old phases must not count toward the new threshold."""
     backend = MockBackend()
     for _ in range(2):
         backend.add_response(exit_code=0, output="implementing...")
         backend.add_response(exit_code=0, output="VERDICT: FAIL: nope")
-    backend.add_response(exit_code=0, output=_passing_replan_yaml())
     backend.add_response(exit_code=0, output="done")
     backend.add_response(exit_code=0, output="VERDICT: PASS")
 
-    workflow = _base_workflow()
+    _install_fake_replanner(monkeypatch, tmp_path)
+    workflow = _base_workflow(tmp_path)
     engine = _make_engine(workflow, backend, tmp_path, replan_after=2)
     engine.run()
 
@@ -192,7 +235,7 @@ def test_no_replan_when_flag_unset(tmp_path):
         backend.add_response(exit_code=0, output="implementing...")
         backend.add_response(exit_code=0, output="VERDICT: FAIL: still bad")
 
-    workflow = _base_workflow()
+    workflow = _base_workflow(tmp_path)
     workflow.max_bounces = 3
     engine = _make_engine(workflow, backend, tmp_path)  # no replan_after
     assert engine.run() == 1
@@ -257,7 +300,7 @@ def test_dump_workflow_preserves_template_vars(tmp_path):
         assert p.template_vars == pre[pid].template_vars, f"template_vars lost for {pid}"
 
 
-def test_lane_group_triggers_replan(tmp_path):
+def test_lane_group_triggers_replan(tmp_path, monkeypatch):
     """A lane phase that bounces past --replan-after surfaces the signal and the
     main engine performs a full workflow replan."""
     backend = MockBackend()
@@ -265,14 +308,13 @@ def test_lane_group_triggers_replan(tmp_path):
     for _ in range(2):
         backend.add_response(exit_code=0, output="implementing...")
         backend.add_response(exit_code=0, output="VERDICT: FAIL: nope")
-    # Replan agent emits a fresh workflow.
-    backend.add_response(exit_code=0, output=_passing_replan_yaml())
     # New workflow runs cleanly.
     backend.add_response(exit_code=0, output="done")
     backend.add_response(exit_code=0, output="VERDICT: PASS")
 
     from juvenal.workflow import ParallelGroup
 
+    _install_fake_replanner(monkeypatch, tmp_path)
     workflow = Workflow(
         name="orig-laned",
         phases=[
@@ -281,6 +323,7 @@ def test_lane_group_triggers_replan(tmp_path):
         ],
         parallel_groups=[ParallelGroup(lanes=[["laneA-impl", "laneA-check"]])],
         backend="claude",
+        working_dir=str(tmp_path),
         max_bounces=999,
     )
     engine = _make_engine(workflow, backend, tmp_path, replan_after=2, serialize=True)
@@ -290,32 +333,36 @@ def test_lane_group_triggers_replan(tmp_path):
     assert [p.id for p in engine.workflow.phases] == ["new-setup", "new-setup-check"]
 
 
-def test_replan_prompt_includes_checker_transcript(tmp_path):
-    """The replan prompt must include the actual failing checker output, which is logged
-    under the check phase's id (not the bounce target's). This was a real bug — _tail_last_transcripts
-    used to only look at the target phase's logs and miss the checker transcript entirely."""
+def test_replan_prompt_includes_checker_transcript(tmp_path, monkeypatch):
+    """The GOAL fed to the replanner must include the actual failing checker output,
+    which is logged under the check phase's id (not the bounce target's). This was a real
+    bug — _tail_last_transcripts used to only look at the target phase's logs and miss
+    the checker transcript entirely."""
     backend = MockBackend()
     # Two bounces, each: implement (looks-fine) + check (fails with distinctive reason).
     for i in range(2):
         backend.add_response(exit_code=0, output=f"implement attempt {i + 1}")
         backend.add_response(exit_code=0, output=f"checker output {i + 1}\nVERDICT: FAIL: distinctive-reason-{i + 1}")
-    backend.add_response(exit_code=0, output=_passing_replan_yaml())
     backend.add_response(exit_code=0, output="done")
     backend.add_response(exit_code=0, output="VERDICT: PASS")
 
-    workflow = _base_workflow()
+    captured: list = []
+    _install_fake_replanner(monkeypatch, tmp_path, capture=captured)
+
+    workflow = _base_workflow(tmp_path)
     engine = _make_engine(workflow, backend, tmp_path, replan_after=2)
     assert engine.run() == 0
 
-    # The third backend call (index 4) is the replan agent. Its prompt must include
-    # the most recent CHECKER transcript (which lives under state.phases["setup-check"]).
-    replan_prompt = backend.calls[4]
-    assert "checker output 2" in replan_prompt, (
-        "replan prompt missing checker transcript — _tail_last_transcripts didn't search across phases"
+    # The replanner was called once and the GOAL it received must surface the most recent
+    # CHECKER transcript (logged under state.phases["setup-check"]).
+    assert len(captured) == 1, f"expected one replanner call, got {len(captured)}"
+    goal = captured[0]["goal"]
+    assert "checker output 2" in goal, (
+        "replan goal missing checker transcript — _tail_last_transcripts didn't search across phases"
     )
-    assert "distinctive-reason-2" in replan_prompt
+    assert "distinctive-reason-2" in goal
     # And the implementer transcript from the last attempt.
-    assert "implement attempt 2" in replan_prompt
+    assert "implement attempt 2" in goal
 
 
 def test_subengine_inherits_replan_settings(tmp_path):
@@ -372,7 +419,7 @@ phases:
     assert captured[1].get("max_replans") == 2
 
 
-def test_total_tokens_sums_across_replan_history(tmp_path):
+def test_total_tokens_sums_across_replan_history(tmp_path, monkeypatch):
     """Tokens spent in replanned-away cycles must still count toward total_tokens(), or cost
     reporting silently under-counts the work that motivated the replan."""
     backend = MockBackend()
@@ -380,19 +427,20 @@ def test_total_tokens_sums_across_replan_history(tmp_path):
     for _ in range(2):
         backend.add_response(exit_code=0, output="impl", input_tokens=100, output_tokens=50)
         backend.add_response(exit_code=0, output="VERDICT: FAIL: still bad", input_tokens=200, output_tokens=80)
-    # Replan agent — also costs tokens.
-    backend.add_response(exit_code=0, output=_passing_replan_yaml(), input_tokens=1000, output_tokens=400)
     # New workflow runs cleanly.
     backend.add_response(exit_code=0, output="new impl", input_tokens=10, output_tokens=5)
     backend.add_response(exit_code=0, output="VERDICT: PASS", input_tokens=20, output_tokens=8)
 
-    workflow = _base_workflow()
+    # The planner reports its own aggregate tokens via PlanResult.input_tokens/output_tokens;
+    # the engine attributes those to the triggered_phase before record_replan snapshots state.
+    _install_fake_replanner(monkeypatch, tmp_path, input_tokens=1000, output_tokens=400)
+    workflow = _base_workflow(tmp_path)
     engine = _make_engine(workflow, backend, tmp_path, replan_after=2)
     engine.run()
 
     inp, out = engine.state.total_tokens()
     # Old cycle: 2*(100+200) implement+check inputs, 2*(50+80) outputs.
-    # Replan call: 1000 in, 400 out (attributed to triggered_phase before record_replan).
+    # Replan (planner): 1000 in, 400 out (attributed to triggered_phase before record_replan).
     # New cycle: (10+20)=30 in, (5+8)=13 out.
     expected_inp = 2 * (100 + 200) + 1000 + 30
     expected_out = 2 * (50 + 80) + 400 + 13
@@ -412,7 +460,7 @@ def test_replan_state_record(tmp_path):
     assert state.replan_history[1]["cycle"] == 2
 
 
-def test_replan_clears_phase_state_for_colliding_ids(tmp_path):
+def test_replan_clears_phase_state_for_colliding_ids(tmp_path, monkeypatch):
     """If the replanned workflow reuses a phase id that was 'completed' in the old workflow,
     the engine must NOT skip it. State for the old phase is preserved only in replan_history."""
     backend = MockBackend()
@@ -428,6 +476,7 @@ def test_replan_clears_phase_state_for_colliding_ids(tmp_path):
             Phase(id="finish", type="check", prompt="check that's never going to pass", bounce_target="setup"),
         ],
         backend="claude",
+        working_dir=str(tmp_path),
         max_bounces=999,
     )
     # Bounce sequence: setup PASS, finish FAIL (bounce 1 to setup), setup PASS, finish FAIL (bounce 2).
@@ -438,9 +487,13 @@ def test_replan_clears_phase_state_for_colliding_ids(tmp_path):
         backend.add_response(exit_code=0, output="setup done")  # setup
         backend.add_response(exit_code=0, output="VERDICT: FAIL: nope")  # finish
 
+    # New workflow must EXECUTE the reused-id 'setup' phase, not skip it.
+    backend.add_response(exit_code=0, output="new setup ran")  # new setup implement
+    backend.add_response(exit_code=0, output="VERDICT: PASS")  # new setup-check
+
     # Replanned workflow REUSES the id 'setup' but with new semantics.
-    reused_id_yaml = """```yaml
-name: replanned-reused
+    def reused_id_yaml():
+        return """name: replanned-reused
 backend: claude
 working_dir: "."
 max_bounces: 999
@@ -451,12 +504,9 @@ phases:
   - id: setup-check
     type: check
     prompt: "Verify the new setup."
-```
 """
-    backend.add_response(exit_code=0, output=reused_id_yaml)
-    # New workflow must EXECUTE the reused-id 'setup' phase, not skip it.
-    backend.add_response(exit_code=0, output="new setup ran")  # new setup implement
-    backend.add_response(exit_code=0, output="VERDICT: PASS")  # new setup-check
+
+    _install_fake_replanner(monkeypatch, tmp_path, yaml_factory=reused_id_yaml)
 
     engine = _make_engine(workflow, backend, tmp_path, replan_after=2)
     assert engine.run() == 0
@@ -487,11 +537,11 @@ def test_cli_resume_uses_persisted_workflow_without_path(tmp_path, monkeypatch, 
     for _ in range(2):
         backend1.add_response(exit_code=0, output="implementing...")
         backend1.add_response(exit_code=0, output="VERDICT: FAIL: nope")
-    backend1.add_response(exit_code=0, output=_passing_replan_yaml())
     backend1.add_response(exit_code=0, output="done")
     backend1.add_response(exit_code=0, output="VERDICT: PASS")
 
-    engine1 = Engine(_base_workflow(), state_file=str(state_path), replan_after=2)
+    _install_fake_replanner(monkeypatch, tmp_path)
+    engine1 = Engine(_base_workflow(tmp_path), state_file=str(state_path), replan_after=2)
     engine1.backend = backend1
     assert engine1.run() == 0
     # State now has the replanned workflow persisted.
@@ -542,10 +592,10 @@ def test_cli_resume_warns_when_workflow_path_given(tmp_path, monkeypatch, capsys
     for _ in range(2):
         backend1.add_response(exit_code=0, output="implementing...")
         backend1.add_response(exit_code=0, output="VERDICT: FAIL: nope")
-    backend1.add_response(exit_code=0, output=_passing_replan_yaml())
     backend1.add_response(exit_code=0, output="done")
     backend1.add_response(exit_code=0, output="VERDICT: PASS")
-    engine1 = Engine(_base_workflow(), state_file=str(state_path), replan_after=2)
+    _install_fake_replanner(monkeypatch, tmp_path)
+    engine1 = Engine(_base_workflow(tmp_path), state_file=str(state_path), replan_after=2)
     engine1.backend = backend1
     engine1.run()
 
@@ -587,15 +637,15 @@ def test_cli_resume_preserves_workflow_overrides(tmp_path, monkeypatch):
     state_path = tmp_path / "state.json"
 
     # Seed state with a persisted workflow whose max_bounces=999.
-    seed_wf = _base_workflow()
+    seed_wf = _base_workflow(tmp_path)
     assert seed_wf.max_bounces == 999
     seed_backend = MockBackend()
     for _ in range(2):
         seed_backend.add_response(exit_code=0, output="impl...")
         seed_backend.add_response(exit_code=0, output="VERDICT: FAIL: nope")
-    seed_backend.add_response(exit_code=0, output=_passing_replan_yaml())
     seed_backend.add_response(exit_code=0, output="done")
     seed_backend.add_response(exit_code=0, output="VERDICT: PASS")
+    _install_fake_replanner(monkeypatch, tmp_path)
     seed_engine = Engine(seed_wf, state_file=str(state_path), replan_after=2)
     seed_engine.backend = seed_backend
     assert seed_engine.run() == 0
@@ -640,7 +690,7 @@ def test_cli_resume_preserves_workflow_overrides(tmp_path, monkeypatch):
     assert captured["backoff"] == 2.5, "CLI --backoff override was clobbered by state swap"
 
 
-def test_phase_bounces_persisted_across_restart(tmp_path):
+def test_phase_bounces_persisted_across_restart(tmp_path, monkeypatch):
     """A phase that bounced N-1 times before a process crash must resume at N-1 (not 0)
     so the next bounce hits --replan-after=N. Without persistence the user would have to
     bounce the full N again in a single session, which is surprising for long-running pipelines."""
@@ -651,7 +701,7 @@ def test_phase_bounces_persisted_across_restart(tmp_path):
         backend1.add_response(exit_code=0, output="VERDICT: FAIL: still bad")
     # Backend exhausted after 4 responses, so the 3rd bounce attempt would fail —
     # but we kill the engine before that by capping max_bounces to 2.
-    workflow1 = _base_workflow()
+    workflow1 = _base_workflow(tmp_path)
     workflow1.max_bounces = 2  # forces failure exit after 2 bounces (no replan yet)
     engine1 = _make_engine(workflow1, backend1, tmp_path, replan_after=3)
     assert engine1.run() == 1
@@ -665,10 +715,10 @@ def test_phase_bounces_persisted_across_restart(tmp_path):
     backend2 = MockBackend()
     backend2.add_response(exit_code=0, output="impl...")  # bounce #3
     backend2.add_response(exit_code=0, output="VERDICT: FAIL: still bad")
-    backend2.add_response(exit_code=0, output=_passing_replan_yaml())
     backend2.add_response(exit_code=0, output="done")
     backend2.add_response(exit_code=0, output="VERDICT: PASS")
-    workflow2 = _base_workflow()
+    _install_fake_replanner(monkeypatch, tmp_path)
+    workflow2 = _base_workflow(tmp_path)
     workflow2.max_bounces = 999
     engine2 = Engine(workflow2, state_file=str(tmp_path / "state.json"), resume=True, replan_after=3)
     engine2.backend = backend2
@@ -676,33 +726,34 @@ def test_phase_bounces_persisted_across_restart(tmp_path):
     assert engine2.state.replan_count == 1, "replan should fire on the very first bounce after resume"
 
 
-def test_phase_bounces_cleared_by_replan(tmp_path):
+def test_phase_bounces_cleared_by_replan(tmp_path, monkeypatch):
     """After a successful replan, state.phase_bounces is wiped so the new workflow's per-phase
     counters start at zero, matching state.phases being cleared at the same point."""
     backend = MockBackend()
     for _ in range(2):
         backend.add_response(exit_code=0, output="impl...")
         backend.add_response(exit_code=0, output="VERDICT: FAIL: nope")
-    backend.add_response(exit_code=0, output=_passing_replan_yaml())
     backend.add_response(exit_code=0, output="done")
     backend.add_response(exit_code=0, output="VERDICT: PASS")
 
-    engine = _make_engine(_base_workflow(), backend, tmp_path, replan_after=2)
+    _install_fake_replanner(monkeypatch, tmp_path)
+    engine = _make_engine(_base_workflow(tmp_path), backend, tmp_path, replan_after=2)
     assert engine.run() == 0
     assert engine.state.phase_bounces == {}
 
 
 def test_replan_swaps_backend_when_changed(tmp_path, monkeypatch):
-    """If the replan agent emits a workflow with a different `backend:`, the engine must
+    """If the replanner emits a workflow with a different `backend:`, the engine must
     rebuild self.backend; otherwise subsequent phases still hit the old CLI."""
     backend = MockBackend()
     for _ in range(2):
         backend.add_response(exit_code=0, output="impl")
         backend.add_response(exit_code=0, output="VERDICT: FAIL: nope")
-    backend.add_response(
-        exit_code=0,
-        output="""```yaml
-name: replanned-codex
+    backend.add_response(exit_code=0, output="done")
+    backend.add_response(exit_code=0, output="VERDICT: PASS")
+
+    def codex_replan_yaml():
+        return """name: replanned-codex
 backend: codex
 working_dir: "."
 max_bounces: 999
@@ -713,11 +764,9 @@ phases:
   - id: x-check
     type: check
     prompt: verify
-```
-""",
-    )
-    backend.add_response(exit_code=0, output="done")
-    backend.add_response(exit_code=0, output="VERDICT: PASS")
+"""
+
+    _install_fake_replanner(monkeypatch, tmp_path, yaml_factory=codex_replan_yaml)
 
     # Stub create_backend so the swap doesn't spawn a real codex CLI; we only need to
     # confirm the swap was *attempted* with the new backend name.
@@ -731,7 +780,7 @@ phases:
 
     monkeypatch.setattr(juv_engine, "create_backend", fake_create_backend)
 
-    engine = _make_engine(_base_workflow(), backend, tmp_path, replan_after=2)
+    engine = _make_engine(_base_workflow(tmp_path), backend, tmp_path, replan_after=2)
     engine.run()
 
     assert engine.workflow.backend == "codex"
