@@ -386,16 +386,20 @@ def _cmd_run_resume(args: argparse.Namespace) -> int:
     finally:
         Path(tmp_path).unlink(missing_ok=True)
 
+    # Workflow-level CLI overrides are passed through to the Engine and applied AFTER
+    # Engine's internal swap from state.active_workflow_yaml, so the swap can't silently
+    # drop them. Only include flags the user actually set.
+    overrides: dict = {}
     if args.backend:
-        workflow.backend = args.backend
+        overrides["backend"] = args.backend
     if args.max_bounces:
-        workflow.max_bounces = args.max_bounces
+        overrides["max_bounces"] = args.max_bounces
     if args.working_dir:
-        workflow.working_dir = args.working_dir
+        overrides["working_dir"] = args.working_dir
     if args.backoff is not None:
-        workflow.backoff = args.backoff
+        overrides["backoff"] = args.backoff
     if args.notify:
-        workflow.notify.extend(args.notify)
+        overrides["notify"] = list(args.notify)
 
     try:
         engine = Engine(
@@ -411,6 +415,7 @@ def _cmd_run_resume(args: argparse.Namespace) -> int:
             interactive=args.interactive,
             replan_after=args.replan_after,
             max_replans=args.max_replans,
+            workflow_overrides=overrides or None,
         )
     except ResumeWorkflowMismatchError as e:
         print(f"Error: {e}")

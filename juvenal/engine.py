@@ -106,9 +106,9 @@ class Engine:
         backend_instance: Backend | None = None,
         replan_after: int | None = None,
         max_replans: int | None = None,
+        workflow_overrides: dict | None = None,
     ):
         self.workflow = workflow
-        self.backend = backend_instance if backend_instance is not None else create_backend(workflow.backend)
         self.display = Display(plain=plain)
         self._depth = _depth
         self._max_depth = _max_depth
@@ -120,7 +120,6 @@ class Engine:
         self.max_replans = max_replans
         self._session_ids: dict[str, str] = {}  # phase_id -> last session_id
         self._bounce_targets: set[str] = set()  # phases that should resume on next run
-        self._phase_bounces: dict[str, int] = {}  # phase_id -> bounces in current replan cycle
         self._engine_lock = Lock()  # protects _session_ids and _bounce_targets in parallel
 
         sf = state_file or ".juvenal-state.json"
@@ -132,6 +131,22 @@ class Engine:
         # phase-id validation runs.
         if needs_state and self.state.active_workflow_yaml:
             self.workflow = self._load_workflow_from_yaml_text(self.state.active_workflow_yaml)
+
+        # Apply CLI-supplied workflow-level overrides AFTER the potential swap, so that
+        # flags like --max-bounces / --backend / --backoff on --resume aren't silently
+        # discarded by the swap. The CLI populates this dict only with values the user
+        # actually set; programmatic callers can pass overrides explicitly too.
+        if workflow_overrides:
+            for key, value in workflow_overrides.items():
+                if value is None:
+                    continue
+                if key == "notify":
+                    self.workflow.notify.extend(value)
+                else:
+                    setattr(self.workflow, key, value)
+
+        # Backend depends on the final workflow.backend, so construct it after overrides.
+        self.backend = backend_instance if backend_instance is not None else create_backend(self.workflow.backend)
 
         if needs_state:
             self._validate_resume_state_matches_workflow()
@@ -207,9 +222,7 @@ class Engine:
                         result = self._run_parallel_group(pg)
                         if result.bounce_target:
                             bounces += 1
-                            self._phase_bounces[result.bounce_target] = (
-                                self._phase_bounces.get(result.bounce_target, 0) + 1
-                            )
+                            self.state.record_bounce(result.bounce_target)
                             if self._should_replan(result.bounce_target):
                                 if self._try_replan(result.bounce_target, result.failure_context):
                                     phases = self.workflow.phases
@@ -250,7 +263,7 @@ class Engine:
                     phase_idx += 1
                 elif result.bounce_target:
                     bounces += 1
-                    self._phase_bounces[result.bounce_target] = self._phase_bounces.get(result.bounce_target, 0) + 1
+                    self.state.record_bounce(result.bounce_target)
                     if self._should_replan(result.bounce_target):
                         if self._try_replan(result.bounce_target, result.failure_context):
                             phases = self.workflow.phases
@@ -294,11 +307,16 @@ class Engine:
             print("\nInterrupted. State saved. Resume with --resume.")
             return 130
 
+    @property
+    def _phase_bounces(self) -> dict[str, int]:
+        """Per-phase bounce counts, persisted via state so --replan-after survives restart."""
+        return self.state.phase_bounces
+
     def _should_replan(self, triggered_phase: str) -> bool:
         """True if the per-phase bounce count has reached --replan-after."""
         if self.replan_after is None:
             return False
-        return self._phase_bounces.get(triggered_phase, 0) >= self.replan_after
+        return self.state.phase_bounces.get(triggered_phase, 0) >= self.replan_after
 
     def _post_replan_start_index(self) -> int:
         """After a workflow swap, find the first phase the engine should run.
@@ -375,10 +393,17 @@ class Engine:
             new_workflow.working_dir = self.workflow.working_dir
             new_workflow.backend = new_workflow.backend or self.workflow.backend
             old_yaml = current_yaml
+            prior_backend = self.workflow.backend
             self.workflow = new_workflow
-            self._phase_bounces.clear()
+            # If the replan agent switched backends (claude → codex or vice-versa), the
+            # cached self.backend instance points at the old CLI; rebuild it so subsequent
+            # phases run on the requested backend.
+            if new_workflow.backend != prior_backend:
+                self.backend = create_backend(new_workflow.backend)
             self._bounce_targets.clear()
             self._session_ids.clear()
+            # record_replan clears state.phase_bounces (and state.phases), so the new
+            # workflow starts with a clean per-phase counter and clean phase records.
             self.state.record_replan(triggered_phase, old_yaml, yaml_text)
             self._align_state_phases()
             self.display.step_pass(f"replan: cycle #{self.state.replan_count}")
@@ -1031,8 +1056,11 @@ class Engine:
                 self.state.mark_completed(phase.id)
                 phase_idx += 1
             elif result.bounce_target:
+                # record_bounce is itself thread-safe (PipelineState RLock); _engine_lock
+                # is still needed to serialize the replan-decision read so two concurrent
+                # lanes don't both surface a replan signal.
                 with self._engine_lock:
-                    self._phase_bounces[result.bounce_target] = self._phase_bounces.get(result.bounce_target, 0) + 1
+                    self.state.record_bounce(result.bounce_target)
                     hit_replan = self._should_replan(result.bounce_target)
                 if hit_replan:
                     return PhaseResult(

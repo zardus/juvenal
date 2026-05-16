@@ -41,7 +41,21 @@ class PipelineState:
     active_workflow_yaml: str | None = None
     replan_history: list[dict] = field(default_factory=list)
     replan_count: int = 0
+    phase_bounces: dict[str, int] = field(default_factory=dict)
     _lock: RLock = field(init=False, repr=False, default_factory=RLock)
+
+    def record_bounce(self, phase_id: str) -> int:
+        """Increment the persisted per-phase bounce count and return the new value.
+
+        Persisted so --replan-after survives ctrl-c/restart: without this, a user who
+        kills the process at bounce N-1 of --replan-after=N and resumes would silently
+        restart the counter at 0 and never trigger a replan.
+        """
+        with self._lock:
+            new_count = self.phase_bounces.get(phase_id, 0) + 1
+            self.phase_bounces[phase_id] = new_count
+            self.save()
+            return new_count
 
     def record_replan(self, triggered_phase: str, old_workflow_yaml: str, new_workflow_yaml: str) -> None:
         """Persist a workflow swap: snapshot the previous workflow + phase records, then clear live phases.
@@ -79,6 +93,7 @@ class PipelineState:
             self.active_workflow_yaml = new_workflow_yaml
             self.phases = {}
             self.workflow_phase_ids = None
+            self.phase_bounces = {}
             self.save()
 
     def set_attempt(self, phase_id: str, attempt: int) -> None:
@@ -224,6 +239,7 @@ class PipelineState:
             state.active_workflow_yaml = data.get("active_workflow_yaml")
             state.replan_history = data.get("replan_history", []) or []
             state.replan_count = data.get("replan_count", 0) or 0
+            state.phase_bounces = dict(data.get("phase_bounces") or {})
             raw_phases = data.get("phases", {})
             raw_workflow_phase_ids = data.get("workflow_phase_ids", data.get("phase_order"))
             ordered_phase_ids: list[str]
@@ -307,6 +323,7 @@ class PipelineState:
             "active_workflow_yaml": self.active_workflow_yaml,
             "replan_history": self.replan_history,
             "replan_count": self.replan_count,
+            "phase_bounces": self.phase_bounces,
             "phases": {
                 pid: {
                     "status": ps.status,

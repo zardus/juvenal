@@ -577,6 +577,167 @@ def test_cli_resume_warns_when_workflow_path_given(tmp_path, monkeypatch, capsys
     assert captured["workflow_name"] == "replanned"
 
 
+def test_cli_resume_preserves_workflow_overrides(tmp_path, monkeypatch):
+    """`juvenal run --resume --max-bounces 5` must not be silently clobbered by the
+    state-yaml swap inside Engine.__init__. Previously the workflow loaded by
+    _cmd_run_resume had overrides applied, but Engine.__init__ reloaded the persisted
+    yaml on top, discarding them."""
+    from juvenal.cli import build_parser, cmd_run
+
+    state_path = tmp_path / "state.json"
+
+    # Seed state with a persisted workflow whose max_bounces=999.
+    seed_wf = _base_workflow()
+    assert seed_wf.max_bounces == 999
+    seed_backend = MockBackend()
+    for _ in range(2):
+        seed_backend.add_response(exit_code=0, output="impl...")
+        seed_backend.add_response(exit_code=0, output="VERDICT: FAIL: nope")
+    seed_backend.add_response(exit_code=0, output=_passing_replan_yaml())
+    seed_backend.add_response(exit_code=0, output="done")
+    seed_backend.add_response(exit_code=0, output="VERDICT: PASS")
+    seed_engine = Engine(seed_wf, state_file=str(state_path), replan_after=2)
+    seed_engine.backend = seed_backend
+    assert seed_engine.run() == 0
+
+    captured: dict = {}
+    real_engine = Engine
+
+    class _SpyEngine(real_engine):
+        def __init__(self, workflow, **kwargs):
+            super().__init__(workflow, **kwargs)
+            captured["max_bounces"] = self.workflow.max_bounces
+            captured["backend_name"] = self.workflow.backend
+            captured["backoff"] = self.workflow.backoff
+
+        def run(self):
+            return 0
+
+    import juvenal.engine as juv_engine
+
+    monkeypatch.setattr(juv_engine, "Engine", _SpyEngine)
+
+    parser = build_parser()
+    args = parser.parse_args(
+        [
+            "run",
+            "--resume",
+            "--state-file",
+            str(state_path),
+            "--max-bounces",
+            "5",
+            "--backend",
+            "codex",
+            "--backoff",
+            "2.5",
+        ]
+    )
+    args.plain = True
+    assert cmd_run(args) == 0
+
+    assert captured["max_bounces"] == 5, "CLI --max-bounces override was clobbered by state swap"
+    assert captured["backend_name"] == "codex", "CLI --backend override was clobbered by state swap"
+    assert captured["backoff"] == 2.5, "CLI --backoff override was clobbered by state swap"
+
+
+def test_phase_bounces_persisted_across_restart(tmp_path):
+    """A phase that bounced N-1 times before a process crash must resume at N-1 (not 0)
+    so the next bounce hits --replan-after=N. Without persistence the user would have to
+    bounce the full N again in a single session, which is surprising for long-running pipelines."""
+    backend1 = MockBackend()
+    # Bounce 2 times in session 1 (threshold is 3, so no replan yet).
+    for _ in range(2):
+        backend1.add_response(exit_code=0, output="impl...")
+        backend1.add_response(exit_code=0, output="VERDICT: FAIL: still bad")
+    # Backend exhausted after 4 responses, so the 3rd bounce attempt would fail —
+    # but we kill the engine before that by capping max_bounces to 2.
+    workflow1 = _base_workflow()
+    workflow1.max_bounces = 2  # forces failure exit after 2 bounces (no replan yet)
+    engine1 = _make_engine(workflow1, backend1, tmp_path, replan_after=3)
+    assert engine1.run() == 1
+    assert engine1.state.phase_bounces.get("setup") == 2
+
+    # Reload from disk — phase_bounces must survive.
+    state_after = PipelineState.load(str(tmp_path / "state.json"))
+    assert state_after.phase_bounces.get("setup") == 2
+
+    # Session 2 (--resume): one more bounce on the same phase should hit replan_after=3 and replan.
+    backend2 = MockBackend()
+    backend2.add_response(exit_code=0, output="impl...")  # bounce #3
+    backend2.add_response(exit_code=0, output="VERDICT: FAIL: still bad")
+    backend2.add_response(exit_code=0, output=_passing_replan_yaml())
+    backend2.add_response(exit_code=0, output="done")
+    backend2.add_response(exit_code=0, output="VERDICT: PASS")
+    workflow2 = _base_workflow()
+    workflow2.max_bounces = 999
+    engine2 = Engine(workflow2, state_file=str(tmp_path / "state.json"), resume=True, replan_after=3)
+    engine2.backend = backend2
+    assert engine2.run() == 0
+    assert engine2.state.replan_count == 1, "replan should fire on the very first bounce after resume"
+
+
+def test_phase_bounces_cleared_by_replan(tmp_path):
+    """After a successful replan, state.phase_bounces is wiped so the new workflow's per-phase
+    counters start at zero, matching state.phases being cleared at the same point."""
+    backend = MockBackend()
+    for _ in range(2):
+        backend.add_response(exit_code=0, output="impl...")
+        backend.add_response(exit_code=0, output="VERDICT: FAIL: nope")
+    backend.add_response(exit_code=0, output=_passing_replan_yaml())
+    backend.add_response(exit_code=0, output="done")
+    backend.add_response(exit_code=0, output="VERDICT: PASS")
+
+    engine = _make_engine(_base_workflow(), backend, tmp_path, replan_after=2)
+    assert engine.run() == 0
+    assert engine.state.phase_bounces == {}
+
+
+def test_replan_swaps_backend_when_changed(tmp_path, monkeypatch):
+    """If the replan agent emits a workflow with a different `backend:`, the engine must
+    rebuild self.backend; otherwise subsequent phases still hit the old CLI."""
+    backend = MockBackend()
+    for _ in range(2):
+        backend.add_response(exit_code=0, output="impl")
+        backend.add_response(exit_code=0, output="VERDICT: FAIL: nope")
+    backend.add_response(
+        exit_code=0,
+        output="""```yaml
+name: replanned-codex
+backend: codex
+working_dir: "."
+max_bounces: 999
+phases:
+  - id: x
+    type: implement
+    prompt: hi
+  - id: x-check
+    type: check
+    prompt: verify
+```
+""",
+    )
+    backend.add_response(exit_code=0, output="done")
+    backend.add_response(exit_code=0, output="VERDICT: PASS")
+
+    # Stub create_backend so the swap doesn't spawn a real codex CLI; we only need to
+    # confirm the swap was *attempted* with the new backend name.
+    constructed: list[str] = []
+
+    def fake_create_backend(name: str):
+        constructed.append(name)
+        return backend  # reuse the MockBackend so subsequent phases keep replaying the queue
+
+    import juvenal.engine as juv_engine
+
+    monkeypatch.setattr(juv_engine, "create_backend", fake_create_backend)
+
+    engine = _make_engine(_base_workflow(), backend, tmp_path, replan_after=2)
+    engine.run()
+
+    assert engine.workflow.backend == "codex"
+    assert "codex" in constructed, f"backend was not rebuilt after replan; create_backend calls: {constructed}"
+
+
 def test_cli_resume_falls_through_for_legacy_state_files(tmp_path, capsys):
     """Pre-replan state files have no active_workflow_yaml; --resume must NOT short-circuit and
     must instead fall through to the standard cmd_run path so CLI injections still apply."""
