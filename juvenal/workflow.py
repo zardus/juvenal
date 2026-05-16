@@ -498,6 +498,7 @@ def _load_yaml_with_includes(path: Path, seen: set[str]) -> Workflow:
         "checks",
         "workflow_file",
         "workflow_dir",
+        "template_vars",
     }
 
     phases = list(included_phases)
@@ -549,6 +550,7 @@ def _load_yaml_with_includes(path: Path, seen: set[str]) -> Workflow:
             max_depth=phase_data.get("max_depth"),
             workflow_file=wf_file,
             workflow_dir=wf_dir,
+            template_vars=dict(phase_data.get("template_vars") or {}),
         )
         phases.append(phase)
 
@@ -1379,6 +1381,67 @@ def validate_workflow(workflow: Workflow) -> list[str]:
             errors.append(_describe_template_render_error(phase.id, field_name, exc))
 
     return errors
+
+
+def dump_workflow(workflow: Workflow) -> str:
+    """Serialize a Workflow back to YAML text. Round-trips with load_workflow.
+
+    Used by the replan flow to persist the active workflow (which may have been
+    rewritten by an agent) into pipeline state so --resume can pick it back up.
+    """
+    data: dict = {
+        "name": workflow.name,
+        "backend": workflow.backend,
+        "working_dir": str(workflow.working_dir),
+        "max_bounces": workflow.max_bounces,
+    }
+    if workflow.backoff:
+        data["backoff"] = workflow.backoff
+    if workflow.max_backoff and workflow.max_backoff != 60.0:
+        data["max_backoff"] = workflow.max_backoff
+    if workflow.notify:
+        data["notify"] = list(workflow.notify)
+    if workflow.vars:
+        data["vars"] = dict(workflow.vars)
+
+    phases_out: list[dict] = []
+    for phase in workflow.phases:
+        pd: dict = {"id": phase.id, "type": phase.type}
+        if phase.prompt:
+            pd["prompt"] = phase.prompt
+        if phase.role:
+            pd["role"] = phase.role
+        if phase.bounce_target:
+            pd["bounce_target"] = phase.bounce_target
+        if phase.bounce_targets:
+            pd["bounce_targets"] = list(phase.bounce_targets)
+        if phase.timeout is not None:
+            pd["timeout"] = phase.timeout
+        if phase.env:
+            pd["env"] = dict(phase.env)
+        if phase.interactive:
+            pd["interactive"] = True
+        if phase.max_depth is not None:
+            pd["max_depth"] = phase.max_depth
+        if phase.workflow_file:
+            pd["workflow_file"] = phase.workflow_file
+        if phase.workflow_dir:
+            pd["workflow_dir"] = phase.workflow_dir
+        if phase.template_vars:
+            pd["template_vars"] = dict(phase.template_vars)
+        phases_out.append(pd)
+    data["phases"] = phases_out
+
+    if workflow.parallel_groups:
+        groups_out: list[dict] = []
+        for group in workflow.parallel_groups:
+            if group.is_lane_group():
+                groups_out.append({"lanes": [list(lane) for lane in group.lanes]})
+            else:
+                groups_out.append({"phases": list(group.phases)})
+        data["parallel_groups"] = groups_out
+
+    return yaml.safe_dump(data, default_flow_style=False, sort_keys=False)
 
 
 def scaffold_workflow(directory: str, template: str = "default") -> None:

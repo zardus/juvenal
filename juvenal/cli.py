@@ -2,6 +2,7 @@
 
 import argparse
 import sys
+import tempfile
 from pathlib import Path
 
 from juvenal import __version__
@@ -77,6 +78,20 @@ def build_parser() -> argparse.ArgumentParser:
         "-i", "--interactive", action="store_true", help="Interactive mode: chat with the agent during phased planning"
     )
     run_p.add_argument("--serialize", action="store_true", help="Disable all parallelization")
+    run_p.add_argument(
+        "--replan-after",
+        type=int,
+        default=None,
+        metavar="N",
+        help="When a single phase bounces N times, invoke an agent to rewrite the workflow and continue",
+    )
+    run_p.add_argument(
+        "--max-replans",
+        type=int,
+        default=None,
+        metavar="M",
+        help="Hard cap on number of replans (default: unlimited; only honored when --replan-after is set)",
+    )
 
     # plan
     plan_p = sub.add_parser("plan", help="Generate a workflow from a goal description")
@@ -138,6 +153,20 @@ def build_parser() -> argparse.ArgumentParser:
         "--linear",
         action="store_true",
         help="Enforce linear workflow shape during planning",
+    )
+    do_p.add_argument(
+        "--replan-after",
+        type=int,
+        default=None,
+        metavar="N",
+        help="When a single phase bounces N times, invoke an agent to rewrite the workflow and continue",
+    )
+    do_p.add_argument(
+        "--max-replans",
+        type=int,
+        default=None,
+        metavar="M",
+        help="Hard cap on number of replans (default: unlimited; only honored when --replan-after is set)",
     )
 
     # status
@@ -290,6 +319,8 @@ def _plan_phased_workflow_or_exit(args: argparse.Namespace, goal: str):
         project_dir=project_dir,
         resume=_planner_resume_requested(args),
         linear=True,
+        replan_after=getattr(args, "replan_after", None),
+        max_replans=getattr(args, "max_replans", None),
     )
     if not result.success:
         error_loc = Path(project_dir).resolve() / ".plan"
@@ -304,9 +335,101 @@ def _plan_phased_workflow_or_exit(args: argparse.Namespace, goal: str):
         sys.exit(1)
 
 
+def _state_has_persisted_workflow(args: argparse.Namespace) -> bool:
+    """True iff the state file referenced by args exists and carries an active_workflow_yaml.
+
+    Used to decide whether --resume can short-circuit the standard load-and-inject
+    pipeline. Legacy state files (pre-replan feature) fall through to the standard path.
+    """
+    from juvenal.state import PipelineState
+
+    state_file = getattr(args, "state_file", None) or ".juvenal-state.json"
+    if not Path(state_file).exists():
+        return False
+    try:
+        state = PipelineState.load(state_file)
+    except Exception:
+        return False
+    return bool(state.active_workflow_yaml)
+
+
+def _cmd_run_resume(args: argparse.Namespace) -> int:
+    """Resume an existing pipeline. The persisted workflow is authoritative.
+
+    The original CLI injections (--implementer, --checker, --phased-implementer,
+    -D defines) were baked into the workflow YAML when the run was first started,
+    so we reload that YAML from state and skip the injection pipeline entirely.
+    Flow-control flags (--max-bounces, --replan-after, --max-replans, --backend,
+    --working-dir, --backoff, --notify) still apply.
+    """
+    from juvenal.engine import Engine, ResumeWorkflowMismatchError
+    from juvenal.state import PipelineState
+    from juvenal.workflow import load_workflow
+
+    state_file = getattr(args, "state_file", None) or ".juvenal-state.json"
+    state = PipelineState.load(state_file)
+    # Caller (cmd_run) guarantees state.active_workflow_yaml is populated.
+    assert state.active_workflow_yaml is not None
+
+    if args.workflow:
+        print(f"Note: ignoring workflow path '{args.workflow}'; using persisted workflow from {state_file}")
+    for attr in ("implementer", "checker", "phased_implementer", "defines"):
+        if getattr(args, attr, None):
+            flag = attr.replace("_", "-")
+            print(f"Note: ignoring --{flag} on --resume; injections are baked into the saved workflow")
+
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
+        f.write(state.active_workflow_yaml)
+        tmp_path = f.name
+    try:
+        workflow = load_workflow(tmp_path)
+    finally:
+        Path(tmp_path).unlink(missing_ok=True)
+
+    if args.backend:
+        workflow.backend = args.backend
+    if args.max_bounces:
+        workflow.max_bounces = args.max_bounces
+    if args.working_dir:
+        workflow.working_dir = args.working_dir
+    if args.backoff is not None:
+        workflow.backoff = args.backoff
+    if args.notify:
+        workflow.notify.extend(args.notify)
+
+    try:
+        engine = Engine(
+            workflow,
+            resume=args.resume,
+            rewind=args.rewind,
+            rewind_to=args.rewind_to,
+            start_phase=args.phase,
+            state_file=state_file,
+            plain=args.plain,
+            clear_context_on_bounce=args.clear_context_on_bounce,
+            serialize=args.serialize,
+            interactive=args.interactive,
+            replan_after=args.replan_after,
+            max_replans=args.max_replans,
+        )
+    except ResumeWorkflowMismatchError as e:
+        print(f"Error: {e}")
+        return 1
+    return engine.run()
+
+
 def cmd_run(args: argparse.Namespace) -> int:
     from juvenal.engine import Engine, ResumeWorkflowMismatchError
     from juvenal.workflow import Phase, Workflow, inject_implementer, validate_workflow
+
+    resuming = args.resume or args.rewind is not None or args.rewind_to is not None
+    # When --phased-implementer is used, --resume / --rewind / --rewind-to refer to
+    # the planner pipeline (see _planner_resume_requested), not the engine; the engine
+    # runs the resulting plan fresh. Only divert to the engine-resume path for the
+    # plain "run an existing workflow" case AND when state actually has a persisted
+    # workflow yaml — legacy state files fall through to the standard load + inject path.
+    if resuming and not args.phased_implementer and _state_has_persisted_workflow(args):
+        return _cmd_run_resume(args)
 
     _expand_standard_checkers(args)
     if args.checker:
@@ -404,6 +527,8 @@ def cmd_run(args: argparse.Namespace) -> int:
             clear_context_on_bounce=args.clear_context_on_bounce,
             serialize=args.serialize,
             interactive=args.interactive,
+            replan_after=args.replan_after,
+            max_replans=args.max_replans,
         )
     except ResumeWorkflowMismatchError as e:
         print(f"Error: {e}")
@@ -480,6 +605,8 @@ def cmd_do(args: argparse.Namespace) -> int:
             plain=args.plain,
             interactive=args.interactive,
             linear=args.linear,
+            replan_after=args.replan_after,
+            max_replans=args.max_replans,
         )
         workflow = _load_workflow_or_exit(f.name)
 
@@ -495,7 +622,12 @@ def cmd_do(args: argparse.Namespace) -> int:
         workflow.max_bounces = args.max_bounces
 
     engine = Engine(
-        workflow, plain=args.plain, clear_context_on_bounce=args.clear_context_on_bounce, serialize=args.serialize
+        workflow,
+        plain=args.plain,
+        clear_context_on_bounce=args.clear_context_on_bounce,
+        serialize=args.serialize,
+        replan_after=args.replan_after,
+        max_replans=args.max_replans,
     )
     return engine.run()
 

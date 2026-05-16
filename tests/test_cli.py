@@ -718,7 +718,9 @@ class TestCmdDoLinear:
 
         plan_calls: list[dict] = []
 
-        def mock_plan_workflow(goal, output, backend, plain=False, interactive=False, resume=False, linear=True):
+        def mock_plan_workflow(
+            goal, output, backend, plain=False, interactive=False, resume=False, linear=True, **_kwargs
+        ):
             plan_calls.append({"goal": goal, "linear": linear})
             with open(output, "w") as fh:
                 fh.write('name: planned\nphases:\n  - id: build\n    prompt: "Build it."\n')
@@ -752,7 +754,9 @@ class TestCmdDoLinear:
 
         engine_calls = {}
 
-        def mock_plan_workflow(goal, output, backend, plain=False, interactive=False, resume=False, linear=True):
+        def mock_plan_workflow(
+            goal, output, backend, plain=False, interactive=False, resume=False, linear=True, **_kwargs
+        ):
             with open(output, "w") as fh:
                 fh.write('name: planned\nphases:\n  - id: build\n    prompt: "Build it."\n')
 
@@ -898,7 +902,7 @@ class TestStatusExitCodeSubprocess:
 
         called_with = {}
 
-        def mock_plan_workflow(goal, output, backend, plain=False, interactive=False, resume=False):
+        def mock_plan_workflow(goal, output, backend, plain=False, interactive=False, resume=False, **_kwargs):
             called_with["backend"] = backend
             called_with["interactive"] = interactive
 
@@ -918,7 +922,7 @@ class TestStatusExitCodeSubprocess:
 
         called = False
 
-        def mock_plan_workflow(goal, output, backend, plain=False, interactive=False, resume=False):
+        def mock_plan_workflow(goal, output, backend, plain=False, interactive=False, resume=False, **_kwargs):
             nonlocal called
             called = True
 
@@ -943,7 +947,7 @@ class TestStatusExitCodeSubprocess:
 
         import juvenal.engine
 
-        def mock_plan_workflow(goal, output, backend, plain=False, interactive=False, resume=False):
+        def mock_plan_workflow(goal, output, backend, plain=False, interactive=False, resume=False, **_kwargs):
             with open(output, "w") as f:
                 f.write(
                     """\
@@ -985,7 +989,7 @@ phases:
         import juvenal.engine
         from juvenal.workflow import load_workflow
 
-        def mock_plan_workflow(goal, output, backend, plain=False, interactive=False, resume=False):
+        def mock_plan_workflow(goal, output, backend, plain=False, interactive=False, resume=False, **_kwargs):
             with open(output, "w") as f:
                 f.write(
                     """\
@@ -1025,7 +1029,7 @@ phases:
         import juvenal.engine
         from juvenal.workflow import load_workflow
 
-        def mock_plan_workflow(goal, output, backend, plain=False, interactive=False, resume=False):
+        def mock_plan_workflow(goal, output, backend, plain=False, interactive=False, resume=False, **_kwargs):
             with open(output, "w") as f:
                 f.write(
                     """\
@@ -1065,7 +1069,7 @@ phases:
         import juvenal.engine
         from juvenal.workflow import load_workflow
 
-        def mock_plan_workflow(goal, output, backend, plain=False, interactive=False, resume=False):
+        def mock_plan_workflow(goal, output, backend, plain=False, interactive=False, resume=False, **_kwargs):
             with open(output, "w") as f:
                 f.write(
                     """\
@@ -1140,7 +1144,7 @@ phases:
 
         called = False
 
-        def mock_plan_workflow(goal, output, backend, plain=False, interactive=False, resume=False):
+        def mock_plan_workflow(goal, output, backend, plain=False, interactive=False, resume=False, **_kwargs):
             nonlocal called
             called = True
 

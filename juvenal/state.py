@@ -38,7 +38,48 @@ class PipelineState:
     workflow_phase_ids: list[str] | None = None
     started_at: float | None = None
     completed_at: float | None = None
+    active_workflow_yaml: str | None = None
+    replan_history: list[dict] = field(default_factory=list)
+    replan_count: int = 0
     _lock: RLock = field(init=False, repr=False, default_factory=RLock)
+
+    def record_replan(self, triggered_phase: str, old_workflow_yaml: str, new_workflow_yaml: str) -> None:
+        """Persist a workflow swap: snapshot the previous workflow + phase records, then clear live phases.
+
+        The new workflow gets a clean phase state slate — without this, a reused phase id from the
+        old workflow whose status is "completed" would be silently skipped by the engine even though
+        the new prompt is semantically different. The wiped phase records are preserved in
+        replan_history for post-mortem and resume audit.
+        """
+        with self._lock:
+            old_phases_snapshot = {
+                pid: {
+                    "status": ps.status,
+                    "attempt": ps.attempt,
+                    "failure_contexts": list(ps.failure_contexts),
+                    "logs": list(ps.logs),
+                    "started_at": ps.started_at,
+                    "completed_at": ps.completed_at,
+                    "input_tokens": ps.input_tokens,
+                    "output_tokens": ps.output_tokens,
+                    "baseline_sha": ps.baseline_sha,
+                }
+                for pid, ps in self.phases.items()
+            }
+            self.replan_count += 1
+            self.replan_history.append(
+                {
+                    "cycle": self.replan_count,
+                    "triggered_phase": triggered_phase,
+                    "old_workflow_yaml": old_workflow_yaml,
+                    "old_phases": old_phases_snapshot,
+                    "timestamp": time.time(),
+                }
+            )
+            self.active_workflow_yaml = new_workflow_yaml
+            self.phases = {}
+            self.workflow_phase_ids = None
+            self.save()
 
     def set_attempt(self, phase_id: str, attempt: int) -> None:
         with self._lock:
@@ -109,9 +150,16 @@ class PipelineState:
             self.save()
 
     def total_tokens(self) -> tuple[int, int]:
-        """Return (total_input_tokens, total_output_tokens) across all phases."""
+        """Return cumulative (input_tokens, output_tokens) across the live workflow AND
+        every prior replan cycle. Without summing replan_history.old_phases too, cost
+        reporting would under-count by exactly the work that motivated the replans."""
         inp = sum(ps.input_tokens for ps in self.phases.values())
         out = sum(ps.output_tokens for ps in self.phases.values())
+        for entry in self.replan_history:
+            old_phases = entry.get("old_phases") or {}
+            for snap in old_phases.values():
+                inp += snap.get("input_tokens", 0) or 0
+                out += snap.get("output_tokens", 0) or 0
         return inp, out
 
     def invalidate_from(self, phase_id: str, scope: set[str] | None = None) -> None:
@@ -173,6 +221,9 @@ class PipelineState:
             data = json.loads(state_file.read_text())
             state.started_at = data.get("started_at")
             state.completed_at = data.get("completed_at")
+            state.active_workflow_yaml = data.get("active_workflow_yaml")
+            state.replan_history = data.get("replan_history", []) or []
+            state.replan_count = data.get("replan_count", 0) or 0
             raw_phases = data.get("phases", {})
             raw_workflow_phase_ids = data.get("workflow_phase_ids", data.get("phase_order"))
             ordered_phase_ids: list[str]
@@ -207,7 +258,10 @@ class PipelineState:
     def print_status(self) -> None:
         """Print a Rich-formatted status table."""
         console = Console()
-        table = Table(title="Juvenal Pipeline Status")
+        title = "Juvenal Pipeline Status"
+        if self.replan_count:
+            title += f" (replans: {self.replan_count})"
+        table = Table(title=title)
         table.add_column("Phase", style="cyan")
         table.add_column("Status", style="bold")
         table.add_column("Attempts", justify="right")
@@ -228,6 +282,18 @@ class PipelineState:
 
         console.print(table)
 
+        if self.replan_history:
+            console.print()
+            history_table = Table(title="Replan history")
+            history_table.add_column("Cycle", justify="right")
+            history_table.add_column("Triggered by", style="cyan")
+            history_table.add_column("Timestamp", style="dim")
+            for entry in self.replan_history:
+                ts = entry.get("timestamp")
+                ts_str = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(ts)) if ts else ""
+                history_table.add_row(str(entry.get("cycle", "")), entry.get("triggered_phase", ""), ts_str)
+            console.print(history_table)
+
     def _ensure_phase(self, phase_id: str) -> PhaseState:
         if phase_id not in self.phases:
             self.phases[phase_id] = PhaseState(phase_id=phase_id)
@@ -238,6 +304,9 @@ class PipelineState:
             "started_at": self.started_at,
             "completed_at": self.completed_at,
             "workflow_phase_ids": self.workflow_phase_ids,
+            "active_workflow_yaml": self.active_workflow_yaml,
+            "replan_history": self.replan_history,
+            "replan_count": self.replan_count,
             "phases": {
                 pid: {
                     "status": ps.status,

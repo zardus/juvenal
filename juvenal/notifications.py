@@ -31,12 +31,14 @@ def build_notification_payload(
     total_input_tokens: int,
     total_output_tokens: int,
     phase_summaries: list[dict],
+    replan_count: int = 0,
 ) -> dict:
     """Build the JSON payload for a webhook notification."""
     return {
         "workflow": workflow_name,
         "status": "success" if success else "failure",
         "total_bounces": total_bounces,
+        "replan_count": replan_count,
         "duration_seconds": round(duration, 1) if duration else None,
         "total_input_tokens": total_input_tokens,
         "total_output_tokens": total_output_tokens,

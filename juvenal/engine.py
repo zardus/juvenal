@@ -104,6 +104,8 @@ class Engine:
         serialize: bool = False,
         interactive: bool = False,
         backend_instance: Backend | None = None,
+        replan_after: int | None = None,
+        max_replans: int | None = None,
     ):
         self.workflow = workflow
         self.backend = backend_instance if backend_instance is not None else create_backend(workflow.backend)
@@ -114,13 +116,23 @@ class Engine:
         self.preserve_context_on_bounce = not clear_context_on_bounce
         self.serialize = serialize
         self.interactive = interactive
+        self.replan_after = replan_after
+        self.max_replans = max_replans
         self._session_ids: dict[str, str] = {}  # phase_id -> last session_id
         self._bounce_targets: set[str] = set()  # phases that should resume on next run
+        self._phase_bounces: dict[str, int] = {}  # phase_id -> bounces in current replan cycle
         self._engine_lock = Lock()  # protects _session_ids and _bounce_targets in parallel
 
         sf = state_file or ".juvenal-state.json"
         needs_state = resume or rewind is not None or rewind_to is not None
         self.state = PipelineState.load(sf) if needs_state else PipelineState(state_file=Path(sf))
+
+        # If resuming and the state has a replanned workflow, that workflow is authoritative —
+        # it represents whatever the last replan agent committed to. Swap it in before any
+        # phase-id validation runs.
+        if needs_state and self.state.active_workflow_yaml:
+            self.workflow = self._load_workflow_from_yaml_text(self.state.active_workflow_yaml)
+
         if needs_state:
             self._validate_resume_state_matches_workflow()
 
@@ -146,6 +158,14 @@ class Engine:
         # If start lands inside a parallel group, snap to group's first phase
         self._start_idx = self._snap_to_group_start(self._start_idx)
 
+        # Make the active workflow yaml authoritative: every subsequent state.save()
+        # (triggered by phase events) will include it on disk. We don't force a save
+        # here so that constructing an Engine that then crashes before any phase
+        # progress leaves the state file untouched, matching pre-replan behavior.
+        from juvenal.workflow import dump_workflow
+
+        self.state.active_workflow_yaml = dump_workflow(self.workflow)
+
     def run(self) -> int:
         """Execute the pipeline. Returns 0 on success, 1 on failure."""
         if self.dry_run:
@@ -170,15 +190,33 @@ class Engine:
                 pg = self._get_parallel_group(phase.id)
                 if pg and phase.id == pg.first_phase_id():
                     if pg.is_lane_group():
-                        # Lane groups handle bouncing internally
+                        # Lane groups handle bouncing internally; they bubble a
+                        # bounce_target up only when a phase inside crossed the
+                        # per-phase replan threshold.
                         result, lane_bounces = self._run_lane_group(pg, bounces)
                         bounces += lane_bounces
                         if not result.success:
+                            if result.bounce_target and self._should_replan(result.bounce_target):
+                                if self._try_replan(result.bounce_target, result.failure_context):
+                                    phases = self.workflow.phases
+                                    phase_idx = self._post_replan_start_index()
+                                    bounces = 0
+                                    continue
                             raise PipelineExhausted(phase.id)
                     else:
                         result = self._run_parallel_group(pg)
                         if result.bounce_target:
                             bounces += 1
+                            self._phase_bounces[result.bounce_target] = (
+                                self._phase_bounces.get(result.bounce_target, 0) + 1
+                            )
+                            if self._should_replan(result.bounce_target):
+                                if self._try_replan(result.bounce_target, result.failure_context):
+                                    phases = self.workflow.phases
+                                    phase_idx = self._post_replan_start_index()
+                                    bounces = 0
+                                    continue
+                                raise PipelineExhausted(phase.id)
                             if bounces >= self.workflow.max_bounces:
                                 raise PipelineExhausted(phase.id)
                             self._apply_backoff(bounces)
@@ -212,6 +250,14 @@ class Engine:
                     phase_idx += 1
                 elif result.bounce_target:
                     bounces += 1
+                    self._phase_bounces[result.bounce_target] = self._phase_bounces.get(result.bounce_target, 0) + 1
+                    if self._should_replan(result.bounce_target):
+                        if self._try_replan(result.bounce_target, result.failure_context):
+                            phases = self.workflow.phases
+                            phase_idx = self._post_replan_start_index()
+                            bounces = 0
+                            continue
+                        raise PipelineExhausted(phase.id)
                     if bounces >= self.workflow.max_bounces:
                         raise PipelineExhausted(phase.id)
                     self._apply_backoff(bounces)
@@ -247,6 +293,169 @@ class Engine:
             self.state.save()
             print("\nInterrupted. State saved. Resume with --resume.")
             return 130
+
+    def _should_replan(self, triggered_phase: str) -> bool:
+        """True if the per-phase bounce count has reached --replan-after."""
+        if self.replan_after is None:
+            return False
+        return self._phase_bounces.get(triggered_phase, 0) >= self.replan_after
+
+    def _post_replan_start_index(self) -> int:
+        """After a workflow swap, find the first phase the engine should run.
+
+        Mirrors the snap-to-group-start logic in __init__ so a new workflow whose
+        first incomplete phase happens to sit inside a parallel group enters at
+        the group's first phase instead of mid-group.
+        """
+        idx = self.state.get_resume_phase_index(self.workflow.phases)
+        return self._snap_to_group_start(idx)
+
+    _REPLAN_MAX_ATTEMPTS = 3
+
+    def _try_replan(self, triggered_phase: str, last_failure_context: str) -> bool:
+        """Invoke the replan agent and swap the workflow on success.
+
+        Returns True if a new workflow was successfully validated and installed.
+        Returns False if the agent failed to produce a valid workflow within
+        _REPLAN_MAX_ATTEMPTS, or if --max-replans has been exhausted.
+        """
+        from juvenal.workflow import dump_workflow, validate_workflow
+
+        if self.max_replans is not None and self.state.replan_count >= self.max_replans:
+            self.display.step_fail(
+                "replan",
+                f"--max-replans={self.max_replans} exhausted after {self.state.replan_count} replan(s)",
+            )
+            return False
+
+        current_yaml = dump_workflow(self.workflow)
+        prompt = self._build_replan_prompt(triggered_phase, current_yaml, last_failure_context)
+
+        last_error = ""
+        retry_prompt = prompt
+        for _attempt in range(self._REPLAN_MAX_ATTEMPTS):
+            self.display.step_start(f"replan: cycle #{self.state.replan_count + 1}")
+            result = self.backend.run_agent(
+                retry_prompt,
+                working_dir=self.workflow.working_dir,
+                display_callback=self.display.live_update,
+                timeout=None,
+            )
+            self.state.add_tokens(triggered_phase, result.input_tokens, result.output_tokens)
+
+            if result.exit_code != 0:
+                last_error = f"replan agent crashed (exit {result.exit_code})"
+                retry_prompt = prompt + f"\n\nThe previous attempt failed: {last_error}. Try again."
+                continue
+
+            yaml_text = _extract_yaml(result.output).strip()
+            if not yaml_text:
+                last_error = "no YAML found in replan agent output"
+                retry_prompt = prompt + f"\n\nThe previous attempt failed: {last_error}. Try again."
+                continue
+
+            try:
+                new_workflow = self._load_workflow_from_yaml_text(yaml_text)
+            except Exception as exc:
+                last_error = f"replan yaml failed to load: {exc}"
+                retry_prompt = prompt + f"\n\nThe previous attempt failed: {last_error}. Try again."
+                continue
+
+            errors = validate_workflow(new_workflow)
+            if errors:
+                last_error = "replan workflow validation failed: " + "; ".join(errors)
+                retry_prompt = prompt + f"\n\nThe previous attempt failed: {last_error}. Try again."
+                continue
+
+            # Success — install the new workflow. record_replan snapshots the old
+            # phase records into replan_history and clears the live phase state, so
+            # the new workflow starts with a clean slate even if it reuses phase ids.
+            # _align_state_phases then materializes fresh PhaseState entries for the
+            # new workflow's phase ids and reseats state.workflow_phase_ids.
+            new_workflow.working_dir = self.workflow.working_dir
+            new_workflow.backend = new_workflow.backend or self.workflow.backend
+            old_yaml = current_yaml
+            self.workflow = new_workflow
+            self._phase_bounces.clear()
+            self._bounce_targets.clear()
+            self._session_ids.clear()
+            self.state.record_replan(triggered_phase, old_yaml, yaml_text)
+            self._align_state_phases()
+            self.display.step_pass(f"replan: cycle #{self.state.replan_count}")
+            return True
+
+        self.display.step_fail("replan", last_error[:500])
+        return False
+
+    def _build_replan_prompt(self, triggered_phase: str, current_yaml: str, last_failure_context: str) -> str:
+        """Render the replan prompt template with bounce history baked in."""
+        template = self._read_replan_template()
+        bounce_history = self._format_bounce_history()
+        last_impl, last_check = self._tail_last_transcripts(triggered_phase)
+        replacements = {
+            "{{BOUNCE_COUNT}}": str(self._phase_bounces.get(triggered_phase, 0)),
+            "{{REPLAN_CYCLE}}": str(self.state.replan_count + 1),
+            "{{STUCK_PHASE_ID}}": triggered_phase,
+            "{{CURRENT_WORKFLOW_YAML}}": current_yaml,
+            "{{BOUNCE_HISTORY}}": bounce_history or "(no per-phase bounce records)",
+            "{{LAST_IMPLEMENT_OUTPUT}}": last_impl or "(no recent implement output captured)",
+            "{{LAST_CHECK_OUTPUT}}": last_check or last_failure_context or "(no recent check output captured)",
+        }
+        out = template
+        for key, val in replacements.items():
+            out = out.replace(key, val)
+        return out
+
+    @staticmethod
+    def _read_replan_template() -> str:
+        return (Path(__file__).parent / "prompts" / "replan.md").read_text()
+
+    def _format_bounce_history(self) -> str:
+        """Summarize attempts and most recent failure reasons for every phase with attempts."""
+        lines: list[str] = []
+        for pid, ps in self.state.phases.items():
+            if ps.attempt == 0 and not ps.failure_contexts:
+                continue
+            last_fc = ps.failure_contexts[-1]["context"] if ps.failure_contexts else ""
+            last_fc_snippet = last_fc[:600].replace("\n", " ")
+            lines.append(f"- `{pid}`: status={ps.status}, attempts={ps.attempt}. Last failure: {last_fc_snippet}")
+        return "\n".join(lines)
+
+    def _tail_last_transcripts(self, phase_id: str, limit: int = 4000) -> tuple[str, str]:
+        """Return (most recent implement-step output, most recent check-step output).
+
+        Checker outputs are logged under the check phase's id, not the bounce target's,
+        so we walk all phase logs ordered by timestamp to find the latest of each kind.
+        Falls back to empty strings if nothing relevant is recorded.
+        """
+        impl_entry: dict | None = None
+        check_entry: dict | None = None
+        for ps in self.state.phases.values():
+            for entry in ps.logs:
+                step = entry.get("step", "")
+                ts = entry.get("timestamp", 0) or 0
+                if step.startswith("implement") or step.startswith("interactive"):
+                    if impl_entry is None or ts >= (impl_entry.get("timestamp", 0) or 0):
+                        impl_entry = entry
+                elif step.startswith("check"):
+                    if check_entry is None or ts >= (check_entry.get("timestamp", 0) or 0):
+                        check_entry = entry
+        last_impl = (impl_entry or {}).get("output", "") or ""
+        last_check = (check_entry or {}).get("output", "") or ""
+        return last_impl[-limit:], last_check[-limit:]
+
+    @staticmethod
+    def _load_workflow_from_yaml_text(yaml_text: str) -> Workflow:
+        """Parse a workflow yaml string by writing to a temp file and loading."""
+        from juvenal.workflow import load_workflow
+
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
+            f.write(yaml_text)
+            tmp_path = f.name
+        try:
+            return load_workflow(tmp_path)
+        finally:
+            Path(tmp_path).unlink(missing_ok=True)
 
     def _run_implement(self, phase: Phase) -> PhaseResult:
         """Run an implement phase once. On crash, return a bounce target."""
@@ -567,6 +776,8 @@ class Engine:
             clear_context_on_bounce=not self.preserve_context_on_bounce,
             serialize=self.serialize,
             interactive=self.interactive,
+            replan_after=self.replan_after,
+            max_replans=self.max_replans,
         )
         sub_engine.display = self.display
 
@@ -608,6 +819,8 @@ class Engine:
             depth=self._depth + 1,
             max_depth=effective_max_depth,
             interactive=self.interactive,
+            replan_after=self.replan_after,
+            max_replans=self.max_replans,
         )
         self.state.add_tokens(phase.id, plan_result.input_tokens, plan_result.output_tokens)
 
@@ -634,6 +847,8 @@ class Engine:
             clear_context_on_bounce=not self.preserve_context_on_bounce,
             serialize=self.serialize,
             interactive=self.interactive,
+            replan_after=self.replan_after,
+            max_replans=self.max_replans,
         )
         sub_engine.display = self.display
 
@@ -773,10 +988,24 @@ class Engine:
         consumed = bounce_counter.count
         if all(r.success for r in results.values()):
             return PhaseResult(success=True), consumed
+        # Surface the first lane that requested a replan, so the main loop can act on it.
+        for r in results.values():
+            if not r.success and r.bounce_target and self._should_replan(r.bounce_target):
+                return PhaseResult(
+                    success=False,
+                    bounce_target=r.bounce_target,
+                    failure_context=r.failure_context,
+                ), consumed
         return PhaseResult(success=False), consumed
 
     def _run_lane(self, lane_phase_ids: list[str], bounce_counter: BounceCounter) -> PhaseResult:
-        """Run a single lane: sequential implement/check loop with internal bounce."""
+        """Run a single lane: sequential implement/check loop with internal bounce.
+
+        On bounce, the per-phase replan threshold is checked under the engine lock so
+        only the first lane to cross the line gets to surface the replan signal. The
+        lane returns a PhaseResult with the bounce_target set, which _run_lane_group
+        propagates back to the main engine loop for a full workflow replan.
+        """
         phases_map = {p.id: p for p in self.workflow.phases}
         lane_phases = [phases_map[pid] for pid in lane_phase_ids]
         lane_scope = set(lane_phase_ids)
@@ -802,6 +1031,15 @@ class Engine:
                 self.state.mark_completed(phase.id)
                 phase_idx += 1
             elif result.bounce_target:
+                with self._engine_lock:
+                    self._phase_bounces[result.bounce_target] = self._phase_bounces.get(result.bounce_target, 0) + 1
+                    hit_replan = self._should_replan(result.bounce_target)
+                if hit_replan:
+                    return PhaseResult(
+                        success=False,
+                        bounce_target=result.bounce_target,
+                        failure_context=result.failure_context,
+                    )
                 if not bounce_counter.try_increment():
                     return PhaseResult(success=False)
                 self._apply_backoff(bounce_counter.count)
@@ -990,6 +1228,7 @@ class Engine:
             total_input_tokens=total_inp,
             total_output_tokens=total_out,
             phase_summaries=phase_summaries,
+            replan_count=self.state.replan_count,
         )
         for url in self.workflow.notify:
             ok = send_webhook(url, payload)
@@ -1113,6 +1352,8 @@ def _plan_workflow_internal(
     project_dir: str | None = None,
     resume: bool = False,
     linear: bool = True,
+    replan_after: int | None = None,
+    max_replans: int | None = None,
 ) -> PlanResult:
     """Internal planning logic: generate a sub-workflow YAML from a goal.
 
@@ -1184,6 +1425,8 @@ def _plan_workflow_internal(
                 _max_depth=max_depth,
                 clear_context_on_bounce=True,
                 interactive=interactive,
+                replan_after=replan_after,
+                max_replans=max_replans,
             )
             # Share display if provided, otherwise use defaults
             if display is not None:
@@ -1282,6 +1525,8 @@ def plan_workflow(
     interactive: bool = False,
     resume: bool = False,
     linear: bool = True,
+    replan_after: int | None = None,
+    max_replans: int | None = None,
 ) -> None:
     """Generate a workflow YAML from a goal description using a multi-phase pipeline."""
     import os
@@ -1294,6 +1539,8 @@ def plan_workflow(
         project_dir=os.getcwd(),
         resume=resume,
         linear=linear,
+        replan_after=replan_after,
+        max_replans=max_replans,
     )
 
     if not result.success:
