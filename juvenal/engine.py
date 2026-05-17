@@ -362,20 +362,49 @@ class Engine:
         project_path = Path(project_dir)
 
         # Archive existing .plan/ and workflow.yaml so the user's prior planning
-        # artifacts (and any state file from an earlier replan cycle) survive —
-        # the plan workflow writes .plan/* and workflow.yaml in working_dir and
-        # would otherwise clobber them. Only create the archive dir when there
-        # is actually something to move; otherwise we'd leave empty cycle dirs
-        # scattered in the project root (and trip up tests that share a cwd).
+        # artifacts survive — the plan workflow writes .plan/* and workflow.yaml
+        # in working_dir and would otherwise clobber them. Only create the
+        # archive dir when there is actually something to move; otherwise we'd
+        # leave empty cycle dirs scattered in the project root.
         plan_dir = project_path / ".plan"
         wf_yaml = project_path / "workflow.yaml"
+        archive_root: Path | None = None
+        archived: list[tuple[Path, Path]] = []  # (archived_path, original_path) pairs for restore
         if plan_dir.exists() or wf_yaml.exists():
-            archive_root = project_path / ".juvenal-replan-archive" / f"cycle-{cycle:03d}"
-            archive_root.mkdir(parents=True, exist_ok=True)
+            # cycle-NNN may already exist if a prior failed replan archived into
+            # the same slot (state.replan_count only advances on success); pick
+            # a unique suffix rather than colliding on shutil.move.
+            archive_base = project_path / ".juvenal-replan-archive"
+            archive_root = archive_base / f"cycle-{cycle:03d}"
+            suffix = 0
+            while archive_root.exists():
+                suffix += 1
+                archive_root = archive_base / f"cycle-{cycle:03d}.{suffix}"
+            archive_root.mkdir(parents=True)
             if plan_dir.exists():
-                _shutil.move(str(plan_dir), str(archive_root / "plan"))
+                dest = archive_root / "plan"
+                _shutil.move(str(plan_dir), str(dest))
+                archived.append((dest, plan_dir))
             if wf_yaml.exists():
-                _shutil.move(str(wf_yaml), str(archive_root / "workflow.yaml.bak"))
+                dest = archive_root / "workflow.yaml.bak"
+                _shutil.move(str(wf_yaml), str(dest))
+                archived.append((dest, wf_yaml))
+
+        def _restore_archive() -> None:
+            """Put originals back if the planner failed; clear partial planner outputs first."""
+            if plan_dir.exists():
+                _shutil.rmtree(plan_dir)
+            if wf_yaml.exists():
+                wf_yaml.unlink()
+            for archived_path, original_path in archived:
+                _shutil.move(str(archived_path), str(original_path))
+            if archive_root is not None and archive_root.exists():
+                try:
+                    archive_root.rmdir()
+                    # Also drop the parent .juvenal-replan-archive dir if now empty.
+                    archive_root.parent.rmdir()
+                except OSError:
+                    pass
 
         # Pause the parent display so the inner plan engine can drive the
         # terminal; resume() is a no-op (next step_start creates a fresh Live).
@@ -402,6 +431,7 @@ class Engine:
         self.state.add_tokens(triggered_phase, plan_result.input_tokens, plan_result.output_tokens)
 
         if not plan_result.success or not plan_result.workflow_yaml_path:
+            _restore_archive()
             self.display.step_fail("replan", (plan_result.error or "planning pipeline failed")[:500])
             return False
 
@@ -409,11 +439,13 @@ class Engine:
         try:
             new_workflow = self._load_workflow_from_yaml_text(yaml_text)
         except Exception as exc:
+            _restore_archive()
             self.display.step_fail("replan", f"planned yaml failed to load: {exc}"[:500])
             return False
 
         errors = validate_workflow(new_workflow)
         if errors:
+            _restore_archive()
             self.display.step_fail("replan", ("planned workflow validation failed: " + "; ".join(errors))[:500])
             return False
 
@@ -460,10 +492,9 @@ class Engine:
             f"({bounce_count} bounces) without ever passing its checker. This means the current "
             f"plan is not working. This is replan cycle #{cycle}.\n\n"
             "Your job is to diagnose WHY the loop is stuck and produce a complete REPLACEMENT "
-            "plan and workflow that will succeed. Follow the standard plan workflow steps "
-            "(draft → refine → split → write-workflow → review). The replacement workflow "
-            "REPLACES the current one — any phases from the original that should still run "
-            "must appear in your output. Phase ids may differ from the original.\n\n"
+            "workflow that will succeed. The replacement workflow REPLACES the current one — "
+            "any phases from the original that should still run must appear in your output. "
+            "Phase ids may differ from the original.\n\n"
             "## Common causes of a stuck phase\n\n"
             "1. The checker has an impossible contract (asks for two mutually exclusive things).\n"
             "2. The phase prompt is missing a key constraint that the checker enforces, so the "

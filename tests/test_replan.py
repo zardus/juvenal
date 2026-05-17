@@ -227,6 +227,41 @@ def test_replan_resets_per_phase_bounce_counter(tmp_path, monkeypatch):
     assert engine._phase_bounces == {}
 
 
+def test_replan_failure_restores_archived_workflow(tmp_path, monkeypatch):
+    """When the planner fails, the pre-existing workflow.yaml and .plan/ must be
+    restored from the archive. Otherwise a failed replan leaves the user without
+    their workflow file on disk."""
+    import juvenal.engine as je
+
+    backend = MockBackend()
+    for _ in range(2):
+        backend.add_response(exit_code=0, output="implementing...")
+        backend.add_response(exit_code=0, output="VERDICT: FAIL: nope")
+
+    # Pre-create disk artifacts the engine should preserve across a failed replan.
+    workflow_path = tmp_path / "workflow.yaml"
+    workflow_path.write_text("name: original-on-disk\nphases: []\n")
+    plan_dir = tmp_path / ".plan"
+    plan_dir.mkdir()
+    (plan_dir / "goal.md").write_text("original goal\n")
+
+    def fake_failing(*args, **kwargs):
+        return PlanResult(success=False, workflow_yaml_path=None, temp_dir=None, error="planner blew up")
+
+    monkeypatch.setattr(je, "_plan_workflow_internal", fake_failing)
+
+    workflow = _base_workflow(tmp_path)
+    engine = _make_engine(workflow, backend, tmp_path, replan_after=2)
+    assert engine.run() == 1
+    assert engine.state.replan_count == 0  # planner failed; no replan recorded
+
+    # Originals must be back where they were.
+    assert workflow_path.read_text() == "name: original-on-disk\nphases: []\n"
+    assert (plan_dir / "goal.md").read_text() == "original goal\n"
+    # And the archive directory should have been cleaned up (empty after restore).
+    assert not (tmp_path / ".juvenal-replan-archive").exists()
+
+
 def test_no_replan_when_flag_unset(tmp_path):
     """Without --replan-after, the engine behaves as before and exhausts max_bounces."""
     backend = MockBackend()
