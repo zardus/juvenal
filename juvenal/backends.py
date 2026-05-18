@@ -183,6 +183,10 @@ class ClaudeBackend(Backend):
         env: dict[str, str] | None = None,
     ) -> AgentResult:
         session_id = str(uuid.uuid4())
+        # Feed the prompt via stdin rather than argv to avoid E2BIG
+        # ("Argument list too long") when the prompt is large — e.g. a replan
+        # GOAL embedding the stuck workflow YAML plus transcripts can easily
+        # exceed Linux's ~128KB ARG_MAX.
         cmd = [
             "claude",
             "-p",
@@ -192,9 +196,8 @@ class ClaudeBackend(Backend):
             "--verbose",
             "--session-id",
             session_id,
-            prompt,
         ]
-        result = self._run_claude_process(cmd, working_dir, display_callback, timeout, env)
+        result = self._run_claude_process(cmd, working_dir, display_callback, timeout, env, stdin_input=prompt)
         result.session_id = session_id
         return result
 
@@ -216,9 +219,8 @@ class ClaudeBackend(Backend):
             "--verbose",
             "--resume",
             session_id,
-            prompt,
         ]
-        result = self._run_claude_process(cmd, working_dir, display_callback, timeout, env)
+        result = self._run_claude_process(cmd, working_dir, display_callback, timeout, env, stdin_input=prompt)
         result.session_id = session_id
         return result
 
@@ -281,6 +283,7 @@ class ClaudeBackend(Backend):
         display_callback: Callable[[str], None] | None = None,
         timeout: int | None = None,
         env: dict[str, str] | None = None,
+        stdin_input: str | None = None,
     ) -> AgentResult:
         # Strip CLAUDECODE env var so juvenal can be invoked from inside Claude Code
         proc_env = {k: v for k, v in os.environ.items() if k != "CLAUDECODE"}
@@ -292,6 +295,7 @@ class ClaudeBackend(Backend):
         proc = subprocess.Popen(
             cmd,
             cwd=working_dir,
+            stdin=subprocess.PIPE if stdin_input is not None else subprocess.DEVNULL,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
@@ -299,6 +303,23 @@ class ClaudeBackend(Backend):
             env=proc_env,
         )
         self._active_procs.append(proc)
+
+        # Feed the prompt on a background thread so a prompt larger than the
+        # OS pipe buffer (~64KB on Linux) can't deadlock against claude waiting
+        # to drain stdout before reading stdin.
+        if stdin_input is not None:
+
+            def _write_stdin() -> None:
+                try:
+                    proc.stdin.write(stdin_input)
+                    proc.stdin.close()
+                except (BrokenPipeError, ValueError, OSError):
+                    pass
+
+            stdin_thread = threading.Thread(target=_write_stdin, daemon=True)
+            stdin_thread.start()
+        else:
+            stdin_thread = None
 
         transcript_lines: list[str] = []
         assistant_messages: list[str] = []
@@ -383,6 +404,8 @@ class ClaudeBackend(Backend):
             except Exception:
                 pass
             stderr_thread.join(timeout=1.0)
+        if stdin_thread is not None:
+            stdin_thread.join(timeout=1.0)
         stderr_output = "".join(stderr_chunks)
         if proc in self._active_procs:
             self._active_procs.remove(proc)
